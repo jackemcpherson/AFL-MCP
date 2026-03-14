@@ -1,7 +1,9 @@
 # AFL-MCP Data Extraction Script
 # Extracts AFL data from the fitzRoy R package and exports to CSV.
 #
-# Usage: Rscript etl/extract.R
+# Usage:
+#   Rscript etl/extract.R          # Full extract (1990–current year)
+#   Rscript etl/extract.R 2026     # Single season extract
 #
 # Prerequisites:
 #   install.packages("fitzRoy")
@@ -13,7 +15,14 @@ library(fitzRoy)
 library(readr)
 
 # Configuration
-SEASONS <- 2016:2025
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) > 0) {
+  SEASONS <- as.integer(args[1])
+  cat(sprintf("Single-season mode: %d\n", SEASONS))
+} else {
+  SEASONS <- 1990:as.integer(format(Sys.Date(), "%Y"))
+  cat(sprintf("Full extract: %d–%d\n", min(SEASONS), max(SEASONS)))
+}
 COMP <- "AFLM"
 OUTPUT_DIR <- file.path("data", "raw")
 
