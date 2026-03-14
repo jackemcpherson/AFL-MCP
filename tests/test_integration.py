@@ -89,9 +89,7 @@ class TestSchemaIntrospection:
         from afl_mcp.core.queries import get_foreign_keys
 
         result = get_foreign_keys()
-        fk_pairs = {
-            (row["table_name"], row["foreign_table_name"]) for row in result
-        }
+        fk_pairs = {(row["table_name"], row["foreign_table_name"]) for row in result}
         assert ("matches", "seasons") in fk_pairs
         assert ("player_match_stats", "players") in fk_pairs
 

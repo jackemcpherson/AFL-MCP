@@ -204,19 +204,33 @@ def search(
     ] = None,
     season_from: Annotated[
         int | None,
-        typer.Option("--season-from", "-sf", help="Minimum season year.", rich_help_panel="Filters"),
+        typer.Option(
+            "--season-from",
+            "-sf",
+            help="Minimum season year.",
+            rich_help_panel="Filters",
+        ),
     ] = None,
     season_to: Annotated[
         int | None,
-        typer.Option("--season-to", "-st", help="Maximum season year.", rich_help_panel="Filters"),
+        typer.Option(
+            "--season-to", "-st", help="Maximum season year.", rich_help_panel="Filters"
+        ),
     ] = None,
     venue: Annotated[
         str | None,
-        typer.Option("--venue", help="Filter by venue name.", rich_help_panel="Filters"),
+        typer.Option(
+            "--venue", help="Filter by venue name.", rich_help_panel="Filters"
+        ),
     ] = None,
     player: Annotated[
         str | None,
-        typer.Option("--player", "-p", help="Filter by player surname.", rich_help_panel="Filters"),
+        typer.Option(
+            "--player",
+            "-p",
+            help="Filter by player surname.",
+            rich_help_panel="Filters",
+        ),
     ] = None,
     limit: Annotated[
         int,

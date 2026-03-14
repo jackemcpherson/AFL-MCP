@@ -482,8 +482,16 @@ def _enrich_matches_from_stats(
                    weather_type = COALESCE(%s, weather_type),
                    external_fryzigg_id = COALESCE(%s, external_fryzigg_id)
                WHERE date = %s AND home_team_id = %s AND away_team_id = %s""",
-            (local_time, attendance, weather_temp, weather_type, fryzigg_id,
-             date, home_id, away_id),
+            (
+                local_time,
+                attendance,
+                weather_temp,
+                weather_type,
+                fryzigg_id,
+                date,
+                home_id,
+                away_id,
+            ),
         )
         count += 1
 
@@ -658,7 +666,9 @@ def _load_player_match_stats(
                    afl_fantasy_score = EXCLUDED.afl_fantasy_score,
                    supercoach_score = EXCLUDED.supercoach_score""",
             (
-                match_id, player_id, team_id,
+                match_id,
+                player_id,
+                team_id,
                 _int_or_none(s.get("guernsey_number", "")),
                 _str_or_none(s.get("player_position", "")),
                 _str_or_none(s.get("subbed", "")),

@@ -51,6 +51,7 @@ def _configure_pool_connection(conn: psycopg.Connection[dict]) -> None:
     conn.execute("SET statement_timeout = 30000")
     try:
         from pgvector.psycopg import register_vector
+
         register_vector(conn)
     except ImportError:
         logger.debug("pgvector not installed, skipping vector type registration")
@@ -69,6 +70,7 @@ def get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
         from dotenv import load_dotenv
+
         load_dotenv()
 
         _pool = ConnectionPool(
@@ -91,6 +93,7 @@ def get_admin_connection() -> psycopg.Connection[dict]:
         A psycopg Connection with dict row factory.
     """
     from dotenv import load_dotenv
+
     load_dotenv()
 
     return psycopg.connect(_get_dsn(), row_factory=psycopg.rows.dict_row)

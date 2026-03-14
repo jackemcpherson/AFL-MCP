@@ -54,6 +54,7 @@ def execute_sql(sql: str) -> list[dict]:
         ValueError: If the query contains a forbidden write statement.
     """
     from afl_mcp.core.queries import execute_query
+
     return execute_query(sql)
 
 
@@ -79,6 +80,7 @@ def semantic_search(
         List of dicts with similarity score and entity data.
     """
     from afl_mcp.core.search import semantic_search as _search
+
     return _search(query=query, entity_type=entity_type, limit=limit)
 
 
@@ -117,6 +119,7 @@ def filtered_search(
         List of dicts with similarity score and entity data.
     """
     from afl_mcp.core.search import filtered_semantic_search
+
     return filtered_semantic_search(
         query=query,
         entity_type=entity_type,

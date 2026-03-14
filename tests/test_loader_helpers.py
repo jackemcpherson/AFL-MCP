@@ -6,7 +6,6 @@ data transformation logic that maps raw CSV values to database types.
 
 from __future__ import annotations
 
-import pytest
 
 from afl_mcp.core.loader import (
     TEAM_NAME_MAP,

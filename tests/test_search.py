@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestFilteredSemanticSearchQueryBuilding:
     """Verify that filters produce correct SQL WHERE clauses."""
@@ -59,6 +57,7 @@ class TestFilteredSemanticSearchQueryBuilding:
             patch("afl_mcp.core.search.embed_text", return_value=fake_embedding),
         ):
             from afl_mcp.core.search import filtered_semantic_search
+
             filtered_semantic_search(**kwargs)
 
         return captured_sql[-1], captured_params[-1]
@@ -107,9 +106,7 @@ class TestFilteredSemanticSearchQueryBuilding:
 
     def test_venue_filter_for_match(self) -> None:
         """Venue filter works on match entity type."""
-        sql, params = self._run_search(
-            query="test", entity_type="match", venue="MCG"
-        )
+        sql, params = self._run_search(query="test", entity_type="match", venue="MCG")
         assert "v.name ILIKE" in sql
         assert "%MCG%" in params
 
@@ -139,7 +136,6 @@ class TestSemanticSearchDelegation:
         with patch("afl_mcp.core.search.filtered_semantic_search") as mock:
             mock.return_value = []
             from afl_mcp.core.search import semantic_search
+
             semantic_search(query="test", entity_type="match", limit=5)
-            mock.assert_called_once_with(
-                query="test", entity_type="match", limit=5
-            )
+            mock.assert_called_once_with(query="test", entity_type="match", limit=5)

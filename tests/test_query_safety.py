@@ -7,7 +7,6 @@ including edge cases like column names containing SQL keywords.
 
 from __future__ import annotations
 
-import re
 
 import pytest
 
@@ -17,18 +16,21 @@ from afl_mcp.core.queries import _FORBIDDEN_PATTERN
 class TestForbiddenPatternBlocksWrites:
     """Verify that known dangerous SQL statements are rejected."""
 
-    @pytest.mark.parametrize("sql", [
-        "INSERT INTO matches VALUES (1)",
-        "insert into matches values (1)",
-        "UPDATE matches SET margin = 0",
-        "DELETE FROM players",
-        "DROP TABLE matches",
-        "ALTER TABLE matches ADD COLUMN foo INT",
-        "TRUNCATE players",
-        "CREATE TABLE evil (id int)",
-        "GRANT ALL ON matches TO public",
-        "REVOKE SELECT ON matches FROM readonly",
-    ])
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "INSERT INTO matches VALUES (1)",
+            "insert into matches values (1)",
+            "UPDATE matches SET margin = 0",
+            "DELETE FROM players",
+            "DROP TABLE matches",
+            "ALTER TABLE matches ADD COLUMN foo INT",
+            "TRUNCATE players",
+            "CREATE TABLE evil (id int)",
+            "GRANT ALL ON matches TO public",
+            "REVOKE SELECT ON matches FROM readonly",
+        ],
+    )
     def test_blocks_write_statements(self, sql: str) -> None:
         """Each SQL write keyword triggers the forbidden pattern.
 
@@ -37,16 +39,19 @@ class TestForbiddenPatternBlocksWrites:
         """
         assert _FORBIDDEN_PATTERN.search(sql) is not None
 
-    @pytest.mark.parametrize("sql", [
-        "SELECT * FROM matches",
-        "SELECT count(*) FROM players WHERE surname = 'Smith'",
-        "SELECT updated_at FROM matches",
-        "SELECT insertion_date FROM logs",
-        "SELECT created_at, deleted_flag FROM players",
-        "SELECT truncated_name FROM teams",
-        "SELECT alteration_count FROM schema_migrations",
-        "SELECT * FROM matches WHERE round = 'GF'",
-    ])
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT * FROM matches",
+            "SELECT count(*) FROM players WHERE surname = 'Smith'",
+            "SELECT updated_at FROM matches",
+            "SELECT insertion_date FROM logs",
+            "SELECT created_at, deleted_flag FROM players",
+            "SELECT truncated_name FROM teams",
+            "SELECT alteration_count FROM schema_migrations",
+            "SELECT * FROM matches WHERE round = 'GF'",
+        ],
+    )
     def test_allows_select_queries(self, sql: str) -> None:
         """SELECT queries pass the filter, even with keyword substrings in column names.
 

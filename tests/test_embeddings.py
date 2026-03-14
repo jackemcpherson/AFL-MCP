@@ -7,7 +7,6 @@ no database or model — they are string formatting functions.
 
 from __future__ import annotations
 
-import pytest
 
 from afl_mcp.core.embeddings import _build_match_summary, _build_player_season_summary
 
@@ -158,7 +157,5 @@ class TestBuildMatchSummary:
 
     def test_uses_round_name_when_no_number(self) -> None:
         """Falls back to round name string when round_number is None."""
-        result = _build_match_summary(
-            self._make_row(round="QF", round_number=None)
-        )
+        result = _build_match_summary(self._make_row(round="QF", round_number=None))
         assert "Round QF" in result

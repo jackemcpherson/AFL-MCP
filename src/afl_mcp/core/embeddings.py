@@ -32,6 +32,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
+
         _model = SentenceTransformer(MODEL_NAME)
     return _model
 
@@ -57,7 +58,9 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
     Returns:
         List of embedding vectors, one per input text.
     """
-    embeddings = _get_model().encode(texts, batch_size=BATCH_SIZE, show_progress_bar=True)
+    embeddings = _get_model().encode(
+        texts, batch_size=BATCH_SIZE, show_progress_bar=True
+    )
     return [e.tolist() for e in embeddings]
 
 
@@ -127,6 +130,7 @@ def generate_all_embeddings() -> dict[str, int]:
 
     with get_admin_connection() as conn:
         from pgvector.psycopg import register_vector
+
         register_vector(conn)
 
         player_seasons = conn.execute("""

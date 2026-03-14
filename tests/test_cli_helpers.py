@@ -6,9 +6,6 @@ require a database connection or Rich console.
 
 from __future__ import annotations
 
-from decimal import Decimal
-
-import pytest
 
 from afl_mcp.cli.main import _is_numeric
 
