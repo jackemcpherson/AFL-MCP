@@ -1,37 +1,39 @@
-spec:
-  name: afl-mcp
-  region: syd1
+name: afl-mcp
+region: syd1
 
-  services:
-    - name: afl-mcp
-      dockerfile_path: Dockerfile
-      instance_count: 1
-      instance_size_slug: basic-s
-      http_port: 8080
-      health_check:
-        http_path: /health
-      envs:
-        - key: DATABASE_URL
-          scope: RUN_TIME
-          value: ${db.DATABASE_URL}
-        - key: FASTMCP_HOST
-          scope: RUN_TIME
-          value: "0.0.0.0"
-        - key: FASTMCP_PORT
-          scope: RUN_TIME
-          value: "8080"
-      routes:
-        - path: /
-      source:
+services:
+  - name: afl-mcp
+    dockerfile_path: Dockerfile
+    source:
+      github:
+        repo: jackemcpherson/AFL-MCP
+        branch: main
         deploy_on_push: true
+    instance_count: 1
+    instance_size_slug: basic-s
+    http_port: 8080
+    health_check:
+      http_path: /health
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: FASTMCP_HOST
+        scope: RUN_TIME
+        value: "0.0.0.0"
+      - key: FASTMCP_PORT
+        scope: RUN_TIME
+        value: "8080"
+    routes:
+      - path: /
 
-  databases:
-    - name: db
-      engine: PG
-      version: "16"
-      size: db-s-1vcpu-1gb
-      num_nodes: 1
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    size: db-s-1vcpu-1gb
+    num_nodes: 1
 
-  domains:
-    - domain: afl.jackemcpherson.com
-      type: PRIMARY
+domains:
+  - domain: afl.jackemcpherson.com
+    type: PRIMARY
