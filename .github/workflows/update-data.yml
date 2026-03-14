@@ -17,51 +17,33 @@ jobs:
   update:
     name: Extract and load data
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      R_LIBS_USER: /home/runner/R/library
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
-      - name: Set up R
-        uses: r-lib/actions/setup-r@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build ETL image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          r-version: "4.4"
+          context: .
+          file: etl/Dockerfile
+          tags: afl-mcp-etl:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Cache R packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: /home/runner/R/library
-          key: r-packages-${{ runner.os }}-fitzRoy
-          restore-keys: r-packages-${{ runner.os }}-
-
-      - name: Install R dependencies
-        run: |
-          dir.create(Sys.getenv("R_LIBS_USER"), recursive = TRUE, showWarnings = FALSE)
-          install.packages(c("fitzRoy", "readr"), lib = Sys.getenv("R_LIBS_USER"), repos = "https://cloud.r-project.org")
-        shell: Rscript {0}
-
-      - name: Extract AFL data
+      - name: Run ETL
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           SEASON="${{ github.event.inputs.season }}"
           if [ -z "$SEASON" ]; then
             SEASON=$(date +%Y)
           fi
-          Rscript etl/extract.R "$SEASON"
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install package
-        run: pip install -e .
-
-      - name: Load data into database
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          afl-mcp db migrate
-          afl-mcp db load --data-dir data/raw
+          docker run --rm \
+            -e DATABASE_URL="$DATABASE_URL" \
+            afl-mcp-etl:latest \
+            sh -c "Rscript etl/extract.R $SEASON && afl-mcp db migrate && afl-mcp db load --data-dir data/raw"
