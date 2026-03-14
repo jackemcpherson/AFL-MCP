@@ -6,7 +6,7 @@ services:
     github:
       repo: jackemcpherson/AFL-MCP
       branch: main
-      deploy_on_push: true
+      deploy_on_push: false
     dockerfile_path: Dockerfile
     instance_count: 1
     instance_size_slug: basic-s
