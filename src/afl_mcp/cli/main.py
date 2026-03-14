@@ -46,6 +46,7 @@ class Transport(str, Enum):
 
     stdio = "stdio"
     sse = "sse"
+    streamable_http = "streamable-http"
 
 
 def _is_numeric(value: object) -> bool:

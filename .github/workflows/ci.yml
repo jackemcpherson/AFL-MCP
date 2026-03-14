@@ -76,6 +76,6 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install -e ".[test]" pyright
+        run: pip install -e ".[test,ml]" pyright
       - name: Run pyright
         run: pyright src/
