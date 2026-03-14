@@ -3,12 +3,11 @@ region: syd1
 
 services:
   - name: afl-mcp
+    github:
+      repo: jackemcpherson/AFL-MCP
+      branch: main
+      deploy_on_push: true
     dockerfile_path: Dockerfile
-    source:
-      github:
-        repo: jackemcpherson/AFL-MCP
-        branch: main
-        deploy_on_push: true
     instance_count: 1
     instance_size_slug: basic-s
     http_port: 8080
