@@ -1,0 +1,235 @@
+{
+  "project": "AFL-MCP",
+  "branchName": "ralph/afl-stats-platform",
+  "description": "AFL statistics platform with PostgreSQL storage, CLI, and MCP server for LLM-powered querying",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Research fitzRoy R package data structures",
+      "description": "As a developer, I need to understand the data structures provided by the fitzRoy R package so that I can design an appropriate database schema.",
+      "acceptanceCriteria": [
+        "Create docs/fitzroy-research.md documenting all key fitzRoy functions and their return structures",
+        "Document the data available from fetch_results(), fetch_fixture(), fetch_player_stats(), fetch_lineup() and other key endpoints",
+        "List all columns/fields returned by each function with data types and example values",
+        "Identify which functions cover the 2016-2025 AFL season range",
+        "Note any data quality issues, gaps, or inconsistencies discovered"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Design PostgreSQL database schema",
+      "description": "As a developer, I need a normalised PostgreSQL schema that models AFL domain entities so that data can be stored and queried efficiently.",
+      "acceptanceCriteria": [
+        "Create db/migrations/001_initial_schema.sql with CREATE TABLE statements",
+        "Schema includes tables: competitions, seasons, teams, venues, matches, players, player_match_stats",
+        "competitions table has a type discriminator to support AFL and future AFLW data",
+        "All tables have appropriate primary keys, foreign keys, and indexes",
+        "Include a schema diagram or ERD in docs/schema.md",
+        "SQL file executes without errors against a clean PostgreSQL database"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Build R data extraction scripts",
+      "description": "As a developer, I need R scripts that extract AFL data from fitzRoy so that I can populate the database.",
+      "acceptanceCriteria": [
+        "Create etl/extract.R that pulls match results, player stats, and team data for 2016-2025",
+        "Script exports data to CSV files in a data/raw/ directory",
+        "CSV files have consistent column naming and encoding (UTF-8)",
+        "Script is idempotent - safe to re-run without issues",
+        "Include a README in etl/ explaining how to run the extraction"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Initialise Python project structure",
+      "description": "As a developer, I need a well-structured Python project so that the core library, CLI, and MCP server can be built in a shared codebase.",
+      "acceptanceCriteria": [
+        "Create pyproject.toml with project metadata and dependencies (psycopg, sentence-transformers, click/typer, fastmcp)",
+        "Create package structure: src/afl_mcp/ with __init__.py, core/, cli/, mcp_server/ subpackages",
+        "Create src/afl_mcp/core/__init__.py, db.py (database connection), queries.py (placeholder), search.py (placeholder)",
+        "Add a .env.example with DATABASE_URL placeholder",
+        "Typecheck passes with pyright or mypy configured in pyproject.toml"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Implement database connection and migration runner",
+      "description": "As a developer, I need a database connection module and migration runner so that the schema can be applied and the app can connect to PostgreSQL.",
+      "acceptanceCriteria": [
+        "Implement src/afl_mcp/core/db.py with a connection pool using psycopg",
+        "Connection config reads DATABASE_URL from environment",
+        "Implement a simple migration runner that executes SQL files from db/migrations/ in order",
+        "Add a CLI command (afl-mcp db migrate) that runs pending migrations",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Build CSV data loading pipeline",
+      "description": "As a developer, I need a data loader that reads the extracted CSV files and inserts them into PostgreSQL so that the database is populated.",
+      "acceptanceCriteria": [
+        "Create src/afl_mcp/core/loader.py that reads CSVs from data/raw/",
+        "Loader maps CSV columns to database schema tables with appropriate transformations",
+        "Loading is idempotent using UPSERT (ON CONFLICT) to prevent duplicates",
+        "Add a CLI command (afl-mcp db load) that runs the loader",
+        "Loader reports row counts for each table after completion",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Implement read-only SQL query execution",
+      "description": "As an AFL analyst, I want to execute SQL queries against the database so that I can explore AFL statistics flexibly.",
+      "acceptanceCriteria": [
+        "Implement execute_query() in src/afl_mcp/core/queries.py",
+        "Function accepts parameterised SQL and returns results as list of dicts",
+        "Function enforces read-only access by rejecting INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE statements",
+        "Function sets a statement timeout to prevent runaway queries",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Add pgvector support and embedding generation",
+      "description": "As a developer, I need vector embedding infrastructure so that semantic search can be implemented.",
+      "acceptanceCriteria": [
+        "Create db/migrations/002_add_vector_columns.sql adding vector columns to relevant tables",
+        "Implement src/afl_mcp/core/embeddings.py with an embed_text() function using sentence-transformers (all-MiniLM-L6-v2)",
+        "Implement a generate_embeddings() function that creates embeddings for existing database records",
+        "Add a CLI command (afl-mcp db embed) that generates and stores embeddings",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Implement semantic search",
+      "description": "As an AFL analyst, I want to search for players and matches using natural language so that I can find relevant data without writing SQL.",
+      "acceptanceCriteria": [
+        "Implement semantic_search() in src/afl_mcp/core/search.py",
+        "Function accepts a natural language query string and returns top-k results ranked by cosine similarity",
+        "Function supports an optional limit parameter (default 10)",
+        "Results include similarity score and the matched entity data",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Implement filtered semantic search",
+      "description": "As an AFL analyst, I want to combine semantic search with filters so that I can scope results to specific teams, seasons, or other criteria.",
+      "acceptanceCriteria": [
+        "Implement filtered_semantic_search() in src/afl_mcp/core/search.py",
+        "Function accepts a query string plus optional filters: team, season_range, venue, player_name",
+        "Filters are applied as SQL WHERE clauses before vector similarity ranking",
+        "Results include similarity score and matched entity data",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Build CLI with query command",
+      "description": "As an AFL analyst, I want a CLI tool to execute SQL queries so that I can explore data from the terminal.",
+      "acceptanceCriteria": [
+        "Create src/afl_mcp/cli/main.py with a CLI entry point using click or typer",
+        "Implement afl-mcp query <sql> command that executes read-only SQL",
+        "Output formats: table (default) and JSON (--json flag)",
+        "Table output uses a readable format with column headers",
+        "CLI entry point is registered in pyproject.toml [project.scripts]",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Add search commands to CLI",
+      "description": "As an AFL analyst, I want CLI commands for semantic search so that I can find data using natural language.",
+      "acceptanceCriteria": [
+        "Implement afl-mcp search <query> command for semantic search",
+        "Implement afl-mcp search <query> --team/--season/--venue flags for filtered semantic search",
+        "Both commands support table and JSON output formats",
+        "Results display similarity scores alongside entity data",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Build MCP server with SQL query tool",
+      "description": "As an LLM user, I want an MCP server that exposes SQL query execution so that Claude can answer AFL stats questions.",
+      "acceptanceCriteria": [
+        "Create src/afl_mcp/mcp_server/server.py using fastMCP",
+        "Expose an execute_sql tool that wraps the core execute_query() function",
+        "Tool has clear description and parameter schema for LLM consumption",
+        "MCP server can be started via afl-mcp serve command",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Add semantic search tools to MCP server",
+      "description": "As an LLM user, I want MCP tools for semantic search so that Claude can find AFL data using natural language.",
+      "acceptanceCriteria": [
+        "Expose a semantic_search tool on the MCP server wrapping the core function",
+        "Expose a filtered_semantic_search tool with team, season_range, venue, player_name parameters",
+        "Both tools have descriptive docstrings explaining their purpose and parameters",
+        "Tools return structured JSON results that LLMs can interpret",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Add schema introspection tool to MCP server",
+      "description": "As an LLM user, I want a tool that describes the database schema so that the LLM can write accurate SQL queries.",
+      "acceptanceCriteria": [
+        "Expose a get_schema tool on the MCP server that returns table names, columns, and types",
+        "Tool can optionally filter to a specific table",
+        "Output includes foreign key relationships",
+        "Add the same command to the CLI as afl-mcp schema",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
