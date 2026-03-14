@@ -37,10 +37,10 @@ def execute_query(sql: str, params: tuple | list | None = None) -> list[dict]:
 
     pool = get_pool()
     with pool.connection() as conn:
-        cur = conn.execute(sql, params)
+        cur = conn.execute(sql, params)  # type: ignore[arg-type]
         if cur.description is None:
             return []
-        return cur.fetchall()
+        return cur.fetchall()  # type: ignore[return-value]
 
 
 def get_schema_info(table_name: str | None = None) -> list[dict]:

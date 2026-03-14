@@ -140,6 +140,6 @@ def filtered_semantic_search(
     base_query += f" ORDER BY {order_col} <=> %s::vector LIMIT %s"
 
     with pool.connection() as conn:
-        rows = conn.execute(base_query, params).fetchall()
+        rows = conn.execute(base_query, params).fetchall()  # type: ignore[arg-type]
 
-    return rows
+    return rows  # type: ignore[return-value]

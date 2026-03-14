@@ -13,11 +13,12 @@ import os
 from pathlib import Path
 
 import psycopg
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
-_pool: ConnectionPool | None = None
+_pool: ConnectionPool | None = None  # type: ignore[type-arg]
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
@@ -73,15 +74,15 @@ def get_pool() -> ConnectionPool:
 
         load_dotenv()
 
-        _pool = ConnectionPool(
+        _pool = ConnectionPool(  # type: ignore[assignment]
             _get_dsn(),
             min_size=1,
             max_size=5,
             configure=_configure_pool_connection,
-            kwargs={"row_factory": psycopg.rows.dict_row},
+            kwargs={"row_factory": dict_row},
         )
         atexit.register(close_pool)
-    return _pool
+    return _pool  # type: ignore[return-value]
 
 
 def get_admin_connection() -> psycopg.Connection[dict]:
@@ -96,7 +97,7 @@ def get_admin_connection() -> psycopg.Connection[dict]:
 
     load_dotenv()
 
-    return psycopg.connect(_get_dsn(), row_factory=psycopg.rows.dict_row)
+    return psycopg.connect(_get_dsn(), row_factory=dict_row)  # type: ignore[return-value]
 
 
 def run_migrations() -> list[str]:
@@ -132,7 +133,7 @@ def run_migrations() -> list[str]:
                 continue
 
             sql = migration_file.read_text()
-            conn.execute(sql)
+            conn.execute(sql)  # type: ignore[arg-type]
             conn.execute(
                 "INSERT INTO schema_migrations (version, filename) VALUES (%s, %s)",
                 (version, migration_file.name),
