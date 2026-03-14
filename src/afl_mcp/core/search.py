@@ -7,7 +7,6 @@ match summaries using cosine similarity on vector embeddings.
 from __future__ import annotations
 
 from afl_mcp.core.db import get_pool
-from afl_mcp.core.embeddings import embed_text
 
 
 def semantic_search(
@@ -59,6 +58,8 @@ def filtered_semantic_search(
     Returns:
         List of dicts with similarity score and entity data.
     """
+    from afl_mcp.core.embeddings import embed_text
+
     embedding = embed_text(query)
     pool = get_pool()
 

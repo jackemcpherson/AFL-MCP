@@ -1,14 +1,23 @@
 """MCP server exposing AFL statistics tools via FastMCP.
 
-Provides execute_sql, semantic_search, filtered_search, and
-get_schema tools for LLM consumption over the MCP protocol.
+Provides execute_sql and get_schema tools for LLM consumption over
+the MCP protocol.
 """
 
 from __future__ import annotations
 
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
 from fastmcp import FastMCP
 
 mcp = FastMCP("AFL-MCP")
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    """Health check endpoint for load balancers and uptime monitors."""
+    return JSONResponse({"status": "ok"})
 
 
 @mcp.tool()
@@ -56,80 +65,6 @@ def execute_sql(sql: str) -> list[dict]:
     from afl_mcp.core.queries import execute_query
 
     return execute_query(sql)
-
-
-@mcp.tool()
-def semantic_search(
-    query: str,
-    entity_type: str = "player_season",
-    limit: int = 10,
-) -> list[dict]:
-    """Search for AFL players or matches using natural language.
-
-    Uses vector embeddings to find semantically similar results. Good for
-    questions like "dominant key forwards", "high-scoring matches at the MCG",
-    or "prolific midfielders in 2022".
-
-    Args:
-        query: Natural language search query describing what you're looking for.
-        entity_type: Type of entity to search. "player_season" for player
-            performance summaries, "match" for match summaries.
-        limit: Maximum number of results to return (default 10).
-
-    Returns:
-        List of dicts with similarity score and entity data.
-    """
-    from afl_mcp.core.search import semantic_search as _search
-
-    return _search(query=query, entity_type=entity_type, limit=limit)
-
-
-@mcp.tool()
-def filtered_search(
-    query: str,
-    entity_type: str = "player_season",
-    team: str | None = None,
-    season_from: int | None = None,
-    season_to: int | None = None,
-    venue: str | None = None,
-    player_name: str | None = None,
-    limit: int = 10,
-) -> list[dict]:
-    """Semantic search with filters for team, season range, venue, or player.
-
-    Combines natural language similarity with SQL filters. Filters are applied
-    before vector ranking, so results are both relevant and scoped.
-
-    Examples:
-    - query="best ruckmen", team="Melbourne", season_from=2020
-    - query="close finals", entity_type="match", venue="MCG"
-    - query="high disposal midfielder", player_name="Mitchell"
-
-    Args:
-        query: Natural language search query.
-        entity_type: "player_season" or "match".
-        team: Filter by team name (partial match, case-insensitive).
-        season_from: Minimum season year (inclusive).
-        season_to: Maximum season year (inclusive).
-        venue: Filter by venue name (partial match, case-insensitive).
-        player_name: Filter by player surname (partial match, case-insensitive).
-        limit: Maximum results to return (default 10).
-
-    Returns:
-        List of dicts with similarity score and entity data.
-    """
-    from afl_mcp.core.search import filtered_semantic_search
-
-    return filtered_semantic_search(
-        query=query,
-        entity_type=entity_type,
-        team=team,
-        season_from=season_from,
-        season_to=season_to,
-        venue=venue,
-        player_name=player_name,
-        limit=limit,
-    )
 
 
 @mcp.tool()

@@ -54,7 +54,7 @@ class TestFilteredSemanticSearchQueryBuilding:
 
         with (
             patch("afl_mcp.core.search.get_pool", return_value=mock_pool),
-            patch("afl_mcp.core.search.embed_text", return_value=fake_embedding),
+            patch("afl_mcp.core.embeddings.embed_text", return_value=fake_embedding),
         ):
             from afl_mcp.core.search import filtered_semantic_search
 
