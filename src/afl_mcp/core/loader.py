@@ -321,8 +321,16 @@ def _load_players(
     seen: dict[str, dict[str, str]] = {}
     for row in stats_data:
         pid = row.get("player_id", "")
-        if pid and pid not in seen:
-            seen[pid] = row
+        if not pid:
+            continue
+        if pid not in seen:
+            seen[pid] = dict(row)
+        else:
+            # Prefer rows that have height/weight data
+            if not seen[pid].get("player_height_cm") and row.get("player_height_cm"):
+                seen[pid]["player_height_cm"] = row["player_height_cm"]
+            if not seen[pid].get("player_weight_kg") and row.get("player_weight_kg"):
+                seen[pid]["player_weight_kg"] = row["player_weight_kg"]
 
     mapping: dict[str, int] = {}
     for pid, s in seen.items():
@@ -474,7 +482,7 @@ def _enrich_matches_from_stats(
         weather_type = _str_or_none(s.get("match_weather_type", ""))
         fryzigg_id = _str_or_none(s.get("match_id", ""))
 
-        conn.execute(
+        result = conn.execute(
             """UPDATE matches SET
                    local_time = COALESCE(%s::time, local_time),
                    attendance = COALESCE(%s, attendance),
@@ -493,6 +501,27 @@ def _enrich_matches_from_stats(
                 away_id,
             ),
         )
+        if result.rowcount == 0:
+            # Try swapped home/away (sources sometimes disagree)
+            conn.execute(
+                """UPDATE matches SET
+                       local_time = COALESCE(%s::time, local_time),
+                       attendance = COALESCE(%s, attendance),
+                       weather_temp_c = COALESCE(%s, weather_temp_c),
+                       weather_type = COALESCE(%s, weather_type),
+                       external_fryzigg_id = COALESCE(%s, external_fryzigg_id)
+                   WHERE date = %s AND home_team_id = %s AND away_team_id = %s""",
+                (
+                    local_time,
+                    attendance,
+                    weather_temp,
+                    weather_type,
+                    fryzigg_id,
+                    date,
+                    away_id,
+                    home_id,
+                ),
+            )
         count += 1
 
     conn.commit()
@@ -520,6 +549,8 @@ def _build_match_lookup(
     for r in rows:
         date_str = str(r["date"]) if r["date"] else ""
         lookup[(date_str, r["home_team"], r["away_team"])] = r["id"]
+        # Also index with swapped home/away for sources that disagree
+        lookup[(date_str, r["away_team"], r["home_team"])] = r["id"]
     return lookup
 
 
