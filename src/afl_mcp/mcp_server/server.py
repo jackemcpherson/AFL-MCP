@@ -24,7 +24,7 @@ async def health(request: Request) -> JSONResponse:
 def execute_sql(sql: str) -> list[dict]:
     """Execute a read-only SQL query against the AFL statistics database.
 
-    The database contains AFL Men's match results and player statistics from 2016-2025.
+    The database contains AFL Men's match results and player statistics from 1990 to the current season (updated automatically every 6 hours during the season).
 
     Tables:
     - competitions (id, code, name): AFLM/AFLW codes
