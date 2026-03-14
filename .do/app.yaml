@@ -29,9 +29,8 @@ services:
 databases:
   - name: db
     engine: PG
-    version: "16"
-    size: db-s-1vcpu-1gb
-    num_nodes: 1
+    production: true
+    cluster_name: afl-mcp-db
 
 domains:
   - domain: afl.jackemcpherson.com
