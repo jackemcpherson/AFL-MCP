@@ -10,6 +10,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -39,12 +43,12 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          SEASON="${{ github.event.inputs.season }}"
+          SEASON="${{ inputs.season }}"
           if [ -z "$SEASON" ]; then
             SEASON=$(date +%Y)
           fi
           docker run --rm \
-            -e DATABASE_URL="$DATABASE_URL" \
+            --env DATABASE_URL \
             afl-mcp-etl:latest \
             sh -c "Rscript etl/extract.R $SEASON && afl-mcp db migrate && afl-mcp db load --data-dir data/raw"
 
@@ -52,12 +56,12 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          SEASON="${{ github.event.inputs.season }}"
+          SEASON="${{ inputs.season }}"
           if [ -z "$SEASON" ]; then
             SEASON=$(date +%Y)
           fi
           docker run --rm \
-            -e DATABASE_URL="$DATABASE_URL" \
+            --env DATABASE_URL \
             afl-mcp-etl:latest \
             afl-mcp db pav --year "$SEASON"
 
@@ -88,5 +92,5 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           docker run --rm \
-            -e DATABASE_URL="$DATABASE_URL" \
+            --env DATABASE_URL \
             afl-mcp-embed:latest
