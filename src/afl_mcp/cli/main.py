@@ -150,17 +150,120 @@ def load(
 
 
 @db_app.command()
-def embed() -> None:
+def embed(
+    incremental: Annotated[
+        bool,
+        typer.Option("--incremental", "-i", help="Only embed new/updated rows."),
+    ] = False,
+) -> None:
     """Generate vector embeddings for semantic search."""
-    from afl_mcp.core.embeddings import generate_all_embeddings
+    if incremental:
+        from afl_mcp.core.embeddings import generate_incremental_embeddings
 
-    with console.status("[bold]Generating embeddings...", spinner="dots"):
-        counts = generate_all_embeddings()
+        label = "Generating incremental embeddings..."
+        generate = generate_incremental_embeddings
+    else:
+        from afl_mcp.core.embeddings import generate_all_embeddings
+
+        label = "Generating embeddings..."
+        generate = generate_all_embeddings
+
+    with console.status(f"[bold]{label}", spinner="dots"):
+        counts = generate()
 
     _print_results(
         [{"table": k, "count": v} for k, v in counts.items()],
         title="Embedding Summary",
     )
+
+
+@db_app.command()
+def pav(
+    year: Annotated[
+        int | None,
+        typer.Option("--year", "-y", help="Season year (omit for all 1998+)."),
+    ] = None,
+) -> None:
+    """Calculate and store PAV (Player Approximate Value) ratings."""
+    if year is not None:
+        from afl_mcp.core.pav import calculate_pav
+
+        try:
+            with console.status(f"[bold]Calculating PAV for {year}...", spinner="dots"):
+                count = calculate_pav(year)
+            console.print(f"[green]Calculated PAV for {year}: {count} players[/green]")
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+    else:
+        from afl_mcp.core.pav import calculate_all_pav
+
+        with console.status("[bold]Calculating PAV for all seasons...", spinner="dots"):
+            results = calculate_all_pav()
+
+        _print_results(
+            [{"year": k, "players": v} for k, v in results.items()],
+            title="PAV Calculation Summary",
+        )
+
+
+@app.command(name="pav-leaders")
+def pav_leaders(
+    year: Annotated[int, typer.Argument(help="Season year.")],
+    zone: Annotated[
+        str | None,
+        typer.Option("--zone", "-z", help="Sort by zone: off, mid, or def."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Number of results."),
+    ] = 20,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show PAV leaderboard for a season."""
+    from afl_mcp.core.tools import get_pav_leaders
+
+    try:
+        results = get_pav_leaders(year, zone, limit)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    zone_label = f" ({zone.upper()})" if zone else ""
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=f"{year} PAV Leaders{zone_label}")
+
+
+@app.command(name="pav")
+def pav_player(
+    player: Annotated[str, typer.Argument(help="Player name or ID.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show a player's PAV history."""
+    from afl_mcp.core.tools import get_player_pav
+
+    try:
+        player_id = int(player)
+        results = get_player_pav(player_id=player_id)
+    except ValueError:
+        try:
+            results = get_player_pav(player_name=player)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=f"PAV History: {player}")
 
 
 @app.command()
@@ -280,6 +383,238 @@ def schema(
         fks = get_foreign_keys()
         if fks:
             _print_results(fks, title="Foreign Keys")
+
+
+# ---------------------------------------------------------------------------
+# High-level tool commands
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def players(
+    name: Annotated[
+        str,
+        typer.Argument(help="Player name to search for (partial or full)."),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Maximum number of results."),
+    ] = 10,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Search for AFL players by name."""
+    from afl_mcp.core.tools import search_players
+
+    results = search_players(name, limit)
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title="Player Search")
+
+
+@app.command()
+def ladder(
+    year: Annotated[int, typer.Argument(help="Season year.")],
+    round_number: Annotated[
+        int | None,
+        typer.Option("--round", "-r", help="Ladder as at end of this round."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show the AFL ladder for a season."""
+    from afl_mcp.core.tools import get_ladder
+
+    title = f"{year} Ladder"
+    if round_number is not None:
+        title += f" (Round {round_number})"
+    results = get_ladder(year, round_number)
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=title)
+
+
+@app.command()
+def leaders(
+    stat: Annotated[str, typer.Argument(help="Stat column (e.g. goals, disposals).")],
+    season: Annotated[
+        int | None,
+        typer.Option("--season", "-s", help="Season year (omit for career)."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Number of results."),
+    ] = 10,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show top players for a statistic."""
+    from afl_mcp.core.tools import stat_leaders
+
+    try:
+        results = stat_leaders(stat, season, limit)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    title = f"{'Career' if season is None else season} {stat.replace('_', ' ').title()} Leaders"
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=title)
+
+
+@app.command()
+def h2h(
+    team1: Annotated[str, typer.Argument(help="First team name or alias.")],
+    team2: Annotated[str, typer.Argument(help="Second team name or alias.")],
+    year_from: Annotated[
+        int | None,
+        typer.Option("--from", help="Start year (inclusive)."),
+    ] = None,
+    year_to: Annotated[
+        int | None,
+        typer.Option("--to", help="End year (inclusive)."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show head-to-head record between two teams."""
+    from afl_mcp.core.tools import head_to_head
+
+    result = head_to_head(team1, team2, year_from, year_to)
+    if json_output:
+        console.print(JSON(json_lib.dumps(result, indent=2, default=str)))
+    else:
+        console.print(
+            f"\n[bold]{result['team1']}[/bold] vs [bold]{result['team2']}[/bold]"
+        )
+        console.print(
+            f"  {result['team1']}: {result['team1_wins']} wins  |  "
+            f"{result['team2']}: {result['team2_wins']} wins  |  "
+            f"Draws: {result['draws']}  |  "
+            f"Total: {result['total_matches']} matches"
+        )
+        if result["recent_matches"]:
+            _print_results(result["recent_matches"], title="Recent Matches")
+
+
+@app.command()
+def career(
+    player: Annotated[str, typer.Argument(help="Player name or ID.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show a player's career summary."""
+    from afl_mcp.core.tools import player_career_summary
+
+    try:
+        player_id = int(player)
+        result = player_career_summary(player_id=player_id)
+    except ValueError:
+        try:
+            result = player_career_summary(player_name=player)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(JSON(json_lib.dumps(result, indent=2, default=str)))
+    else:
+        p = result["player"]
+        console.print(f"\n[bold]{p['first_name']} {p['surname']}[/bold]")
+        if result["career"]:
+            _print_results([result["career"]], title="Career Totals")
+        if result["seasons"]:
+            _print_results(result["seasons"], title="By Season")
+
+
+@app.command()
+def compare(
+    player_ids: Annotated[
+        list[int],
+        typer.Argument(help="Player IDs to compare."),
+    ],
+    year_from: Annotated[
+        int | None,
+        typer.Option("--from", help="Start year (inclusive)."),
+    ] = None,
+    year_to: Annotated[
+        int | None,
+        typer.Option("--to", help="End year (inclusive)."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Compare stats for multiple players."""
+    from afl_mcp.core.tools import player_comparison
+
+    results = player_comparison(player_ids, year_from, year_to)
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title="Player Comparison")
+
+
+@app.command()
+def matches(
+    team: Annotated[
+        str | None,
+        typer.Option("--team", "-t", help="Team name or alias."),
+    ] = None,
+    venue: Annotated[
+        str | None,
+        typer.Option("--venue", "-v", help="Venue name (partial match)."),
+    ] = None,
+    year_from: Annotated[
+        int | None,
+        typer.Option("--from", help="Start year (inclusive)."),
+    ] = None,
+    year_to: Annotated[
+        int | None,
+        typer.Option("--to", help="End year (inclusive)."),
+    ] = None,
+    min_margin: Annotated[
+        int | None,
+        typer.Option("--min-margin", help="Minimum absolute margin."),
+    ] = None,
+    max_margin: Annotated[
+        int | None,
+        typer.Option("--max-margin", help="Maximum absolute margin (for close games)."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Maximum results."),
+    ] = 20,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Search for AFL matches by criteria."""
+    from afl_mcp.core.tools import search_matches
+
+    results = search_matches(
+        team, venue, year_from, year_to, min_margin, max_margin, limit
+    )
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title="Match Search")
 
 
 @app.command()
