@@ -30,3 +30,9 @@ logs/
 # Claude
 .claude/
 CLAUDE.md
+
+# Playwright MCP
+.playwright-mcp/
+
+# Review output
+plans/
