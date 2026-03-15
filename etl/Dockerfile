@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN Rscript -e 'install.packages(c("fitzRoy", "readr"), repos = "https://cloud.r-project.org")'
+RUN Rscript -e 'install.packages(c("fitzRoy", "readr"), repos = "https://cloud.r-project.org")' \
+    && Rscript -e 'library(fitzRoy); library(readr)'
 
 WORKDIR /app
 
