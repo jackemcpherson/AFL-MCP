@@ -97,6 +97,12 @@ TEAM_ALIAS_MAP: dict[str, str] = {
 }
 
 
+_PAV_ZONE_COLUMNS: dict[str, str] = {
+    "off": "off_pav",
+    "mid": "mid_pav",
+    "def": "def_pav",
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -109,6 +115,29 @@ def _resolve_team_name(name: str) -> str:
     if no alias matches.
     """
     return TEAM_ALIAS_MAP.get(name.lower().strip(), name.strip())
+
+
+def _resolve_player_id(player_id: int | None, player_name: str | None) -> int:
+    """Resolve a player ID from either an explicit ID or a name search.
+
+    Args:
+        player_id: Player database ID (returned directly if provided).
+        player_name: Player name to search for.
+
+    Returns:
+        Resolved player ID.
+
+    Raises:
+        ValueError: If neither argument is provided or no match found.
+    """
+    if player_id is None and player_name is None:
+        raise ValueError("Provide either player_id or player_name.")
+    if player_id is not None:
+        return player_id
+    results = search_players(player_name, limit=1)  # type: ignore[arg-type]
+    if not results:
+        raise ValueError(f"No player found matching {player_name!r}.")
+    return results[0]["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -145,20 +174,25 @@ def search_players(query: str, limit: int = 10) -> list[dict]:
     params.append(limit)
 
     return execute_query(
-        f"""SELECT p.id, p.first_name, p.surname, t.name AS current_team
-            FROM players p
+        f"""WITH matched AS (
+                SELECT p.id, p.first_name, p.surname
+                FROM players p
+                WHERE {where}
+                ORDER BY p.surname, p.first_name
+                LIMIT %s
+            )
+            SELECT m.id, m.first_name, m.surname, t.name AS current_team
+            FROM matched m
             LEFT JOIN LATERAL (
                 SELECT tm.name
                 FROM player_match_stats pms
-                JOIN matches m ON m.id = pms.match_id
+                JOIN matches mt ON mt.id = pms.match_id
                 JOIN teams tm ON tm.id = pms.team_id
-                WHERE pms.player_id = p.id
-                ORDER BY m.date DESC
+                WHERE pms.player_id = m.id
+                ORDER BY mt.date DESC
                 LIMIT 1
             ) t ON true
-            WHERE {where}
-            ORDER BY p.surname, p.first_name
-            LIMIT %s""",
+            ORDER BY m.surname, m.first_name""",
         params,
     )
 
@@ -400,14 +434,7 @@ def player_career_summary(
         ValueError: If neither player_id nor player_name provided,
             or if player not found.
     """
-    if player_id is None and player_name is None:
-        raise ValueError("Provide either player_id or player_name.")
-
-    if player_id is None:
-        results = search_players(player_name, limit=1)  # type: ignore[arg-type]
-        if not results:
-            raise ValueError(f"No player found matching {player_name!r}.")
-        player_id = results[0]["id"]
+    player_id = _resolve_player_id(player_id, player_name)
 
     # Player bio
     bio = execute_query(
@@ -602,8 +629,6 @@ def search_matches(
 # Tool 8: get_pav_leaders
 # ---------------------------------------------------------------------------
 
-_VALID_PAV_ZONES = {"off", "mid", "def"}
-
 
 def get_pav_leaders(
     year: int,
@@ -624,12 +649,13 @@ def get_pav_leaders(
     Raises:
         ValueError: If zone is invalid.
     """
-    if zone is not None and zone not in _VALID_PAV_ZONES:
+    if zone is not None and zone not in _PAV_ZONE_COLUMNS:
         raise ValueError(
-            f"Invalid zone: {zone!r}. Valid zones: {', '.join(sorted(_VALID_PAV_ZONES))}"
+            f"Invalid zone: {zone!r}. "
+            f"Valid zones: {', '.join(sorted(_PAV_ZONE_COLUMNS))}"
         )
 
-    sort_col = f"{zone}_pav" if zone else "total_pav"
+    sort_col = _PAV_ZONE_COLUMNS[zone] if zone else "total_pav"
 
     return execute_query(
         f"""SELECT p.first_name, p.surname, t.name AS team,
@@ -668,14 +694,7 @@ def get_player_pav(
         ValueError: If neither player_id nor player_name provided,
             or if player not found.
     """
-    if player_id is None and player_name is None:
-        raise ValueError("Provide either player_id or player_name.")
-
-    if player_id is None:
-        results = search_players(player_name, limit=1)  # type: ignore[arg-type]
-        if not results:
-            raise ValueError(f"No player found matching {player_name!r}.")
-        player_id = results[0]["id"]
+    player_id = _resolve_player_id(player_id, player_name)
 
     return execute_query(
         """SELECT s.year, t.name AS team,

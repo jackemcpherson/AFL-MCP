@@ -8,6 +8,7 @@ matches, stored in pgvector-backed tables.
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from afl_mcp.core.db import get_admin_connection
 
@@ -116,6 +117,104 @@ def _build_match_summary(row: dict) -> str:
     )
 
 
+def _embed_and_upsert(
+    conn: object,
+    rows: list[dict],
+    build_summary: Callable[[dict], str],
+    upsert_sql: str,
+    extract_params: Callable[[dict, str, list[float]], tuple],
+    label: str,
+) -> int:
+    """Build summaries, embed them, and upsert into the database.
+
+    Args:
+        conn: Database connection.
+        rows: Query result rows to process.
+        build_summary: Function to build a summary string from a row.
+        upsert_sql: SQL INSERT ... ON CONFLICT statement.
+        extract_params: Function taking (row, summary, embedding) and
+            returning the parameter tuple for the upsert.
+        label: Log label for progress messages.
+
+    Returns:
+        Number of rows upserted.
+    """
+    if not rows:
+        return 0
+
+    summaries = [build_summary(row) for row in rows]
+    logger.info("Embedding %d %s", len(summaries), label)
+    embeddings = embed_batch(summaries)
+
+    for summary, row, embedding in zip(summaries, rows, embeddings):
+        conn.execute(upsert_sql, extract_params(row, summary, embedding))  # type: ignore[union-attr]
+    conn.commit()  # type: ignore[union-attr]
+
+    return len(rows)
+
+
+_PLAYER_SEASON_UPSERT = """INSERT INTO player_season_summaries
+    (player_id, season_id, summary_text, embedding)
+VALUES (%s, %s, %s, %s)
+ON CONFLICT (player_id, season_id) DO UPDATE SET
+    summary_text = EXCLUDED.summary_text,
+    embedding = EXCLUDED.embedding"""
+
+_MATCH_UPSERT = """INSERT INTO match_summaries
+    (match_id, summary_text, embedding)
+VALUES (%s, %s, %s)
+ON CONFLICT (match_id) DO UPDATE SET
+    summary_text = EXCLUDED.summary_text,
+    embedding = EXCLUDED.embedding"""
+
+_PLAYER_SEASON_QUERY = """
+SELECT
+    p.id AS player_id,
+    p.first_name,
+    p.surname,
+    t.name AS team_name,
+    s.id AS season_id,
+    s.year,
+    COUNT(*) AS matches_played,
+    AVG(pms.disposals) AS avg_disposals,
+    AVG(pms.kicks) AS avg_kicks,
+    AVG(pms.marks) AS avg_marks,
+    AVG(pms.tackles) AS avg_tackles,
+    SUM(pms.goals) AS total_goals,
+    AVG(pms.supercoach_score) AS avg_supercoach
+FROM player_match_stats pms
+JOIN players p ON p.id = pms.player_id
+JOIN teams t ON t.id = pms.team_id
+JOIN matches m ON m.id = pms.match_id
+JOIN seasons s ON s.id = m.season_id"""
+
+_MATCH_QUERY = """
+SELECT
+    m.id AS match_id,
+    m.round,
+    m.round_number,
+    m.home_points,
+    m.away_points,
+    m.margin,
+    ht.name AS home_team,
+    at.name AS away_team,
+    v.name AS venue,
+    s.year
+FROM matches m
+JOIN teams ht ON ht.id = m.home_team_id
+JOIN teams at ON at.id = m.away_team_id
+LEFT JOIN venues v ON v.id = m.venue_id
+JOIN seasons s ON s.id = m.season_id"""
+
+
+def _player_season_params(row: dict, summary: str, embedding: list[float]) -> tuple:
+    return (row["player_id"], row["season_id"], summary, embedding)
+
+
+def _match_params(row: dict, summary: str, embedding: list[float]) -> tuple:
+    return (row["match_id"], summary, embedding)
+
+
 def generate_all_embeddings() -> dict[str, int]:
     """Generate embeddings for player season summaries and match summaries.
 
@@ -126,100 +225,36 @@ def generate_all_embeddings() -> dict[str, int]:
     Returns:
         Dict mapping table name to number of embeddings generated.
     """
-    counts: dict[str, int] = {"player_season_summaries": 0, "match_summaries": 0}
-
     with get_admin_connection() as conn:
         from pgvector.psycopg import register_vector
 
         register_vector(conn)
 
-        player_seasons = conn.execute("""
-            SELECT
-                p.id AS player_id,
-                p.first_name,
-                p.surname,
-                t.name AS team_name,
-                s.id AS season_id,
-                s.year,
-                COUNT(*) AS matches_played,
-                AVG(pms.disposals) AS avg_disposals,
-                AVG(pms.kicks) AS avg_kicks,
-                AVG(pms.marks) AS avg_marks,
-                AVG(pms.tackles) AS avg_tackles,
-                SUM(pms.goals) AS total_goals,
-                AVG(pms.supercoach_score) AS avg_supercoach
-            FROM player_match_stats pms
-            JOIN players p ON p.id = pms.player_id
-            JOIN teams t ON t.id = pms.team_id
-            JOIN matches m ON m.id = pms.match_id
-            JOIN seasons s ON s.id = m.season_id
-            GROUP BY p.id, p.first_name, p.surname, t.name, s.id, s.year
-        """).fetchall()
+        player_seasons = conn.execute(
+            _PLAYER_SEASON_QUERY
+            + "\nGROUP BY p.id, p.first_name, p.surname, t.name, s.id, s.year"
+        ).fetchall()
 
-        summaries: list[str] = []
-        meta: list[dict] = []
-        for row in player_seasons:
-            summaries.append(_build_player_season_summary(row))
-            meta.append(row)
+        match_rows = conn.execute(_MATCH_QUERY).fetchall()
 
-        if summaries:
-            logger.info("Embedding %d player season summaries", len(summaries))
-            embeddings = embed_batch(summaries)
-            for i, (summary, row) in enumerate(zip(summaries, meta)):
-                conn.execute(
-                    """INSERT INTO player_season_summaries
-                           (player_id, season_id, summary_text, embedding)
-                       VALUES (%s, %s, %s, %s)
-                       ON CONFLICT (player_id, season_id) DO UPDATE SET
-                           summary_text = EXCLUDED.summary_text,
-                           embedding = EXCLUDED.embedding""",
-                    (row["player_id"], row["season_id"], summary, embeddings[i]),
-                )
-            conn.commit()
-            counts["player_season_summaries"] = len(summaries)
-
-        matches = conn.execute("""
-            SELECT
-                m.id AS match_id,
-                m.round,
-                m.round_number,
-                m.home_points,
-                m.away_points,
-                m.margin,
-                ht.name AS home_team,
-                at.name AS away_team,
-                v.name AS venue,
-                s.year
-            FROM matches m
-            JOIN teams ht ON ht.id = m.home_team_id
-            JOIN teams at ON at.id = m.away_team_id
-            LEFT JOIN venues v ON v.id = m.venue_id
-            JOIN seasons s ON s.id = m.season_id
-        """).fetchall()
-
-        match_summaries: list[str] = []
-        match_meta: list[dict] = []
-        for row in matches:
-            match_summaries.append(_build_match_summary(row))
-            match_meta.append(row)
-
-        if match_summaries:
-            logger.info("Embedding %d match summaries", len(match_summaries))
-            embeddings = embed_batch(match_summaries)
-            for i, (summary, row) in enumerate(zip(match_summaries, match_meta)):
-                conn.execute(
-                    """INSERT INTO match_summaries
-                           (match_id, summary_text, embedding)
-                       VALUES (%s, %s, %s)
-                       ON CONFLICT (match_id) DO UPDATE SET
-                           summary_text = EXCLUDED.summary_text,
-                           embedding = EXCLUDED.embedding""",
-                    (row["match_id"], summary, embeddings[i]),
-                )
-            conn.commit()
-            counts["match_summaries"] = len(match_summaries)
-
-    return counts
+        return {
+            "player_season_summaries": _embed_and_upsert(
+                conn,
+                player_seasons,
+                _build_player_season_summary,
+                _PLAYER_SEASON_UPSERT,
+                _player_season_params,
+                "player season summaries",
+            ),
+            "match_summaries": _embed_and_upsert(
+                conn,
+                match_rows,
+                _build_match_summary,
+                _MATCH_UPSERT,
+                _match_params,
+                "match summaries",
+            ),
+        }
 
 
 def generate_incremental_embeddings() -> dict[str, int]:
@@ -232,111 +267,43 @@ def generate_incremental_embeddings() -> dict[str, int]:
     Returns:
         Dict mapping table name to number of embeddings generated.
     """
-    counts: dict[str, int] = {"player_season_summaries": 0, "match_summaries": 0}
-
     with get_admin_connection() as conn:
         from pgvector.psycopg import register_vector
 
         register_vector(conn)
 
-        # Player-seasons: new rows OR current season (to refresh aggregates)
-        player_seasons = conn.execute("""
-            SELECT
-                p.id AS player_id,
-                p.first_name,
-                p.surname,
-                t.name AS team_name,
-                s.id AS season_id,
-                s.year,
-                COUNT(*) AS matches_played,
-                AVG(pms.disposals) AS avg_disposals,
-                AVG(pms.kicks) AS avg_kicks,
-                AVG(pms.marks) AS avg_marks,
-                AVG(pms.tackles) AS avg_tackles,
-                SUM(pms.goals) AS total_goals,
-                AVG(pms.supercoach_score) AS avg_supercoach
-            FROM player_match_stats pms
-            JOIN players p ON p.id = pms.player_id
-            JOIN teams t ON t.id = pms.team_id
-            JOIN matches m ON m.id = pms.match_id
-            JOIN seasons s ON s.id = m.season_id
-            LEFT JOIN player_season_summaries pss
-                ON pss.player_id = p.id AND pss.season_id = s.id
-            WHERE pss.id IS NULL
-               OR s.year = EXTRACT(YEAR FROM CURRENT_DATE)
-            GROUP BY p.id, p.first_name, p.surname, t.name, s.id, s.year
-        """).fetchall()
+        player_seasons = conn.execute(
+            _PLAYER_SEASON_QUERY
+            + """
+LEFT JOIN player_season_summaries pss
+    ON pss.player_id = p.id AND pss.season_id = s.id
+WHERE pss.id IS NULL
+   OR s.year = EXTRACT(YEAR FROM CURRENT_DATE)
+GROUP BY p.id, p.first_name, p.surname, t.name, s.id, s.year"""
+        ).fetchall()
 
-        summaries: list[str] = []
-        meta: list[dict] = []
-        for row in player_seasons:
-            summaries.append(_build_player_season_summary(row))
-            meta.append(row)
+        match_rows = conn.execute(
+            _MATCH_QUERY
+            + """
+LEFT JOIN match_summaries ms ON ms.match_id = m.id
+WHERE ms.id IS NULL"""
+        ).fetchall()
 
-        if summaries:
-            logger.info(
-                "Embedding %d player season summaries (incremental)",
-                len(summaries),
-            )
-            embeddings = embed_batch(summaries)
-            for i, (summary, row) in enumerate(zip(summaries, meta)):
-                conn.execute(
-                    """INSERT INTO player_season_summaries
-                           (player_id, season_id, summary_text, embedding)
-                       VALUES (%s, %s, %s, %s)
-                       ON CONFLICT (player_id, season_id) DO UPDATE SET
-                           summary_text = EXCLUDED.summary_text,
-                           embedding = EXCLUDED.embedding""",
-                    (row["player_id"], row["season_id"], summary, embeddings[i]),
-                )
-            conn.commit()
-            counts["player_season_summaries"] = len(summaries)
-
-        # Matches: only truly new (results don't change once recorded)
-        matches = conn.execute("""
-            SELECT
-                m.id AS match_id,
-                m.round,
-                m.round_number,
-                m.home_points,
-                m.away_points,
-                m.margin,
-                ht.name AS home_team,
-                at.name AS away_team,
-                v.name AS venue,
-                s.year
-            FROM matches m
-            JOIN teams ht ON ht.id = m.home_team_id
-            JOIN teams at ON at.id = m.away_team_id
-            LEFT JOIN venues v ON v.id = m.venue_id
-            JOIN seasons s ON s.id = m.season_id
-            LEFT JOIN match_summaries ms ON ms.match_id = m.id
-            WHERE ms.id IS NULL
-        """).fetchall()
-
-        match_summaries: list[str] = []
-        match_meta: list[dict] = []
-        for row in matches:
-            match_summaries.append(_build_match_summary(row))
-            match_meta.append(row)
-
-        if match_summaries:
-            logger.info(
-                "Embedding %d match summaries (incremental)",
-                len(match_summaries),
-            )
-            embeddings = embed_batch(match_summaries)
-            for i, (summary, row) in enumerate(zip(match_summaries, match_meta)):
-                conn.execute(
-                    """INSERT INTO match_summaries
-                           (match_id, summary_text, embedding)
-                       VALUES (%s, %s, %s)
-                       ON CONFLICT (match_id) DO UPDATE SET
-                           summary_text = EXCLUDED.summary_text,
-                           embedding = EXCLUDED.embedding""",
-                    (row["match_id"], summary, embeddings[i]),
-                )
-            conn.commit()
-            counts["match_summaries"] = len(match_summaries)
-
-    return counts
+        return {
+            "player_season_summaries": _embed_and_upsert(
+                conn,
+                player_seasons,
+                _build_player_season_summary,
+                _PLAYER_SEASON_UPSERT,
+                _player_season_params,
+                "player season summaries (incremental)",
+            ),
+            "match_summaries": _embed_and_upsert(
+                conn,
+                match_rows,
+                _build_match_summary,
+                _MATCH_UPSERT,
+                _match_params,
+                "match summaries (incremental)",
+            ),
+        }

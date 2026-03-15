@@ -211,6 +211,23 @@ ON CONFLICT (player_id, season_id, team_id) DO UPDATE SET
 """
 
 
+def _execute_pav(conn: object, year: int) -> int:
+    """Execute PAV calculation for a single season on an existing connection.
+
+    Args:
+        conn: An open admin database connection.
+        year: Season year.
+
+    Returns:
+        Number of player-season-team rows upserted.
+    """
+    cur = conn.execute(_PAV_SQL, {"year": year})  # type: ignore[union-attr]
+    count = cur.rowcount
+    conn.commit()  # type: ignore[union-attr]
+    logger.info("Calculated PAV for %d: %d player rows", year, count)
+    return count
+
+
 def calculate_pav(year: int) -> int:
     """Calculate and store PAV ratings for a single season.
 
@@ -230,19 +247,19 @@ def calculate_pav(year: int) -> int:
         )
 
     with get_admin_connection() as conn:
-        cur = conn.execute(_PAV_SQL, {"year": year})
-        count = cur.rowcount
-        conn.commit()
-        logger.info("Calculated PAV for %d: %d player rows", year, count)
-        return count
+        return _execute_pav(conn, year)
 
 
 def calculate_all_pav() -> dict[int, int]:
     """Calculate PAV for all supported seasons (1998 to present).
 
+    Uses a single database connection for all seasons.
+
     Returns:
         Dict mapping year to number of rows upserted.
     """
+    results: dict[int, int] = {}
+
     with get_admin_connection() as conn:
         seasons = conn.execute(
             """SELECT DISTINCT s.year
@@ -253,9 +270,8 @@ def calculate_all_pav() -> dict[int, int]:
             (MIN_PAV_YEAR,),
         ).fetchall()
 
-    results: dict[int, int] = {}
-    for row in seasons:
-        year = row["year"]
-        results[year] = calculate_pav(year)
+        for row in seasons:
+            year = row["year"]
+            results[year] = _execute_pav(conn, year)
 
     return results
