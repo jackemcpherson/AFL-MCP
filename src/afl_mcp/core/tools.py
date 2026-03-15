@@ -223,7 +223,6 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
         params.append(round_number)
 
     where = " AND ".join(conditions)
-    # Duplicate params for both UNION arms
     all_params = params + params
 
     return execute_query(
@@ -436,7 +435,6 @@ def player_career_summary(
     """
     player_id = _resolve_player_id(player_id, player_name)
 
-    # Player bio
     bio = execute_query(
         """SELECT id, first_name, surname, height_cm, weight_kg
            FROM players WHERE id = %s""",
@@ -445,7 +443,6 @@ def player_career_summary(
     if not bio:
         raise ValueError(f"No player with id {player_id}.")
 
-    # Career totals
     totals = execute_query(
         """SELECT
                COUNT(*) AS games,
@@ -466,7 +463,6 @@ def player_career_summary(
         [player_id],
     )
 
-    # Per-season breakdown
     seasons = execute_query(
         """SELECT s.year, t.name AS team, COUNT(*) AS games,
                   SUM(goals)::int AS goals,

@@ -21,7 +21,7 @@ BATCH_SIZE = 256
 _model = None
 
 
-def _get_model():
+def _get_model():  # type: ignore[no-untyped-def]
     """Load and cache the sentence-transformer model.
 
     Lazily imports sentence_transformers to avoid loading PyTorch
@@ -75,23 +75,26 @@ def _build_player_season_summary(row: dict) -> str:
         A human-readable summary string.
     """
     parts = [
-        f"{row['first_name']} {row['surname']} ({row['team_name']}, {row['year']}): "
+        f"{row['first_name']} {row['surname']} ({row['team_name']}, {row['year']}):"
     ]
 
     parts.append(f"Played {row['matches_played']} matches.")
 
+    averages: list[str] = []
     if row["avg_disposals"]:
-        parts.append(f"Averaged {row['avg_disposals']:.1f} disposals")
+        averages.append(f"{row['avg_disposals']:.1f} disposals")
     if row["avg_kicks"]:
-        parts.append(f", {row['avg_kicks']:.1f} kicks")
+        averages.append(f"{row['avg_kicks']:.1f} kicks")
     if row["avg_marks"]:
-        parts.append(f", {row['avg_marks']:.1f} marks")
+        averages.append(f"{row['avg_marks']:.1f} marks")
     if row["avg_tackles"]:
-        parts.append(f", {row['avg_tackles']:.1f} tackles per game.")
+        averages.append(f"{row['avg_tackles']:.1f} tackles")
+    if averages:
+        parts.append(f"Averaged {', '.join(averages)} per game.")
     if row["total_goals"] and row["total_goals"] > 0:
-        parts.append(f" Kicked {row['total_goals']} goals for the season.")
+        parts.append(f"Kicked {row['total_goals']} goals for the season.")
     if row["avg_supercoach"]:
-        parts.append(f" {row['avg_supercoach']:.1f} SuperCoach average.")
+        parts.append(f"{row['avg_supercoach']:.1f} SuperCoach average.")
 
     return " ".join(parts)
 
