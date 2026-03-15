@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-15
+
+### Added
+
+- Synonym expansion at query time maps domain terms to template vocabulary (e.g. "grand final" → GF, "ruckman" → hitouts, "close game" → low margin terms)
+- Hard SQL filters extracted from queries: round names ("grand final" → `round = 'GF'`), margin terms ("close" → `ABS(margin) <= 10`, "draw" → `margin = 0`, "blowout" → `ABS(margin) >= 60`), positional filters ("ruckman" → `AVG(hitouts) >= 15`, "key forward" → `AVG(goals) >= 1.5`, "midfielder" → `AVG(disposals) >= 20`, "defender" → `AVG(intercepts) >= 4`)
+- Numeric filter extraction parses explicit numbers from queries (e.g. "margin under 10", "30 disposals", "50 goals") into SQL WHERE clauses
+- Rank field in all search results for easy ordering reference
+- Summary text included in match and player season search results
+
+### Fixed
+
+- Top performers fallback sort for pre-2007 matches without AFL Fantasy scores (uses weighted stat formula)
+- Set `hnsw.ef_search = 1000` when filters are present to prevent pgvector HNSW index returning empty results with selective WHERE clauses
+
 ## [0.3.1] - 2026-03-15
 
 ### Fixed

@@ -8,6 +8,8 @@ Results are enriched with top performers (matches) and PAV ratings
 
 from __future__ import annotations
 
+import re
+
 from psycopg.rows import dict_row
 
 from afl_mcp.core.db import get_pool
@@ -16,12 +18,169 @@ from afl_mcp.core.tools import _resolve_team_name
 RRF_K = 60
 POOL_MULTIPLIER = 5
 
+_SYNONYM_MAP: dict[str, str] = {
+    "grand final": "GF",
+    "preliminary final": "PF",
+    "semi final": "SF",
+    "semifinal": "SF",
+    "elimination final": "EF",
+    "qualifying final": "QF",
+    "finals": "EF QF SF PF GF",
+    "close game": "Margin: 1 Margin: 2 Margin: 3 Margin: 4 Margin: 5",
+    "close": "Margin: 1 Margin: 2 Margin: 3",
+    "nail-biter": "Margin: 1 Margin: 2 Margin: 3",
+    "thriller": "Margin: 1 Margin: 2 Margin: 3",
+    "blowout": "Margin: 100 Margin: 120 Margin: 80",
+    "demolition": "Margin: 100 Margin: 120",
+    "draw": "drew with Margin: 0",
+    "drawn": "drew with Margin: 0",
+    "ruckman": "hitouts",
+    "ruck": "hitouts",
+    "forward": "goals kicked",
+    "key forward": "goals kicked 40 50 60",
+    "midfielder": "disposals clearances tackles",
+    "defender": "rebounds intercepts marks",
+}
+
+
+def _expand_query(query: str) -> str:
+    """Expand a query with synonym vocabulary for better matching.
+
+    Appends template-vocabulary equivalents so both vector and full-text
+    signals can match domain-specific terms.
+    """
+    lower = query.lower()
+    expansions: list[str] = []
+    for phrase, expansion in _SYNONYM_MAP.items():
+        if phrase in lower:
+            expansions.append(expansion)
+    if not expansions:
+        return query
+    return query + " " + " ".join(expansions)
+
+
+_CLOSE_WORDS = re.compile(r"close|narrow|tight|under", re.IGNORECASE)
+_BIG_WORDS = re.compile(r"blowout|demolition|over|big|huge", re.IGNORECASE)
+
+_ROUND_MAP: dict[str, str] = {
+    "grand final": "GF",
+    "preliminary final": "PF",
+    "semi final": "SF",
+    "semifinal": "SF",
+    "elimination final": "EF",
+    "qualifying final": "QF",
+}
+
+_PMS_AVG_SUBQUERY = """(
+    SELECT AVG(pms_n.{col}) FROM player_match_stats pms_n
+    JOIN matches m_n ON m_n.id = pms_n.match_id
+    WHERE pms_n.player_id = pss.player_id
+      AND m_n.season_id = pss.season_id
+) >= %s"""
+
+
+def _extract_query_filters(query: str, search_type: str) -> tuple[list[str], list]:
+    """Extract hard SQL filters from a natural-language query.
+
+    Handles both explicit numeric patterns (e.g. "margin 10",
+    "30 disposals") and semantic terms (e.g. "grand final",
+    "ruckman", "close game") by converting them to WHERE clauses.
+    """
+    conditions: list[str] = []
+    params: list = []
+    lower = query.lower()
+
+    if search_type == "match":
+        # Round filters — specific round names
+        for phrase, round_val in _ROUND_MAP.items():
+            if phrase in lower:
+                conditions.append("m.round = %s")
+                params.append(round_val)
+                break
+        else:
+            # Generic "finals" → round_type filter
+            if "finals" in lower:
+                conditions.append("m.round_type = %s")
+                params.append("Finals")
+
+        # Margin filters — explicit numeric first
+        margin_match = re.search(
+            r"(?:margin.*?(\d+)|(\d+)\s*(?:point|pts?).*?margin)",
+            query,
+            re.IGNORECASE,
+        )
+        if margin_match:
+            value = int(margin_match.group(1) or margin_match.group(2))
+            if _CLOSE_WORDS.search(query):
+                conditions.append("ABS(m.margin) <= %s")
+            elif _BIG_WORDS.search(query):
+                conditions.append("ABS(m.margin) >= %s")
+            else:
+                conditions.append("ABS(m.margin) <= %s")
+            params.append(value)
+        else:
+            # Semantic margin filters (no explicit number)
+            if re.search(r"\bdraw\b|\bdrawn\b|\bdrew\b", lower):
+                conditions.append("m.margin = 0")
+            elif re.search(r"close|nail.?biter|thriller|narrow|tight", lower):
+                conditions.append("ABS(m.margin) <= %s")
+                params.append(10)
+            elif re.search(r"blowout|demolition|thrashing", lower):
+                conditions.append("ABS(m.margin) >= %s")
+                params.append(60)
+
+    elif search_type == "player_season":
+        # Explicit numeric patterns
+        disp_match = re.search(r"(\d+)\s*disposals", query, re.IGNORECASE)
+        if disp_match:
+            value = int(disp_match.group(1))
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="disposals"))
+            params.append(value - 2)
+
+        goals_match = re.search(r"(\d+)\s*goals", query, re.IGNORECASE)
+        if goals_match:
+            value = int(goals_match.group(1))
+            conditions.append("""(
+                SELECT SUM(pms_n.goals) FROM player_match_stats pms_n
+                JOIN matches m_n ON m_n.id = pms_n.match_id
+                WHERE pms_n.player_id = pss.player_id
+                  AND m_n.season_id = pss.season_id
+            ) >= %s""")
+            params.append(value - 5)
+
+        # Positional filters — only when no explicit stat number given
+        if re.search(r"\bruck\b|\bruckman\b", lower) and not disp_match:
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="hitouts"))
+            params.append(15)
+
+        if "key forward" in lower and not goals_match:
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="goals"))
+            params.append(1.5)
+        elif (
+            re.search(r"\bforward\b", lower)
+            and "key forward" not in lower
+            and not goals_match
+        ):
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="goals"))
+            params.append(1.0)
+
+        if re.search(r"\bmidfielder\b|\bmidfield\b", lower) and not disp_match:
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="disposals"))
+            params.append(20)
+
+        if re.search(r"\bdefender\b|\bdefensive\b", lower):
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="intercepts"))
+            params.append(4)
+
+    return conditions, params
+
 
 def _get_query_vector(query: str) -> list[float]:
     """Embed a text query using the same model as stored embeddings."""
     from afl_mcp.core.embeddings import embed_text
 
-    return embed_text(query)
+    expanded = _expand_query(query)
+    return embed_text(expanded)
 
 
 def _get_stored_embedding(table: str, where: str, params: list) -> list[float]:
@@ -233,6 +392,8 @@ def _hybrid_search(
 
     pool = get_pool()
     with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
+        if filter_conditions:
+            cur.execute("SET LOCAL hnsw.ef_search = 1000")
         return cur.execute(sql, all_params).fetchall()  # type: ignore[return-value]
 
 
@@ -252,12 +413,14 @@ def _enrich_matches(match_ids: list[int]) -> dict[int, dict]:
                       m.home_points, m.away_points, m.margin,
                       m.attendance, m.weather_type, m.weather_temp_c,
                       ht.name AS home_team, at.name AS away_team,
-                      v.name AS venue, s.year
+                      v.name AS venue, s.year,
+                      ms.summary_text AS summary
                FROM matches m
                JOIN teams ht ON ht.id = m.home_team_id
                JOIN teams at ON at.id = m.away_team_id
                LEFT JOIN venues v ON v.id = m.venue_id
                JOIN seasons s ON s.id = m.season_id
+               LEFT JOIN match_summaries ms ON ms.match_id = m.id
                WHERE m.id = ANY(%s)""",
             [match_ids],
         ).fetchall()
@@ -273,7 +436,13 @@ def _enrich_matches(match_ids: list[int]) -> dict[int, dict]:
                           pms.afl_fantasy_score,
                           ROW_NUMBER() OVER (
                               PARTITION BY pms.match_id, pms.team_id
-                              ORDER BY pms.afl_fantasy_score DESC NULLS LAST
+                              ORDER BY COALESCE(
+                                  pms.afl_fantasy_score,
+                                  COALESCE(pms.disposals, 0) * 2
+                                  + COALESCE(pms.goals, 0) * 6
+                                  + COALESCE(pms.marks, 0)
+                                  + COALESCE(pms.tackles, 0) * 2
+                              ) DESC NULLS LAST
                           ) AS rn
                    FROM player_match_stats pms
                    JOIN players p ON pms.player_id = p.id
@@ -318,6 +487,7 @@ def _enrich_player_seasons(
         rows = cur.execute(
             """SELECT pss.id AS pss_id,
                       pss.player_id, pss.season_id,
+                      pss.summary_text AS summary,
                       p.first_name, p.surname,
                       s.year,
                       t.name AS team,
@@ -369,6 +539,7 @@ def _enrich_player_seasons(
             "year": row["year"],
             "games": row["games"],
             "pav": pav_data,
+            "summary": row["summary"],
         }
 
     return result
@@ -411,7 +582,7 @@ def search_match_summaries(
 
     if query is not None:
         query_vector = _get_query_vector(query)
-        query_text: str | None = query
+        query_text: str | None = _expand_query(query)
         exclude_id = None
     else:
         query_vector = _get_stored_embedding(
@@ -428,6 +599,11 @@ def search_match_summaries(
         venue=venue,
         exclude_match_id=exclude_id,
     )
+
+    if query is not None:
+        num_conds, num_params = _extract_query_filters(query, "match")
+        conditions.extend(num_conds)
+        params.extend(num_params)
 
     ranked = _hybrid_search(
         query_vector=query_vector,
@@ -448,9 +624,9 @@ def search_match_summaries(
     enriched = _enrich_matches(result_ids)
 
     results = []
-    for mid in result_ids:
+    for i, mid in enumerate(result_ids):
         if mid in enriched:
-            entry = {"score": round(scores[mid], 6), **enriched[mid]}
+            entry = {"rank": i + 1, "score": round(scores[mid], 6), **enriched[mid]}
             results.append(entry)
 
     return results
@@ -503,7 +679,7 @@ def search_player_seasons(
 
     if query is not None:
         query_vector = _get_query_vector(query)
-        query_text: str | None = query
+        query_text: str | None = _expand_query(query)
     else:
         pool = get_pool()
         with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
@@ -530,6 +706,11 @@ def search_player_seasons(
         exclude_player_id=exclude_pid,
     )
 
+    if query is not None:
+        num_conds, num_params = _extract_query_filters(query, "player_season")
+        conditions.extend(num_conds)
+        params.extend(num_params)
+
     ranked = _hybrid_search(
         query_vector=query_vector,
         query_text=query_text,
@@ -549,9 +730,13 @@ def search_player_seasons(
     enriched = _enrich_player_seasons(result_ids)
 
     results = []
-    for pss_id in result_ids:
+    for i, pss_id in enumerate(result_ids):
         if pss_id in enriched:
-            entry = {"score": round(scores[pss_id], 6), **enriched[pss_id]}
+            entry = {
+                "rank": i + 1,
+                "score": round(scores[pss_id], 6),
+                **enriched[pss_id],
+            }
             results.append(entry)
 
     return results
@@ -583,17 +768,25 @@ def search_afl(
     """
     limit = max(1, min(limit, 50))
     query_vector = _get_query_vector(query)
+    expanded_text = _expand_query(query)
 
     match_conditions, match_params = _build_match_filters(
         year_from=year_from, year_to=year_to, team=team
     )
+    num_m_conds, num_m_params = _extract_query_filters(query, "match")
+    match_conditions.extend(num_m_conds)
+    match_params.extend(num_m_params)
+
     player_conditions, player_params = _build_player_season_filters(
         year_from=year_from, year_to=year_to, team=team
     )
+    num_p_conds, num_p_params = _extract_query_filters(query, "player_season")
+    player_conditions.extend(num_p_conds)
+    player_params.extend(num_p_params)
 
     match_ranked = _hybrid_search(
         query_vector=query_vector,
-        query_text=query,
+        query_text=expanded_text,
         table="match_summaries",
         id_column="match_id",
         join_sql=_MATCH_JOINS,
@@ -604,7 +797,7 @@ def search_afl(
 
     player_ranked = _hybrid_search(
         query_vector=query_vector,
-        query_text=query,
+        query_text=expanded_text,
         table="player_season_summaries",
         id_column="id",
         join_sql=_PLAYER_SEASON_JOINS,
@@ -629,14 +822,24 @@ def search_afl(
     player_data = _enrich_player_seasons(player_ids)
 
     results = []
-    for typ, eid, score in combined:
+    for i, (typ, eid, score) in enumerate(combined):
         if typ == "match" and eid in match_data:
             results.append(
-                {"type": "match", "score": round(score, 6), **match_data[eid]}
+                {
+                    "rank": i + 1,
+                    "type": "match",
+                    "score": round(score, 6),
+                    **match_data[eid],
+                }
             )
         elif typ == "player_season" and eid in player_data:
             results.append(
-                {"type": "player_season", "score": round(score, 6), **player_data[eid]}
+                {
+                    "rank": i + 1,
+                    "type": "player_season",
+                    "score": round(score, 6),
+                    **player_data[eid],
+                }
             )
 
     return results

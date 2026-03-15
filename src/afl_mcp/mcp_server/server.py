@@ -358,12 +358,19 @@ def search_match_summaries(
     Uses hybrid search combining vector similarity with keyword matching
     for best results on both entity names and statistical patterns.
 
+    Synonym expansion maps domain terms to template vocabulary (e.g.
+    "grand final" → GF, "close game" → low margin terms, "ruckman" →
+    hitouts). Numeric filters are extracted automatically (e.g.
+    "margin under 10" filters to ABS(margin) <= 10).
+
     Provide exactly one of query or match_id:
     - query: describe what you're looking for (e.g. "close games at
       the MCG", "high scoring grand finals", "Brisbane blowout")
     - match_id: find matches similar to a specific match
 
-    Results include top 3 performers per team (by AFL Fantasy score).
+    Results include rank, summary text, and top 3 performers per team.
+    For pre-2007 matches without AFL Fantasy scores, performers are
+    ranked by a weighted stat formula as fallback.
     Team aliases supported (e.g. "Pies", "Cats", "Hawks").
 
     Args:
@@ -377,7 +384,8 @@ def search_match_summaries(
         venue: Venue name (partial match).
 
     Returns:
-        List of match dicts with score, metadata, and top_performers.
+        List of match dicts with rank, score, summary, metadata,
+        and top_performers.
     """
     from afl_mcp.core.semantic_search import search_match_summaries as _search
 
@@ -399,14 +407,20 @@ def search_player_seasons(
 
     Uses hybrid search combining vector similarity with keyword matching.
 
+    Synonym expansion maps domain terms to template vocabulary (e.g.
+    "ruckman" → hitouts, "midfielder" → disposals/clearances/tackles).
+    Numeric filters are extracted automatically (e.g. "30 disposals"
+    filters to AVG(disposals) >= 28, "50 goals" to SUM(goals) >= 45).
+
     Provide exactly one of:
     - query: describe what you're looking for (e.g. "30 disposals per
       game", "key forward 50 goals", "dominant ruckman season")
     - player_id + year: find seasons similar to a specific player's
       season (e.g. player_id=37, year=2024 for Cripps 2024)
 
-    Results include PAV (Player Approximate Value) ratings when available.
-    Use min_games to filter out short cameos.
+    Results include rank, summary text, and PAV (Player Approximate
+    Value) ratings when available. Use min_games to filter out short
+    cameos.
 
     Args:
         query: Natural language search text.
@@ -419,7 +433,8 @@ def search_player_seasons(
         min_games: Minimum games played in the season.
 
     Returns:
-        List of player season dicts with score, player info, and PAV.
+        List of player season dicts with rank, score, summary,
+        player info, and PAV.
     """
     from afl_mcp.core.semantic_search import search_player_seasons as _search
 
@@ -440,11 +455,15 @@ def search_afl(
     relevance. Each result has a "type" field ("match" or
     "player_season") to distinguish result types.
 
+    Synonym expansion and numeric filter extraction are applied
+    automatically (e.g. "grand final" → GF, "close game" → low
+    margins, "30 disposals" → AVG filter).
+
     Good for broad exploratory queries like "Geelong 2007",
     "dominant performances at the MCG", or "Brisbane Lions 2024".
 
-    Match results include top performers. Player season results
-    include PAV ratings.
+    Match results include rank, summary, and top performers. Player
+    season results include rank, summary, and PAV ratings.
 
     Args:
         query: Natural language search text.
@@ -454,7 +473,8 @@ def search_afl(
         team: Only results involving this team (alias supported).
 
     Returns:
-        List of dicts with type, score, and enriched metadata.
+        List of dicts with rank, type, score, summary, and enriched
+        metadata.
     """
     from afl_mcp.core.semantic_search import search_afl as _search
 

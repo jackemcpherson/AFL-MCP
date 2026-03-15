@@ -13,6 +13,8 @@ import pytest
 from afl_mcp.core.semantic_search import (
     _build_match_filters,
     _build_player_season_filters,
+    _expand_query,
+    _extract_query_filters,
     search_afl,
     search_match_summaries,
     search_player_seasons,
@@ -236,10 +238,206 @@ class TestSearchAfl:
         results = search_afl(query="Geelong 2007")
 
         assert len(results) == 2
+        assert results[0]["rank"] == 1
         assert results[0]["type"] == "match"
         assert results[0]["home_team"] == "Geelong"
+        assert results[1]["rank"] == 2
         assert results[1]["type"] == "player_season"
         assert results[1]["surname"] == "Ablett"
+
+
+class TestExpandQuery:
+    """Verify synonym expansion at query time."""
+
+    def test_no_synonyms_returns_original(self) -> None:
+        assert _expand_query("Geelong 2007") == "Geelong 2007"
+
+    def test_grand_final_expansion(self) -> None:
+        result = _expand_query("grand final at the MCG")
+        assert "GF" in result
+        assert result.startswith("grand final at the MCG")
+
+    def test_multiple_synonyms(self) -> None:
+        result = _expand_query("close grand final")
+        assert "GF" in result
+        assert "Margin:" in result
+
+    def test_ruckman_expansion(self) -> None:
+        result = _expand_query("dominant ruckman season")
+        assert "hitouts" in result
+
+    def test_midfielder_expansion(self) -> None:
+        result = _expand_query("elite midfielder")
+        assert "disposals" in result
+        assert "clearances" in result
+        assert "tackles" in result
+
+    def test_draw_expansion(self) -> None:
+        result = _expand_query("draw at the MCG")
+        assert "drew with" in result
+        assert "Margin: 0" in result
+
+    def test_case_insensitive(self) -> None:
+        result = _expand_query("Grand Final")
+        assert "GF" in result
+
+    def test_original_always_preserved(self) -> None:
+        original = "blowout win"
+        result = _expand_query(original)
+        assert result.startswith(original)
+
+
+class TestExtractQueryFilters:
+    """Verify query filter extraction (numeric + semantic)."""
+
+    def test_no_filters_for_plain_query(self) -> None:
+        conds, params = _extract_query_filters("Geelong 2007", "match")
+        assert conds == []
+        assert params == []
+
+    # --- Match: explicit numeric margin ---
+
+    def test_margin_close_game(self) -> None:
+        conds, params = _extract_query_filters("close game margin under 10", "match")
+        assert any("ABS(m.margin) <=" in c for c in conds)
+        assert 10 in params
+
+    def test_margin_blowout(self) -> None:
+        conds, params = _extract_query_filters("blowout margin over 80", "match")
+        assert any("ABS(m.margin) >=" in c for c in conds)
+        assert 80 in params
+
+    def test_margin_default_lte(self) -> None:
+        conds, params = _extract_query_filters("margin 20", "match")
+        assert any("ABS(m.margin) <=" in c for c in conds)
+        assert 20 in params
+
+    # --- Match: semantic round filters ---
+
+    def test_grand_final_round_filter(self) -> None:
+        conds, params = _extract_query_filters("grand final at the MCG", "match")
+        assert "m.round = %s" in conds
+        assert "GF" in params
+
+    def test_preliminary_final_round_filter(self) -> None:
+        conds, params = _extract_query_filters("preliminary final", "match")
+        assert "m.round = %s" in conds
+        assert "PF" in params
+
+    def test_finals_round_type_filter(self) -> None:
+        conds, params = _extract_query_filters("best finals performances", "match")
+        assert "m.round_type = %s" in conds
+        assert "Finals" in params
+
+    def test_specific_final_does_not_add_generic_finals(self) -> None:
+        conds, params = _extract_query_filters("grand final thriller", "match")
+        assert "m.round_type = %s" not in conds
+        assert "m.round = %s" in conds
+
+    # --- Match: semantic margin filters ---
+
+    def test_close_game_semantic_margin(self) -> None:
+        conds, params = _extract_query_filters("close game at the MCG", "match")
+        assert any("ABS(m.margin) <=" in c for c in conds)
+        assert 10 in params
+
+    def test_nail_biter_semantic_margin(self) -> None:
+        conds, params = _extract_query_filters("nail-biter at Kardinia Park", "match")
+        assert any("ABS(m.margin) <=" in c for c in conds)
+
+    def test_blowout_semantic_margin(self) -> None:
+        conds, params = _extract_query_filters("biggest blowout", "match")
+        assert any("ABS(m.margin) >=" in c for c in conds)
+        assert 60 in params
+
+    def test_draw_filter(self) -> None:
+        conds, params = _extract_query_filters("draw at the MCG", "match")
+        assert "m.margin = 0" in conds
+
+    def test_explicit_margin_overrides_semantic(self) -> None:
+        conds, params = _extract_query_filters("close game margin under 5", "match")
+        # Should use explicit 5, not semantic 10
+        assert 5 in params
+        assert 10 not in params
+
+    # --- Player season: numeric ---
+
+    def test_disposals_filter(self) -> None:
+        conds, params = _extract_query_filters("30 disposals per game", "player_season")
+        assert len(conds) == 1
+        assert "AVG" in conds[0]
+        assert "disposals" in conds[0]
+        assert params == [28]  # 30 - 2
+
+    def test_goals_filter(self) -> None:
+        conds, params = _extract_query_filters("50 goals in a season", "player_season")
+        assert len(conds) == 1
+        assert "SUM" in conds[0]
+        assert "goals" in conds[0]
+        assert params == [45]  # 50 - 5
+
+    def test_both_disposals_and_goals(self) -> None:
+        conds, params = _extract_query_filters(
+            "30 disposals and 20 goals", "player_season"
+        )
+        assert len(conds) == 2
+        assert params == [28, 15]
+
+    # --- Player season: positional ---
+
+    def test_ruckman_hitouts_filter(self) -> None:
+        conds, params = _extract_query_filters(
+            "dominant ruckman season", "player_season"
+        )
+        assert any("hitouts" in c for c in conds)
+        assert 15 in params
+
+    def test_ruck_hitouts_filter(self) -> None:
+        conds, params = _extract_query_filters("best ruck seasons", "player_season")
+        assert any("hitouts" in c for c in conds)
+
+    def test_key_forward_goals_filter(self) -> None:
+        conds, params = _extract_query_filters("key forward season", "player_season")
+        assert any("goals" in c for c in conds)
+        assert 1.5 in params
+
+    def test_forward_goals_filter(self) -> None:
+        conds, params = _extract_query_filters("best forward season", "player_season")
+        assert any("goals" in c for c in conds)
+        assert 1.0 in params
+
+    def test_midfielder_disposals_filter(self) -> None:
+        conds, params = _extract_query_filters(
+            "elite midfielder season", "player_season"
+        )
+        assert any("disposals" in c for c in conds)
+        assert 20 in params
+
+    def test_defender_intercepts_filter(self) -> None:
+        conds, params = _extract_query_filters("best defender season", "player_season")
+        assert any("intercepts" in c for c in conds)
+        assert 4 in params
+
+    def test_ruckman_with_explicit_disposals_skips_hitouts(self) -> None:
+        conds, params = _extract_query_filters(
+            "ruckman with 20 disposals", "player_season"
+        )
+        # Should have disposals filter from explicit number, not hitouts
+        assert any("disposals" in c for c in conds)
+        assert 18 in params  # 20 - 2
+        # Hitouts should still be added (ruck keyword present, disp_match doesn't block it)
+        # Actually, disp_match blocks ruck hitouts filter — let's verify
+        assert not any("hitouts" in c for c in conds)
+
+    # --- Cross-type checks ---
+
+    def test_wrong_search_type_ignored(self) -> None:
+        conds, params = _extract_query_filters("30 disposals per game", "match")
+        assert conds == []
+
+    def test_match_margin_ignored_for_player_season(self) -> None:
+        conds, params = _extract_query_filters("margin 10", "player_season")
+        assert conds == []
 
 
 class TestMcpDelegation:
