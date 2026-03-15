@@ -150,12 +150,26 @@ def load(
 
 
 @db_app.command()
-def embed() -> None:
+def embed(
+    incremental: Annotated[
+        bool,
+        typer.Option("--incremental", "-i", help="Only embed new/updated rows."),
+    ] = False,
+) -> None:
     """Generate vector embeddings for semantic search."""
-    from afl_mcp.core.embeddings import generate_all_embeddings
+    if incremental:
+        from afl_mcp.core.embeddings import generate_incremental_embeddings
 
-    with console.status("[bold]Generating embeddings...", spinner="dots"):
-        counts = generate_all_embeddings()
+        label = "Generating incremental embeddings..."
+        generate = generate_incremental_embeddings
+    else:
+        from afl_mcp.core.embeddings import generate_all_embeddings
+
+        label = "Generating embeddings..."
+        generate = generate_all_embeddings
+
+    with console.status(f"[bold]{label}", spinner="dots"):
+        counts = generate()
 
     _print_results(
         [{"table": k, "count": v} for k, v in counts.items()],
