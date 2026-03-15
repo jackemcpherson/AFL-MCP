@@ -1,4 +1,4 @@
-FROM rocker/r-base:4.5.3
+FROM rocker/r-base:4.4.0
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
