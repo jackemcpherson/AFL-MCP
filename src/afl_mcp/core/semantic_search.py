@@ -78,6 +78,21 @@ _PMS_AVG_SUBQUERY = """(
       AND m_n.season_id = pss.season_id
 ) >= %s"""
 
+_PMS_AVG_SUBQUERY_LTE = """(
+    SELECT AVG(pms_n.{col}) FROM player_match_stats pms_n
+    JOIN matches m_n ON m_n.id = pms_n.match_id
+    WHERE pms_n.player_id = pss.player_id
+      AND m_n.season_id = pss.season_id
+) <= %s"""
+
+_STAT_THRESHOLDS: dict[str, tuple[float, float]] = {
+    "disposals": (25, 15),
+    "tackles": (6, 3),
+    "marks": (7, 3),
+    "goals": (1.5, 0.5),
+    "hitouts": (20, 5),
+}
+
 
 def _extract_query_filters(query: str, search_type: str) -> tuple[list[str], list]:
     """Extract hard SQL filters from a natural-language query.
@@ -148,6 +163,29 @@ def _extract_query_filters(query: str, search_type: str) -> tuple[list[str], lis
             ) >= %s""")
             params.append(value - 5)
 
+        # SuperCoach / AFL Fantasy filters
+        sc_match = re.search(
+            r"(?:(\d+)\s*(?:supercoach|super\s*coach|sc)\b"
+            r"|(?:supercoach|super\s*coach|sc)\s*(\d+))",
+            query,
+            re.IGNORECASE,
+        )
+        if sc_match:
+            value = int(sc_match.group(1) or sc_match.group(2))
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="supercoach_score"))
+            params.append(value - 5)
+
+        fantasy_match = re.search(
+            r"(?:(\d+)\s*(?:afl\s*fantasy|fantasy|af)\b"
+            r"|(?:afl\s*fantasy|fantasy|af)\s*(\d+))",
+            query,
+            re.IGNORECASE,
+        )
+        if fantasy_match:
+            value = int(fantasy_match.group(1) or fantasy_match.group(2))
+            conditions.append(_PMS_AVG_SUBQUERY.format(col="afl_fantasy_score"))
+            params.append(value - 5)
+
         # Positional filters — only when no explicit stat number given
         if re.search(r"\bruck\b|\bruckman\b", lower) and not disp_match:
             conditions.append(_PMS_AVG_SUBQUERY.format(col="hitouts"))
@@ -171,6 +209,15 @@ def _extract_query_filters(query: str, search_type: str) -> tuple[list[str], lis
         if re.search(r"\bdefender\b|\bdefensive\b", lower):
             conditions.append(_PMS_AVG_SUBQUERY.format(col="intercepts"))
             params.append(4)
+
+        # Stat-profile filters ("high tackles", "low disposals")
+        for stat, (high_thresh, low_thresh) in _STAT_THRESHOLDS.items():
+            if re.search(rf"\bhigh\s+{stat}\b", lower):
+                conditions.append(_PMS_AVG_SUBQUERY.format(col=stat))
+                params.append(high_thresh)
+            if re.search(rf"\blow\s+{stat}\b", lower):
+                conditions.append(_PMS_AVG_SUBQUERY_LTE.format(col=stat))
+                params.append(low_thresh)
 
     return conditions, params
 
@@ -301,6 +348,9 @@ _TABLE_ALIASES: dict[str, str] = {
 }
 
 
+_VALID_EMBEDDING_COLUMNS = {"embedding", "anon_embedding"}
+
+
 def _hybrid_search(
     query_vector: list[float],
     query_text: str | None,
@@ -310,6 +360,7 @@ def _hybrid_search(
     filter_conditions: list[str],
     filter_params: list,
     limit: int,
+    embedding_column: str = "embedding",
 ) -> list[dict]:
     """Run hybrid vector + full-text search with RRF fusion.
 
@@ -322,24 +373,28 @@ def _hybrid_search(
         filter_conditions: WHERE clause conditions.
         filter_params: Parameters for the WHERE conditions.
         limit: Maximum results to return.
+        embedding_column: Which embedding column to use for vector search.
 
     Returns:
         List of dicts with entity_id and score, ordered by score DESC.
     """
+    if embedding_column not in _VALID_EMBEDDING_COLUMNS:
+        raise ValueError(f"Invalid embedding column: {embedding_column!r}")
     pool_size = max(1, min(limit, 50)) * POOL_MULTIPLIER
     if table not in _TABLE_ALIASES:
         raise ValueError(f"Unknown table: {table!r}")
     alias = _TABLE_ALIASES[table]
     where = (" AND " + " AND ".join(filter_conditions)) if filter_conditions else ""
 
+    emb_col = f"{alias}.{embedding_column}"
     vector_params: list = [query_vector, *filter_params, query_vector, pool_size]
     vector_cte = f"""vector_ranked AS (
         SELECT {alias}.{id_column},
-               ROW_NUMBER() OVER (ORDER BY {alias}.embedding <=> %s::vector) AS rank_v
+               ROW_NUMBER() OVER (ORDER BY {emb_col} <=> %s::vector) AS rank_v
         FROM {table} {alias}
         {join_sql}
         WHERE true{where}
-        ORDER BY {alias}.embedding <=> %s::vector
+        ORDER BY {emb_col} <=> %s::vector
         LIMIT %s
     )"""
 
@@ -393,7 +448,13 @@ def _hybrid_search(
     pool = get_pool()
     with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
         if filter_conditions:
-            cur.execute("SET LOCAL hnsw.ef_search = 1000")
+            has_subquery = any("SELECT" in c for c in filter_conditions)
+            if has_subquery:
+                # Subquery filters can be extremely selective — disable
+                # HNSW index scan to force exact brute-force search.
+                cur.execute("SET LOCAL enable_indexscan = off")
+            else:
+                cur.execute("SET LOCAL hnsw.ef_search = 1000")
         return cur.execute(sql, all_params).fetchall()  # type: ignore[return-value]
 
 
@@ -677,6 +738,7 @@ def search_player_seasons(
 
     exclude_pid = None
 
+    use_anon = False
     if query is not None:
         query_vector = _get_query_vector(query)
         query_text: str | None = _expand_query(query)
@@ -684,7 +746,8 @@ def search_player_seasons(
         pool = get_pool()
         with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
             row = cur.execute(
-                """SELECT pss.embedding, pss.player_id
+                """SELECT COALESCE(pss.anon_embedding, pss.embedding) AS embedding,
+                          pss.player_id
                    FROM player_season_summaries pss
                    JOIN seasons s ON s.id = pss.season_id
                    WHERE pss.player_id = %s AND s.year = %s""",
@@ -697,6 +760,7 @@ def search_player_seasons(
         query_vector = row["embedding"]
         query_text = None
         exclude_pid = row["player_id"]
+        use_anon = True
 
     conditions, params = _build_player_season_filters(
         year_from=year_from,
@@ -719,6 +783,7 @@ def search_player_seasons(
         join_sql=_PLAYER_SEASON_JOINS,
         filter_conditions=conditions,
         filter_params=params,
+        embedding_column="anon_embedding" if use_anon else "embedding",
         limit=limit,
     )
 
@@ -748,6 +813,7 @@ def search_afl(
     year_from: int | None = None,
     year_to: int | None = None,
     team: str | None = None,
+    min_games: int | None = None,
 ) -> list[dict]:
     """Unified search across matches and player seasons.
 
@@ -761,6 +827,7 @@ def search_afl(
         year_from: Filter by start year (inclusive).
         year_to: Filter by end year (inclusive).
         team: Filter by team name or alias.
+        min_games: Minimum games played (player seasons only).
 
     Returns:
         List of dicts with type ("match" or "player_season"),
@@ -778,7 +845,7 @@ def search_afl(
     match_params.extend(num_m_params)
 
     player_conditions, player_params = _build_player_season_filters(
-        year_from=year_from, year_to=year_to, team=team
+        year_from=year_from, year_to=year_to, team=team, min_games=min_games
     )
     num_p_conds, num_p_params = _extract_query_filters(query, "player_season")
     player_conditions.extend(num_p_conds)

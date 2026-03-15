@@ -95,6 +95,39 @@ def _build_player_season_summary(row: dict) -> str:
         parts.append(f"Kicked {row['total_goals']} goals for the season.")
     if row["avg_supercoach"]:
         parts.append(f"{row['avg_supercoach']:.1f} SuperCoach average.")
+    if row.get("avg_fantasy"):
+        parts.append(f"{row['avg_fantasy']:.1f} AFL Fantasy average.")
+
+    return " ".join(parts)
+
+
+def _build_anon_player_season_summary(row: dict) -> str:
+    """Build an anonymized summary for stat-profile similarity.
+
+    Same stats as the named summary but strips player name and team,
+    so embeddings cluster by statistical profile rather than identity.
+    """
+    parts = [f"Season {row['year']}:"]
+
+    parts.append(f"Played {row['matches_played']} matches.")
+
+    averages: list[str] = []
+    if row["avg_disposals"]:
+        averages.append(f"{row['avg_disposals']:.1f} disposals")
+    if row["avg_kicks"]:
+        averages.append(f"{row['avg_kicks']:.1f} kicks")
+    if row["avg_marks"]:
+        averages.append(f"{row['avg_marks']:.1f} marks")
+    if row["avg_tackles"]:
+        averages.append(f"{row['avg_tackles']:.1f} tackles")
+    if averages:
+        parts.append(f"Averaged {', '.join(averages)} per game.")
+    if row["total_goals"] and row["total_goals"] > 0:
+        parts.append(f"Kicked {row['total_goals']} goals for the season.")
+    if row["avg_supercoach"]:
+        parts.append(f"{row['avg_supercoach']:.1f} SuperCoach average.")
+    if row.get("avg_fantasy"):
+        parts.append(f"{row['avg_fantasy']:.1f} AFL Fantasy average.")
 
     return " ".join(parts)
 
@@ -157,11 +190,12 @@ def _embed_and_upsert(
 
 
 _PLAYER_SEASON_UPSERT = """INSERT INTO player_season_summaries
-    (player_id, season_id, summary_text, embedding)
-VALUES (%s, %s, %s, %s)
+    (player_id, season_id, summary_text, embedding, anon_embedding)
+VALUES (%s, %s, %s, %s, %s)
 ON CONFLICT (player_id, season_id) DO UPDATE SET
     summary_text = EXCLUDED.summary_text,
-    embedding = EXCLUDED.embedding"""
+    embedding = EXCLUDED.embedding,
+    anon_embedding = EXCLUDED.anon_embedding"""
 
 _MATCH_UPSERT = """INSERT INTO match_summaries
     (match_id, summary_text, embedding)
@@ -184,7 +218,8 @@ SELECT
     AVG(pms.marks) AS avg_marks,
     AVG(pms.tackles) AS avg_tackles,
     SUM(pms.goals) AS total_goals,
-    AVG(pms.supercoach_score) AS avg_supercoach
+    AVG(pms.supercoach_score) AS avg_supercoach,
+    AVG(pms.afl_fantasy_score) AS avg_fantasy
 FROM player_match_stats pms
 JOIN players p ON p.id = pms.player_id
 JOIN teams t ON t.id = pms.team_id
@@ -210,12 +245,37 @@ LEFT JOIN venues v ON v.id = m.venue_id
 JOIN seasons s ON s.id = m.season_id"""
 
 
-def _player_season_params(row: dict, summary: str, embedding: list[float]) -> tuple:
-    return (row["player_id"], row["season_id"], summary, embedding)
-
-
 def _match_params(row: dict, summary: str, embedding: list[float]) -> tuple:
     return (row["match_id"], summary, embedding)
+
+
+def _embed_player_seasons(conn: object, rows: list[dict], label: str) -> int:
+    """Build named + anonymous summaries, embed both, and upsert.
+
+    Player seasons get two embeddings: the named one (for text query
+    mode) and an anonymous one (for "find similar" mode).
+    """
+    if not rows:
+        return 0
+
+    named_summaries = [_build_player_season_summary(row) for row in rows]
+    anon_summaries = [_build_anon_player_season_summary(row) for row in rows]
+
+    logger.info("Embedding %d %s (named)", len(named_summaries), label)
+    named_embeddings = embed_batch(named_summaries)
+    logger.info("Embedding %d %s (anonymous)", len(anon_summaries), label)
+    anon_embeddings = embed_batch(anon_summaries)
+
+    for row, summary, named_emb, anon_emb in zip(
+        rows, named_summaries, named_embeddings, anon_embeddings
+    ):
+        conn.execute(  # type: ignore[union-attr]
+            _PLAYER_SEASON_UPSERT,
+            (row["player_id"], row["season_id"], summary, named_emb, anon_emb),
+        )
+    conn.commit()  # type: ignore[union-attr]
+
+    return len(rows)
 
 
 def generate_all_embeddings() -> dict[str, int]:
@@ -241,13 +301,8 @@ def generate_all_embeddings() -> dict[str, int]:
         match_rows = conn.execute(_MATCH_QUERY).fetchall()
 
         return {
-            "player_season_summaries": _embed_and_upsert(
-                conn,
-                player_seasons,
-                _build_player_season_summary,
-                _PLAYER_SEASON_UPSERT,
-                _player_season_params,
-                "player season summaries",
+            "player_season_summaries": _embed_player_seasons(
+                conn, player_seasons, "player season summaries"
             ),
             "match_summaries": _embed_and_upsert(
                 conn,
@@ -264,8 +319,8 @@ def generate_incremental_embeddings() -> dict[str, int]:
     """Generate embeddings only for new or updated data.
 
     Finds player-season combinations and matches that do not yet have
-    embeddings, plus re-embeds all current-season player-seasons to
-    keep aggregate stats fresh.
+    embeddings (including missing anon_embedding), plus re-embeds all
+    current-season player-seasons to keep aggregate stats fresh.
 
     Returns:
         Dict mapping table name to number of embeddings generated.
@@ -281,6 +336,7 @@ def generate_incremental_embeddings() -> dict[str, int]:
 LEFT JOIN player_season_summaries pss
     ON pss.player_id = p.id AND pss.season_id = s.id
 WHERE pss.id IS NULL
+   OR pss.anon_embedding IS NULL
    OR s.year = EXTRACT(YEAR FROM CURRENT_DATE)
 GROUP BY p.id, p.first_name, p.surname, t.name, s.id, s.year"""
         ).fetchall()
@@ -293,13 +349,8 @@ WHERE ms.id IS NULL"""
         ).fetchall()
 
         return {
-            "player_season_summaries": _embed_and_upsert(
-                conn,
-                player_seasons,
-                _build_player_season_summary,
-                _PLAYER_SEASON_UPSERT,
-                _player_season_params,
-                "player season summaries (incremental)",
+            "player_season_summaries": _embed_player_seasons(
+                conn, player_seasons, "player season summaries (incremental)"
             ),
             "match_summaries": _embed_and_upsert(
                 conn,

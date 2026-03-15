@@ -429,6 +429,90 @@ class TestExtractQueryFilters:
         # Actually, disp_match blocks ruck hitouts filter — let's verify
         assert not any("hitouts" in c for c in conds)
 
+    # --- Player season: SuperCoach / Fantasy ---
+
+    def test_supercoach_filter(self) -> None:
+        conds, params = _extract_query_filters("supercoach 120", "player_season")
+        assert any("supercoach_score" in c for c in conds)
+        assert 115 in params
+
+    def test_super_coach_space_filter(self) -> None:
+        conds, params = _extract_query_filters("super coach 110", "player_season")
+        assert any("supercoach_score" in c for c in conds)
+        assert 105 in params
+
+    def test_sc_abbreviation_filter(self) -> None:
+        conds, params = _extract_query_filters("sc 130", "player_season")
+        assert any("supercoach_score" in c for c in conds)
+        assert 125 in params
+
+    def test_supercoach_number_first(self) -> None:
+        conds, params = _extract_query_filters(
+            "120 supercoach average", "player_season"
+        )
+        assert any("supercoach_score" in c for c in conds)
+        assert 115 in params
+
+    def test_fantasy_filter(self) -> None:
+        conds, params = _extract_query_filters("fantasy 100", "player_season")
+        assert any("afl_fantasy_score" in c for c in conds)
+        assert 95 in params
+
+    def test_afl_fantasy_filter(self) -> None:
+        conds, params = _extract_query_filters("afl fantasy 110", "player_season")
+        assert any("afl_fantasy_score" in c for c in conds)
+        assert 105 in params
+
+    def test_fantasy_number_first(self) -> None:
+        conds, params = _extract_query_filters("100 fantasy", "player_season")
+        assert any("afl_fantasy_score" in c for c in conds)
+        assert 95 in params
+
+    # --- Player season: stat-profile ---
+
+    def test_high_disposals(self) -> None:
+        conds, params = _extract_query_filters("high disposals", "player_season")
+        assert any("disposals" in c and ">=" in c for c in conds)
+        assert 25 in params
+
+    def test_low_disposals(self) -> None:
+        conds, params = _extract_query_filters("low disposals", "player_season")
+        assert any("disposals" in c and "<=" in c for c in conds)
+        assert 15 in params
+
+    def test_high_tackles(self) -> None:
+        conds, params = _extract_query_filters("high tackles", "player_season")
+        assert any("tackles" in c and ">=" in c for c in conds)
+        assert 6 in params
+
+    def test_low_tackles(self) -> None:
+        conds, params = _extract_query_filters("low tackles", "player_season")
+        assert any("tackles" in c and "<=" in c for c in conds)
+        assert 3 in params
+
+    def test_high_and_low_combined(self) -> None:
+        conds, params = _extract_query_filters(
+            "high tackles low disposals", "player_season"
+        )
+        assert any("tackles" in c and ">=" in c for c in conds)
+        assert any("disposals" in c and "<=" in c for c in conds)
+        assert 6 in params
+        assert 15 in params
+
+    def test_high_hitouts(self) -> None:
+        conds, params = _extract_query_filters("high hitouts", "player_season")
+        assert any("hitouts" in c and ">=" in c for c in conds)
+        assert 20 in params
+
+    def test_stat_profile_with_numeric(self) -> None:
+        conds, params = _extract_query_filters(
+            "30 disposals high tackles", "player_season"
+        )
+        assert any("disposals" in c and ">=" in c for c in conds)
+        assert any("tackles" in c and ">=" in c for c in conds)
+        assert 28 in params  # 30 - 2
+        assert 6 in params
+
     # --- Cross-type checks ---
 
     def test_wrong_search_type_ignored(self) -> None:
@@ -466,4 +550,4 @@ class TestMcpDelegation:
 
         with patch("afl_mcp.core.semantic_search.search_afl", return_value=[]) as mock:
             mcp_fn(query="test", limit=5)
-            mock.assert_called_once_with("test", 5, None, None, None)
+            mock.assert_called_once_with("test", 5, None, None, None, None)

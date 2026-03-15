@@ -448,6 +448,7 @@ def search_afl(
     year_from: int | None = None,
     year_to: int | None = None,
     team: str | None = None,
+    min_games: int | None = None,
 ) -> list[dict]:
     """Search across all AFL data — matches and player seasons together.
 
@@ -471,6 +472,7 @@ def search_afl(
         year_from: Only results from this year onwards.
         year_to: Only results up to this year.
         team: Only results involving this team (alias supported).
+        min_games: Minimum games played (player seasons only).
 
     Returns:
         List of dicts with rank, type, score, summary, and enriched
@@ -478,4 +480,4 @@ def search_afl(
     """
     from afl_mcp.core.semantic_search import search_afl as _search
 
-    return _search(query, limit, year_from, year_to, team)
+    return _search(query, limit, year_from, year_to, team, min_games)

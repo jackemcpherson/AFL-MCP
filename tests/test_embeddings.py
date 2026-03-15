@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from afl_mcp.core.embeddings import (
+    _build_anon_player_season_summary,
     _build_match_summary,
     _build_player_season_summary,
     generate_incremental_embeddings,
@@ -40,6 +41,7 @@ class TestBuildPlayerSeasonSummary:
             "avg_tackles": 6.7,
             "total_goals": 15,
             "avg_supercoach": 112.4,
+            "avg_fantasy": 105.2,
         }
         base.update(overrides)
         return base
@@ -90,6 +92,57 @@ class TestBuildPlayerSeasonSummary:
         result = _build_player_season_summary(self._make_row())
         assert "112.4" in result
         assert "SuperCoach" in result
+
+
+class TestBuildAnonPlayerSeasonSummary:
+    """Verify anonymized player season summary text generation."""
+
+    def _make_row(self, **overrides: object) -> dict:
+        base: dict = {
+            "first_name": "Patrick",
+            "surname": "Cripps",
+            "team_name": "Carlton",
+            "year": 2023,
+            "matches_played": 22,
+            "avg_disposals": 28.5,
+            "avg_kicks": 12.3,
+            "avg_marks": 4.1,
+            "avg_tackles": 6.7,
+            "total_goals": 15,
+            "avg_supercoach": 112.4,
+            "avg_fantasy": 105.2,
+        }
+        base.update(overrides)
+        return base
+
+    def test_excludes_player_name(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "Patrick" not in result
+        assert "Cripps" not in result
+
+    def test_excludes_team_name(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "Carlton" not in result
+
+    def test_includes_year(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "2023" in result
+
+    def test_includes_stats(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "28.5 disposals" in result
+        assert "22 matches" in result
+        assert "15 goals" in result
+
+    def test_includes_supercoach(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "112.4" in result
+        assert "SuperCoach" in result
+
+    def test_includes_fantasy(self) -> None:
+        result = _build_anon_player_season_summary(self._make_row())
+        assert "105.2" in result
+        assert "AFL Fantasy" in result
 
 
 class TestBuildMatchSummary:
@@ -220,6 +273,7 @@ class TestGenerateIncrementalEmbeddings:
                 "avg_tackles": 5.0,
                 "total_goals": 3,
                 "avg_supercoach": 90.0,
+                "avg_fantasy": 85.0,
             }
         ]
         match_rows = [
@@ -246,7 +300,8 @@ class TestGenerateIncrementalEmbeddings:
 
         counts = generate_incremental_embeddings()
 
-        assert mock_embed.call_count == 2
+        # 2 for player seasons (named + anon) + 1 for matches
+        assert mock_embed.call_count == 3
         assert counts["player_season_summaries"] == 1
         assert counts["match_summaries"] == 1
 
@@ -269,6 +324,7 @@ class TestGenerateIncrementalEmbeddings:
         first_sql = mock_conn.execute.call_args_list[0][0][0]
         assert "EXTRACT(YEAR FROM CURRENT_DATE)" in first_sql
         assert "LEFT JOIN player_season_summaries" in first_sql
+        assert "anon_embedding IS NULL" in first_sql
 
     @patch("afl_mcp.core.embeddings.embed_batch")
     @patch("pgvector.psycopg.register_vector")

@@ -307,6 +307,10 @@ def search(
         int,
         typer.Option("--limit", "-n", help="Maximum number of results."),
     ] = 10,
+    min_games: Annotated[
+        int | None,
+        typer.Option("--min-games", help="Minimum games played (player seasons only)."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", "-j", help="Output results as JSON."),
@@ -321,6 +325,7 @@ def search(
         year_from=year_from,
         year_to=year_to,
         team=team,
+        min_games=min_games,
     )
 
     if json_output:

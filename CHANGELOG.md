@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-03-15
+
+### Added
+
+- Anonymous embeddings for player season "find similar" searches — strips player name and team from summaries so results match on statistical profile rather than team identity
+- SuperCoach and AFL Fantasy numeric filters extracted from queries (e.g. "supercoach 120" → AVG >= 115)
+- Stat-profile queries with "high"/"low" modifiers (e.g. "high tackles low disposals" → AVG(tackles) >= 6 AND AVG(disposals) <= 15)
+- `min_games` parameter on unified `search_afl` tool and CLI `search` command
+- AFL Fantasy average included in player season summary text and anonymous embeddings
+
+### Changed
+
+- Player season embedding pipeline generates dual embeddings (named + anonymous) per season
+- Incremental embedding mode backfills rows missing `anon_embedding`
+
 ## [0.4.0] - 2026-03-15
 
 ### Added
