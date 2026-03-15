@@ -8,16 +8,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from afl_mcp.core.semantic_search import (
     _build_match_filters,
     _build_player_season_filters,
     _expand_query,
     _extract_query_filters,
     search_afl,
-    search_match_summaries,
-    search_player_seasons,
 )
 
 MOCK_POOL = "afl_mcp.core.semantic_search.get_pool"
@@ -85,93 +81,6 @@ class TestBuildPlayerSeasonFilters:
         )
         assert "player_id != %s" in conditions[0]
         assert params == [1]
-
-
-class TestSearchMatchSummaries:
-    """Verify match summary search behavior."""
-
-    def test_requires_query_or_match_id(self) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            search_match_summaries()
-
-    def test_rejects_both_query_and_match_id(self) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            search_match_summaries(query="test", match_id=1)
-
-    @patch(MOCK_POOL)
-    @patch(MOCK_EMBED, return_value=FAKE_VECTOR)
-    def test_query_mode_calls_embed(
-        self, mock_embed: MagicMock, mock_pool: MagicMock
-    ) -> None:
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetchall.return_value = []
-        mock_pool.return_value.connection.return_value.__enter__ = MagicMock(
-            return_value=mock_conn
-        )
-        mock_pool.return_value.connection.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
-
-        search_match_summaries(query="grand final")
-        mock_embed.assert_called_once_with("grand final")
-
-    @patch(MOCK_POOL)
-    def test_match_id_mode_uses_stored_embedding(self, mock_pool: MagicMock) -> None:
-        mock_cursor = MagicMock()
-        mock_cursor.execute.return_value.fetchone.return_value = {
-            "embedding": FAKE_VECTOR
-        }
-        mock_cursor.execute.return_value.fetchall.return_value = []
-
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_pool.return_value.connection.return_value.__enter__ = MagicMock(
-            return_value=mock_conn
-        )
-        mock_pool.return_value.connection.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
-
-        search_match_summaries(match_id=123)
-        first_sql = mock_cursor.execute.call_args_list[0][0][0]
-        assert "embedding" in first_sql
-        assert "match_summaries" in first_sql
-
-
-class TestSearchPlayerSeasons:
-    """Verify player season search behavior."""
-
-    def test_requires_query_or_player_year(self) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            search_player_seasons()
-
-    def test_rejects_player_without_year(self) -> None:
-        with pytest.raises(ValueError, match="Both"):
-            search_player_seasons(player_id=1)
-
-    def test_rejects_year_without_player(self) -> None:
-        with pytest.raises(ValueError, match="Both"):
-            search_player_seasons(year=2024)
-
-    def test_rejects_query_and_player_id(self) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            search_player_seasons(query="test", player_id=1, year=2024)
-
-    @patch(MOCK_POOL)
-    @patch(MOCK_EMBED, return_value=FAKE_VECTOR)
-    def test_query_mode(self, mock_embed: MagicMock, mock_pool: MagicMock) -> None:
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetchall.return_value = []
-        mock_pool.return_value.connection.return_value.__enter__ = MagicMock(
-            return_value=mock_conn
-        )
-        mock_pool.return_value.connection.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
-
-        search_player_seasons(query="30 disposals per game")
-        mock_embed.assert_called_once_with("30 disposals per game")
 
 
 class TestSearchAfl:
@@ -526,24 +435,6 @@ class TestExtractQueryFilters:
 
 class TestMcpDelegation:
     """Verify MCP tool wrappers delegate correctly."""
-
-    def test_search_match_summaries_delegates(self) -> None:
-        from afl_mcp.mcp_server.server import search_match_summaries as mcp_fn
-
-        with patch(
-            "afl_mcp.core.semantic_search.search_match_summaries", return_value=[]
-        ) as mock:
-            mcp_fn(query="test", limit=5)
-            mock.assert_called_once_with("test", None, 5, None, None, None, None, None)
-
-    def test_search_player_seasons_delegates(self) -> None:
-        from afl_mcp.mcp_server.server import search_player_seasons as mcp_fn
-
-        with patch(
-            "afl_mcp.core.semantic_search.search_player_seasons", return_value=[]
-        ) as mock:
-            mcp_fn(query="test", limit=5)
-            mock.assert_called_once_with("test", None, None, 5, None, None, None, None)
 
     def test_search_afl_delegates(self) -> None:
         from afl_mcp.mcp_server.server import search_afl as mcp_fn

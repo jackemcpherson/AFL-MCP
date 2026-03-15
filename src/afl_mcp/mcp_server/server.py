@@ -1,7 +1,7 @@
 """MCP server exposing AFL statistics tools via FastMCP.
 
-Provides low-level SQL tools and high-level AFL statistics tools
-for LLM consumption over the MCP protocol.
+Provides five tools for LLM consumption over the MCP protocol:
+execute_sql, get_schema, get_ladder, search_afl, get_last_updated.
 """
 
 from __future__ import annotations
@@ -24,43 +24,99 @@ async def health(request: Request) -> JSONResponse:
 def execute_sql(sql: str) -> list[dict]:
     """Execute a read-only SQL query against the AFL statistics database.
 
-    The database contains AFL Men's match results and player statistics from 1990 to the current season (updated automatically every 6 hours during the season).
+    The database contains AFL Men's match results and player statistics
+    from 1990 to the current season, updated automatically every 6 hours
+    during the season.
 
     Tables:
-    - competitions (id, code, name): AFLM/AFLW codes
-    - seasons (id, competition_id, year): season years
-    - teams (id, name, abbreviation, competition_id): team names
-    - venues (id, name): match venue names
-    - players (id, first_name, surname, external_id, height_cm, weight_kg, is_retired):
-      player biographical data. NOTE: no team_id -- use player_match_stats.team_id for
-      which team a player was on in each game.
-    - matches (id, season_id, round, round_number, round_type, date, local_time,
-      venue_id, home_team_id, away_team_id, home/away_goals/behinds/points, margin,
-      attendance, weather_temp_c, weather_type): match results and metadata
-    - player_match_stats (id, match_id, player_id, team_id, guernsey_number,
-      player_position, subbed, time_on_ground_pct, kicks, handballs, disposals,
-      effective_disposals, disposal_efficiency_pct, marks, bounces, tackles,
-      one_percenters, clangers, contested_possessions, uncontested_possessions,
-      goals, behinds, goal_assists, shots_at_goal, score_involvements, score_launches,
-      centre_clearances, stoppage_clearances, clearances, contested_marks,
-      marks_inside_fifty, intercept_marks, marks_on_lead, free_kicks_for,
-      free_kicks_against, hitouts, hitouts_to_advantage, hitout_win_pct, ruck_contests,
-      inside_fifties, rebounds, turnovers, intercepts, metres_gained, pressure_acts,
-      def_half_pressure_acts, tackles_inside_fifty, spoils, contest_def_losses,
+    - competitions (id, code, name)
+    - seasons (id, competition_id, year)
+    - teams (id, name, abbreviation, competition_id)
+    - venues (id, name)
+    - players (id, first_name, surname, external_id, date_of_birth,
+      height_cm, weight_kg, is_retired): player biographical data.
+      NOTE: no team_id column — a player's team is determined per-game
+      via player_match_stats.team_id.
+    - matches (id, season_id, round, round_number, round_type, date,
+      local_time, venue_id, home_team_id, away_team_id,
+      home/away_goals/behinds/points, margin, attendance,
+      weather_temp_c, weather_type, external_afltables_id,
+      external_fryzigg_id)
+    - player_match_stats (id, match_id, player_id, team_id,
+      guernsey_number, player_position, subbed, time_on_ground_pct,
+      kicks, handballs, disposals, effective_disposals,
+      disposal_efficiency_pct, marks, bounces, tackles, one_percenters,
+      clangers, contested_possessions, uncontested_possessions, goals,
+      behinds, goal_assists, shots_at_goal, score_involvements,
+      score_launches, centre_clearances, stoppage_clearances, clearances,
+      contested_marks, marks_inside_fifty, intercept_marks, marks_on_lead,
+      free_kicks_for, free_kicks_against, hitouts, hitouts_to_advantage,
+      hitout_win_pct, ruck_contests, inside_fifties, rebounds, turnovers,
+      intercepts, metres_gained, pressure_acts, def_half_pressure_acts,
+      tackles_inside_fifty, spoils, contest_def_losses,
       contest_def_one_on_ones, contest_off_one_on_ones, contest_off_wins,
-      effective_kicks, ground_ball_gets, f50_ground_ball_gets, brownlow_votes,
-      rating_points, afl_fantasy_score, supercoach_score): per-player per-match stats
+      effective_kicks, ground_ball_gets, f50_ground_ball_gets,
+      brownlow_votes, rating_points, afl_fantasy_score,
+      supercoach_score): per-player per-match statistics (50+ columns)
+    - player_season_pav (id, player_id, season_id, team_id, off_pav,
+      mid_pav, def_pav, total_pav): Player Approximate Value ratings per
+      season. Available 1998-2025 only. One row per player per season.
+      Joins to players, seasons, and teams via foreign keys.
+      total_pav = off_pav + mid_pav + def_pav.
+      Zone meanings:
+        off_pav = offensive (goals, score involvements, forward craft)
+        mid_pav = midfield (disposals, clearances, tackles, contested ball)
+        def_pav = defensive (intercepts, spoils, one-percenters, rebounds)
+      Interpretation:
+        25+ exceptional (Brownlow contention)
+        20-25 great (All-Australian)
+        15-20 very good (team best-22)
+        10-15 solid contributor
+        5-10 below average or limited games
+        <5 minimal contribution
+      Zone PAV of 10+ = All-Australian contention in that role.
+      Use LEFT JOIN when combining with player_match_stats — pre-1998
+      seasons have stats but no PAV rows.
+    - match_summaries (id, match_id, summary_text, embedding):
+      one-line text summary per match. Used by the search_afl tool —
+      prefer search_afl over direct SQL on this table.
+    - player_season_summaries (id, player_id, season_id, summary_text,
+      embedding): one-line text summary per player-season. Used by
+      search_afl — prefer search_afl over direct SQL on this table.
 
-    Only SELECT queries are allowed. The query has a 30-second timeout.
+    Common join patterns:
+
+      Team roster PAV for a season:
+        player_season_pav psp
+        JOIN players p ON psp.player_id = p.id
+        JOIN seasons s ON psp.season_id = s.id
+        JOIN teams t ON psp.team_id = t.id
+        WHERE t.name = 'X' AND s.year = YYYY
+        ORDER BY psp.total_pav DESC
+
+      Player career arc (stats + PAV by season):
+        player_match_stats pms
+        JOIN matches m ON pms.match_id = m.id
+        JOIN seasons s ON m.season_id = s.id
+        LEFT JOIN player_season_pav psp
+          ON psp.player_id = pms.player_id AND psp.season_id = s.id
+        WHERE pms.player_id = N
+        GROUP BY s.year, psp columns
+        ORDER BY s.year
+        (LEFT JOIN because pre-1998 seasons have no PAV data)
+
+      Zone leaders across the league:
+        player_season_pav psp JOIN players, seasons, teams
+        WHERE s.year = YYYY
+        ORDER BY psp.mid_pav DESC (or off_pav, def_pav)
+
+    Only SELECT queries allowed. 30-second timeout.
 
     Args:
-        sql: A valid SQL SELECT query.
+        sql: SQL SELECT query. Write statements are rejected.
 
     Returns:
-        List of dicts, one per result row.
-
-    Raises:
-        ValueError: If the query contains a forbidden write statement.
+        List of dicts, one per row. Empty list if no rows match.
     """
     from afl_mcp.core.queries import execute_query
 
@@ -71,47 +127,23 @@ def execute_sql(sql: str) -> list[dict]:
 def get_schema(table_name: str | None = None) -> dict:
     """Get database schema information for writing accurate SQL queries.
 
-    Returns table names, column names, data types, and foreign key relationships.
-    Use this before writing SQL to understand the database structure.
+    Returns table names, column names, data types, nullability, and
+    foreign key relationships. Call without arguments for the full
+    schema, or pass a table_name for a single table.
+
+    Key tables: competitions, seasons, teams, venues, players, matches,
+    player_match_stats (50+ stat columns), player_season_pav (PAV
+    ratings 1998+), match_summaries, player_season_summaries.
 
     Args:
-        table_name: Optional specific table name to get columns for.
-            If omitted, returns all tables and their columns.
+        table_name: Optional specific table to inspect. Omit for all tables.
 
     Returns:
         Dict with "columns" key and optionally "foreign_keys" key.
     """
-    from afl_mcp.core.queries import get_schema_info, get_foreign_keys
+    from afl_mcp.core.queries import get_schema_dict
 
-    result: dict = {"columns": get_schema_info(table_name)}
-    if not table_name:
-        result["foreign_keys"] = get_foreign_keys()
-    return result
-
-
-# ---------------------------------------------------------------------------
-# High-level tools
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-def search_players(query: str, limit: int = 10) -> list[dict]:
-    """Search for AFL players by name (partial or approximate match).
-
-    Useful for finding player IDs before using other tools. Supports
-    first name, surname, or full name searches.
-
-    Args:
-        query: Player name to search for (e.g. "Dustin", "Martin",
-            "Dustin Martin").
-        limit: Maximum number of results (default 10).
-
-    Returns:
-        List of dicts with id, first_name, surname, current_team.
-    """
-    from afl_mcp.core.tools import search_players as _search_players
-
-    return _search_players(query, limit)
+    return get_schema_dict(table_name)
 
 
 @mcp.tool()
@@ -119,12 +151,14 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
     """Get the AFL ladder (standings) for a season.
 
     Computes premiership points, percentage, and position from match
-    results. Only includes regular-season matches.
+    results. Only regular-season matches are included. Optionally
+    provide a round_number for the ladder as at end of that round.
+
+    Available from 1990 onwards.
 
     Args:
         year: Season year (e.g. 2024).
-        round_number: If provided, ladder as at end of that round.
-            If omitted, full regular-season ladder.
+        round_number: Optional: ladder as at end of this round.
 
     Returns:
         List of dicts ordered by ladder position with team, played,
@@ -134,311 +168,6 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
     from afl_mcp.core.tools import get_ladder as _get_ladder
 
     return _get_ladder(year, round_number)
-
-
-@mcp.tool()
-def stat_leaders(stat: str, season: int | None = None, limit: int = 10) -> list[dict]:
-    """Get the top players for a given statistic.
-
-    Available stats: kicks, handballs, disposals, marks, tackles,
-    goals, behinds, contested_possessions, uncontested_possessions,
-    clearances, inside_fifties, rebounds, intercepts, metres_gained,
-    hitouts, brownlow_votes, afl_fantasy_score, supercoach_score,
-    and many more (50+ columns from player_match_stats).
-
-    Args:
-        stat: Statistic column name (e.g. "goals", "disposals").
-        season: If provided, leaders for that season only.
-            If omitted, career totals.
-        limit: Number of results (default 10).
-
-    Returns:
-        List of dicts with first_name, surname, total.
-    """
-    from afl_mcp.core.tools import stat_leaders as _stat_leaders
-
-    return _stat_leaders(stat, season, limit)
-
-
-@mcp.tool()
-def head_to_head(
-    team1: str,
-    team2: str,
-    year_from: int | None = None,
-    year_to: int | None = None,
-) -> dict:
-    """Get the head-to-head record between two AFL teams.
-
-    Supports common team aliases (e.g. "Pies" for Collingwood,
-    "Cats" for Geelong, "Dons" for Essendon).
-
-    Args:
-        team1: First team name or alias.
-        team2: Second team name or alias.
-        year_from: Start year filter (inclusive).
-        year_to: End year filter (inclusive).
-
-    Returns:
-        Dict with team1, team2, team1_wins, team2_wins, draws,
-        total_matches, and recent_matches (last 5 games).
-    """
-    from afl_mcp.core.tools import head_to_head as _head_to_head
-
-    return _head_to_head(team1, team2, year_from, year_to)
-
-
-@mcp.tool()
-def player_career_summary(
-    player_id: int | None = None,
-    player_name: str | None = None,
-) -> dict:
-    """Get a comprehensive career summary for an AFL player.
-
-    Provide either player_id or player_name. If a name is given,
-    the best match is used.
-
-    Args:
-        player_id: Player database ID.
-        player_name: Player name to search for.
-
-    Returns:
-        Dict with player bio, career totals (games, goals,
-        disposals, etc.), and per-season breakdown.
-    """
-    from afl_mcp.core.tools import player_career_summary as _career
-
-    return _career(player_id, player_name)
-
-
-@mcp.tool()
-def player_comparison(
-    players: list[int | str],  # noqa: UP006
-    year_from: int | None = None,
-    year_to: int | None = None,
-) -> list[dict]:
-    """Compare stats for multiple AFL players side by side.
-
-    Accepts player IDs (integers) or player names (strings).
-    Names are resolved via search — use search_players first
-    if you need to disambiguate.
-
-    Args:
-        players: List of player IDs or names to compare.
-        year_from: Start year filter (inclusive).
-        year_to: End year filter (inclusive).
-
-    Returns:
-        List of dicts (one per player) with aggregated stats
-        including games, goals, disposals, marks, tackles,
-        contested possessions, clearances, hitouts, and more.
-    """
-    from afl_mcp.core.tools import player_comparison as _comparison
-
-    return _comparison(players, year_from, year_to)
-
-
-@mcp.tool()
-def search_matches(
-    team: str | None = None,
-    venue: str | None = None,
-    year_from: int | None = None,
-    year_to: int | None = None,
-    min_margin: int | None = None,
-    max_margin: int | None = None,
-    limit: int = 20,
-) -> list[dict]:
-    """Search for AFL matches by various criteria.
-
-    Supports filtering by team, venue, year range, and margin.
-    Use max_margin for close games, min_margin for blowouts.
-
-    Args:
-        team: Team name or alias (matches where team played).
-        venue: Venue name (partial match supported).
-        year_from: Start year (inclusive).
-        year_to: End year (inclusive).
-        min_margin: Minimum absolute margin.
-        max_margin: Maximum absolute margin.
-        limit: Maximum results (default 20).
-
-    Returns:
-        List of match dicts with date, round, year, venue,
-        home_team, away_team, home_points, away_points, margin.
-    """
-    from afl_mcp.core.tools import search_matches as _search_matches
-
-    return _search_matches(
-        team, venue, year_from, year_to, min_margin, max_margin, limit
-    )
-
-
-@mcp.tool()
-def get_pav_leaders(
-    year: int,
-    zone: str | None = None,
-    limit: int = 20,
-) -> list[dict]:
-    """Get the PAV (Player Approximate Value) leaderboard for a season.
-
-    PAV is a player rating that combines team context with individual
-    stats across three zones. It produces a single number representing
-    a player's total contribution to their team's season.
-
-    Interpretation:
-    - 25+ : Exceptional (Brownlow contention, best in league)
-    - 20-25: Great (All-Australian contender)
-    - 15-20: Very good (best-22, team B&F contender)
-    - 10-15: Solid contributor
-    - 5-10 : Below average or limited games
-    - <5   : Minimal contribution
-
-    Component PAV of 10+ indicates All-Australian squad contention
-    in that role (e.g. def_pav 10+ for a key defender).
-
-    Available from 1998 onwards. Players who changed teams mid-season
-    appear once per team stint.
-
-    Args:
-        year: Season year (1998 onwards).
-        zone: Sort by zone — "off", "mid", or "def".
-            If omitted, sorts by total_pav.
-        limit: Number of results (default 20).
-
-    Returns:
-        List of dicts with first_name, surname, team, off_pav,
-        mid_pav, def_pav, total_pav.
-    """
-    from afl_mcp.core.tools import get_pav_leaders as _pav_leaders
-
-    return _pav_leaders(year, zone, limit)
-
-
-@mcp.tool()
-def get_player_pav(
-    player_id: int | None = None,
-    player_name: str | None = None,
-) -> list[dict]:
-    """Get a player's PAV (Player Approximate Value) history.
-
-    Returns PAV ratings for every season the player has data,
-    showing their career arc in terms of total contribution.
-    See get_pav_leaders for PAV interpretation guide.
-
-    Args:
-        player_id: Player database ID.
-        player_name: Player name to search for.
-
-    Returns:
-        List of dicts with year, team, off_pav, mid_pav,
-        def_pav, total_pav — ordered by year.
-    """
-    from afl_mcp.core.tools import get_player_pav as _player_pav
-
-    return _player_pav(player_id, player_name)
-
-
-# ---------------------------------------------------------------------------
-# Semantic search tools
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-def search_match_summaries(
-    query: str | None = None,
-    match_id: int | None = None,
-    limit: int = 10,
-    year_from: int | None = None,
-    year_to: int | None = None,
-    team: str | None = None,
-    round_type: str | None = None,
-    venue: str | None = None,
-) -> list[dict]:
-    """Search for matches using natural language or find similar matches.
-
-    Uses hybrid search combining vector similarity with keyword matching
-    for best results on both entity names and statistical patterns.
-
-    Synonym expansion maps domain terms to template vocabulary (e.g.
-    "grand final" → GF, "close game" → low margin terms, "ruckman" →
-    hitouts). Numeric filters are extracted automatically (e.g.
-    "margin under 10" filters to ABS(margin) <= 10).
-
-    Provide exactly one of query or match_id:
-    - query: describe what you're looking for (e.g. "close games at
-      the MCG", "high scoring grand finals", "Brisbane blowout")
-    - match_id: find matches similar to a specific match
-
-    Results include rank, summary text, and top 3 performers per team.
-    For pre-2007 matches without AFL Fantasy scores, performers are
-    ranked by a weighted stat formula as fallback.
-    Team aliases supported (e.g. "Pies", "Cats", "Hawks").
-
-    Args:
-        query: Natural language search text.
-        match_id: Find matches similar to this match ID.
-        limit: Maximum results (default 10, max 50).
-        year_from: Only matches from this year onwards.
-        year_to: Only matches up to this year.
-        team: Only matches involving this team (alias supported).
-        round_type: "Regular" or "Finals".
-        venue: Venue name (partial match).
-
-    Returns:
-        List of match dicts with rank, score, summary, metadata,
-        and top_performers.
-    """
-    from afl_mcp.core.semantic_search import search_match_summaries as _search
-
-    return _search(query, match_id, limit, year_from, year_to, team, round_type, venue)
-
-
-@mcp.tool()
-def search_player_seasons(
-    query: str | None = None,
-    player_id: int | None = None,
-    year: int | None = None,
-    limit: int = 10,
-    year_from: int | None = None,
-    year_to: int | None = None,
-    team: str | None = None,
-    min_games: int | None = None,
-) -> list[dict]:
-    """Search for player seasons using natural language or find similar seasons.
-
-    Uses hybrid search combining vector similarity with keyword matching.
-
-    Synonym expansion maps domain terms to template vocabulary (e.g.
-    "ruckman" → hitouts, "midfielder" → disposals/clearances/tackles).
-    Numeric filters are extracted automatically (e.g. "30 disposals"
-    filters to AVG(disposals) >= 28, "50 goals" to SUM(goals) >= 45).
-
-    Provide exactly one of:
-    - query: describe what you're looking for (e.g. "30 disposals per
-      game", "key forward 50 goals", "dominant ruckman season")
-    - player_id + year: find seasons similar to a specific player's
-      season (e.g. player_id=37, year=2024 for Cripps 2024)
-
-    Results include rank, summary text, and PAV (Player Approximate
-    Value) ratings when available. Use min_games to filter out short
-    cameos.
-
-    Args:
-        query: Natural language search text.
-        player_id: Find seasons similar to this player's season.
-        year: Season year for the similar-season source.
-        limit: Maximum results (default 10, max 50).
-        year_from: Only seasons from this year onwards.
-        year_to: Only seasons up to this year.
-        team: Only seasons at this team (alias supported).
-        min_games: Minimum games played in the season.
-
-    Returns:
-        List of player season dicts with rank, score, summary,
-        player info, and PAV.
-    """
-    from afl_mcp.core.semantic_search import search_player_seasons as _search
-
-    return _search(query, player_id, year, limit, year_from, year_to, team, min_games)
 
 
 @mcp.tool()
@@ -456,23 +185,59 @@ def search_afl(
     relevance. Each result has a "type" field ("match" or
     "player_season") to distinguish result types.
 
+    Hybrid search combining vector similarity with keyword matching.
     Synonym expansion and numeric filter extraction are applied
-    automatically (e.g. "grand final" → GF, "close game" → low
-    margins, "30 disposals" → AVG filter).
+    automatically:
+    - "grand final" -> GF, "preliminary final" -> PF
+    - "close game" / "nail-biter" -> low margin matches
+    - "blowout" / "demolition" -> high margin matches
+    - "30 disposals" -> filters to AVG >= 28
+    - "50 goals" -> filters to season total >= 45
+    - "ruckman" -> hitouts, "midfielder" -> disposals/clearances
 
     Good for broad exploratory queries like "Geelong 2007",
-    "dominant performances at the MCG", or "Brisbane Lions 2024".
+    "dominant performances at the MCG", "close grand finals",
+    "key forward 50 goals", or "Brisbane Lions 2024 season".
 
-    Match results include rank, summary, and top performers. Player
-    season results include rank, summary, and PAV ratings.
+    Match results include:
+    - rank, score, summary text
+    - Full match metadata (date, round, venue, scores, margin,
+      attendance, weather)
+    - Top 3 performers per team ranked by AFL Fantasy score, or by
+      weighted stat composite (disposals*2 + goals*6 + marks +
+      tackles*2) for pre-2007 matches where fantasy scores are null
+
+    Player season results include:
+    - rank, score, summary text
+    - Player info (id, name, team, year, games played)
+    - PAV (Player Approximate Value) ratings when available
+      (1998 onwards):
+        off_pav: offensive (goals, score involvements, forward craft)
+        mid_pav: midfield (disposals, clearances, tackles, contested)
+        def_pav: defensive (intercepts, spoils, one-percenters)
+        total_pav: sum of all three zones
+      Interpretation:
+        25+ exceptional (Brownlow contention)
+        20-25 great (All-Australian)
+        15-20 very good (team best-22)
+        10-15 solid
+        5-10 below average
+        <5 minimal
+      Zone PAV of 10+ = All-Australian contention in that role.
+      PAV is null for pre-1998 seasons.
+
+    Use min_games to filter out short cameos from player season
+    results (recommend min_games=15 for meaningful results).
 
     Args:
         query: Natural language search text.
-        limit: Maximum total results (default 10, max 50).
+        limit: Maximum total results (1-50).
         year_from: Only results from this year onwards.
         year_to: Only results up to this year.
-        team: Only results involving this team (alias supported).
-        min_games: Minimum games played (player seasons only).
+        team: Only results involving this team (aliases supported:
+            Pies, Cats, Hawks, etc.).
+        min_games: Minimum games played (player seasons only,
+            recommend 15+).
 
     Returns:
         List of dicts with rank, type, score, summary, and enriched
@@ -481,3 +246,25 @@ def search_afl(
     from afl_mcp.core.semantic_search import search_afl as _search
 
     return _search(query, limit, year_from, year_to, team, min_games)
+
+
+@mcp.tool()
+def get_last_updated() -> dict:
+    """Get data freshness metadata.
+
+    Returns when the database was last updated, the most recent match
+    and player stats available, season range, and row counts. Use this
+    to check whether current-season data is loaded before querying.
+
+    The gap between latest_match and latest_player_stats indicates
+    matches where scores are in but individual stats haven't been
+    processed yet (stats typically load within 6 hours of a match).
+
+    Returns:
+        Dict with latest_season, latest_match, latest_player_stats,
+        seasons_available, total_matches, total_players,
+        total_stat_rows, pav_available.
+    """
+    from afl_mcp.core.queries import get_last_updated as _get_last_updated
+
+    return _get_last_updated()

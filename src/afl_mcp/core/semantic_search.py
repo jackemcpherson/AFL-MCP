@@ -1,9 +1,9 @@
 """Hybrid semantic search over AFL data using pgvector + full-text.
 
-Provides three search tools that combine vector cosine similarity with
-PostgreSQL full-text search, fused via Reciprocal Rank Fusion (RRF).
-Results are enriched with top performers (matches) and PAV ratings
-(player seasons).
+Provides unified search across matches and player seasons, combining
+vector cosine similarity with PostgreSQL full-text search, fused via
+Reciprocal Rank Fusion (RRF). Results are enriched with top performers
+(matches) and PAV ratings (player seasons).
 """
 
 from __future__ import annotations
@@ -62,14 +62,8 @@ def _expand_query(query: str) -> str:
 _CLOSE_WORDS = re.compile(r"close|narrow|tight|under", re.IGNORECASE)
 _BIG_WORDS = re.compile(r"blowout|demolition|over|big|huge", re.IGNORECASE)
 
-_ROUND_MAP: dict[str, str] = {
-    "grand final": "GF",
-    "preliminary final": "PF",
-    "semi final": "SF",
-    "semifinal": "SF",
-    "elimination final": "EF",
-    "qualifying final": "QF",
-}
+# Round name → abbreviation, also present in _SYNONYM_MAP for query expansion.
+_ROUND_MAP: dict[str, str] = {k: v for k, v in _SYNONYM_MAP.items() if len(v) == 2}
 
 _PMS_AVG_SUBQUERY = """(
     SELECT AVG(pms_n.{col}) FROM player_match_stats pms_n
@@ -604,207 +598,6 @@ def _enrich_player_seasons(
         }
 
     return result
-
-
-def search_match_summaries(
-    query: str | None = None,
-    match_id: int | None = None,
-    limit: int = 10,
-    year_from: int | None = None,
-    year_to: int | None = None,
-    team: str | None = None,
-    round_type: str | None = None,
-    venue: str | None = None,
-) -> list[dict]:
-    """Search for matches by natural language or similarity to an existing match.
-
-    Uses hybrid search (vector similarity + full-text keyword matching)
-    with Reciprocal Rank Fusion. Results include top performers per team.
-
-    Args:
-        query: Natural language search query.
-        match_id: Find matches similar to this match (uses stored embedding).
-        limit: Maximum results (1-50).
-        year_from: Filter by start year (inclusive).
-        year_to: Filter by end year (inclusive).
-        team: Filter by team name or alias.
-        round_type: Filter by round type ("Regular" or "Finals").
-        venue: Filter by venue name (partial match).
-
-    Returns:
-        List of dicts with score, match metadata, and top_performers.
-
-    Raises:
-        ValueError: If neither or both of query/match_id provided.
-    """
-    limit = max(1, min(limit, 50))
-    if (query is None) == (match_id is None):
-        raise ValueError("Provide exactly one of 'query' or 'match_id'.")
-
-    if query is not None:
-        query_vector = _get_query_vector(query)
-        query_text: str | None = _expand_query(query)
-        exclude_id = None
-    else:
-        query_vector = _get_stored_embedding(
-            "match_summaries", "match_id = %s", [match_id]
-        )
-        query_text = None
-        exclude_id = match_id
-
-    conditions, params = _build_match_filters(
-        year_from=year_from,
-        year_to=year_to,
-        team=team,
-        round_type=round_type,
-        venue=venue,
-        exclude_match_id=exclude_id,
-    )
-
-    if query is not None:
-        num_conds, num_params = _extract_query_filters(query, "match")
-        conditions.extend(num_conds)
-        params.extend(num_params)
-
-    ranked = _hybrid_search(
-        query_vector=query_vector,
-        query_text=query_text,
-        table="match_summaries",
-        id_column="match_id",
-        join_sql=_MATCH_JOINS,
-        filter_conditions=conditions,
-        filter_params=params,
-        limit=limit,
-    )
-
-    if not ranked:
-        return []
-
-    result_ids = [r["entity_id"] for r in ranked]
-    scores = {r["entity_id"]: float(r["score"]) for r in ranked}
-    enriched = _enrich_matches(result_ids)
-
-    results = []
-    for i, mid in enumerate(result_ids):
-        if mid in enriched:
-            entry = {"rank": i + 1, "score": round(scores[mid], 6), **enriched[mid]}
-            results.append(entry)
-
-    return results
-
-
-def search_player_seasons(
-    query: str | None = None,
-    player_id: int | None = None,
-    year: int | None = None,
-    limit: int = 10,
-    year_from: int | None = None,
-    year_to: int | None = None,
-    team: str | None = None,
-    min_games: int | None = None,
-) -> list[dict]:
-    """Search for player seasons by natural language or similarity.
-
-    Uses hybrid search (vector similarity + full-text keyword matching)
-    with Reciprocal Rank Fusion. Results include PAV ratings.
-
-    Args:
-        query: Natural language search query.
-        player_id: Find seasons similar to this player's season.
-        year: Season year for the "find similar" source.
-        limit: Maximum results (1-50).
-        year_from: Filter by start year (inclusive).
-        year_to: Filter by end year (inclusive).
-        team: Filter by team name or alias.
-        min_games: Minimum games played in the season.
-
-    Returns:
-        List of dicts with score, player info, and PAV breakdown.
-
-    Raises:
-        ValueError: If input combination is invalid.
-    """
-    limit = max(1, min(limit, 50))
-    has_query = query is not None
-    has_similar = player_id is not None or year is not None
-
-    if has_query == has_similar:
-        raise ValueError(
-            "Provide exactly one of 'query' or both 'player_id' and 'year'."
-        )
-
-    if has_similar and (player_id is None or year is None):
-        raise ValueError("Both 'player_id' and 'year' are required for similar search.")
-
-    exclude_pid = None
-
-    use_anon = False
-    if query is not None:
-        query_vector = _get_query_vector(query)
-        query_text: str | None = _expand_query(query)
-    else:
-        pool = get_pool()
-        with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
-            row = cur.execute(
-                """SELECT COALESCE(pss.anon_embedding, pss.embedding) AS embedding,
-                          pss.player_id
-                   FROM player_season_summaries pss
-                   JOIN seasons s ON s.id = pss.season_id
-                   WHERE pss.player_id = %s AND s.year = %s""",
-                [player_id, year],
-            ).fetchone()
-        if row is None:
-            raise ValueError(
-                f"No player-season summary found for player_id={player_id}, year={year}."
-            )
-        query_vector = row["embedding"]
-        query_text = None
-        exclude_pid = row["player_id"]
-        use_anon = True
-
-    conditions, params = _build_player_season_filters(
-        year_from=year_from,
-        year_to=year_to,
-        team=team,
-        min_games=min_games,
-        exclude_player_id=exclude_pid,
-    )
-
-    if query is not None:
-        num_conds, num_params = _extract_query_filters(query, "player_season")
-        conditions.extend(num_conds)
-        params.extend(num_params)
-
-    ranked = _hybrid_search(
-        query_vector=query_vector,
-        query_text=query_text,
-        table="player_season_summaries",
-        id_column="id",
-        join_sql=_PLAYER_SEASON_JOINS,
-        filter_conditions=conditions,
-        filter_params=params,
-        embedding_column="anon_embedding" if use_anon else "embedding",
-        limit=limit,
-    )
-
-    if not ranked:
-        return []
-
-    result_ids = [r["entity_id"] for r in ranked]
-    scores = {r["entity_id"]: float(r["score"]) for r in ranked}
-    enriched = _enrich_player_seasons(result_ids)
-
-    results = []
-    for i, pss_id in enumerate(result_ids):
-        if pss_id in enriched:
-            entry = {
-                "rank": i + 1,
-                "score": round(scores[pss_id], 6),
-                **enriched[pss_id],
-            }
-            results.append(entry)
-
-    return results
 
 
 def search_afl(

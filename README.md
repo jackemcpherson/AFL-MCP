@@ -2,6 +2,8 @@
 
 AFL statistics platform that extracts data from the [fitzRoy](https://jimmyday12.github.io/fitzRoy/) R package, stores it in PostgreSQL with pgvector, and exposes it through a CLI and MCP server for LLM-powered querying.
 
+Covers AFL Men's match results and player statistics from 1990 to the current season, updated automatically every 6 hours during the season.
+
 ## Getting Started
 
 ### Prerequisites
@@ -36,47 +38,75 @@ afl-mcp db migrate
 
 # 3. Load CSV data into PostgreSQL
 afl-mcp db load
+
+# 4. Generate embeddings for semantic search (requires sentence-transformers)
+pip install -e ".[ml]"
+afl-mcp db embed
+
+# 5. Calculate PAV ratings (1998 onwards)
+afl-mcp db pav
 ```
 
-## Usage
+## MCP Tools
 
-### CLI Queries
+The server exposes 5 tools for LLM consumption:
 
-```bash
-# Run a SQL query
-afl-mcp query "SELECT name FROM teams ORDER BY name"
-
-# JSON output
-afl-mcp query "SELECT * FROM matches LIMIT 5" --json
-
-# Schema introspection
-afl-mcp schema players
-```
-
-### MCP Server
+| Tool | Purpose | When to use |
+|---|---|---|
+| `execute_sql` | Read-only SQL queries | Structured questions, aggregations, joins, PAV analysis |
+| `get_schema` | Database structure | Before writing SQL, especially first call in a session |
+| `get_ladder` | Season standings | "Where does X sit on the ladder?" |
+| `search_afl` | Semantic search | Exploratory, fuzzy, or natural language questions |
+| `get_last_updated` | Data freshness | "Is this week's data in yet?" |
 
 ```bash
 # Start for use with Claude Desktop / Claude Code
 afl-mcp serve --transport stdio
 ```
 
-### All Commands
+## CLI Usage
 
+```bash
+# SQL queries
+afl-mcp sql -q "SELECT name FROM teams ORDER BY name"
+afl-mcp sql -q "SELECT * FROM matches LIMIT 5" --format json --pretty
+
+# Schema introspection
+afl-mcp schema -t players
+
+# Ladder
+afl-mcp ladder -y 2024
+afl-mcp ladder -y 2025 -r 5
+
+# Semantic search
+afl-mcp search "Geelong 2007"
+afl-mcp search "close grand finals" -n 5
+afl-mcp search "dominant ruckman season" --team Demons --min-games 15
+
+# Data freshness
+afl-mcp status
+
+# Output formats (all query commands)
+--format table   # default, human-readable
+--format json    # machine-readable
+--format csv     # for piping
+--pretty         # pretty-print JSON
 ```
-afl-mcp query <SQL>          Execute a read-only SQL query
-afl-mcp search <QUERY>       Semantic search (requires embeddings)
-afl-mcp schema [TABLE]       Show database schema
-afl-mcp db migrate           Apply pending migrations
-afl-mcp db load              Load CSV data
-afl-mcp db embed             Generate vector embeddings
-afl-mcp serve                Start MCP server
+
+### Database Management
+
+```bash
+afl-mcp db migrate           # Apply pending migrations
+afl-mcp db load              # Load CSV data
+afl-mcp db embed             # Generate vector embeddings
+afl-mcp db pav               # Calculate PAV ratings
 ```
 
 ## Running Tests
 
 ```bash
 # Unit tests (no database required)
-pytest tests/ -v
+pytest tests/ -v --ignore=tests/test_integration.py
 
 # Include integration tests (requires running PostgreSQL)
 DATABASE_URL="postgresql://user@localhost/afl_mcp" pytest tests/ -v
@@ -86,11 +116,10 @@ DATABASE_URL="postgresql://user@localhost/afl_mcp" pytest tests/ -v
 
 ```
 src/afl_mcp/
-  core/        Database, loader, queries, search, embeddings
-  cli/         Typer + Rich CLI
-  mcp_server/  FastMCP server with SQL and search tools
-etl/           R extraction scripts
-db/migrations/ PostgreSQL schema migrations
+  core/        Database, loader, queries, semantic search, embeddings, PAV
+  cli/         Typer + Rich CLI (5 tool commands + db management + serve)
+  mcp_server/  FastMCP server (5 tools)
+etl/           R extraction scripts + Docker images
 data/raw/      CSV output from ETL (gitignored)
 tests/         Unit and integration tests
 ```
@@ -99,5 +128,7 @@ tests/         Unit and integration tests
 
 1. Create a feature branch
 2. Make changes and add tests
-3. Run `pytest tests/ -v` to verify
-4. Submit a pull request
+3. Run `ruff check src/ tests/ && ruff format --check src/ tests/` for lint
+4. Run `pyright src/` for type checking
+5. Run `pytest tests/ -v --ignore=tests/test_integration.py` to verify
+6. Submit a pull request
