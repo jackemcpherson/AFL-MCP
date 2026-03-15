@@ -90,7 +90,6 @@ def _build_player_season_filters(
     team: str | None = None,
     min_games: int | None = None,
     exclude_player_id: int | None = None,
-    exclude_season_id: int | None = None,
 ) -> tuple[list[str], list]:
     """Build WHERE conditions for player season searches."""
     conditions: list[str] = []
@@ -121,9 +120,9 @@ def _build_player_season_filters(
               AND m3.season_id = pss.season_id
         ) >= %s""")
         params.append(min_games)
-    if exclude_player_id is not None and exclude_season_id is not None:
-        conditions.append("NOT (pss.player_id = %s AND pss.season_id = %s)")
-        params.extend([exclude_player_id, exclude_season_id])
+    if exclude_player_id is not None:
+        conditions.append("pss.player_id != %s")
+        params.append(exclude_player_id)
 
     return conditions, params
 
@@ -501,7 +500,6 @@ def search_player_seasons(
         raise ValueError("Both 'player_id' and 'year' are required for similar search.")
 
     exclude_pid = None
-    exclude_sid = None
 
     if query is not None:
         query_vector = _get_query_vector(query)
@@ -510,7 +508,7 @@ def search_player_seasons(
         pool = get_pool()
         with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
             row = cur.execute(
-                """SELECT pss.embedding, pss.player_id, pss.season_id
+                """SELECT pss.embedding, pss.player_id
                    FROM player_season_summaries pss
                    JOIN seasons s ON s.id = pss.season_id
                    WHERE pss.player_id = %s AND s.year = %s""",
@@ -523,7 +521,6 @@ def search_player_seasons(
         query_vector = row["embedding"]
         query_text = None
         exclude_pid = row["player_id"]
-        exclude_sid = row["season_id"]
 
     conditions, params = _build_player_season_filters(
         year_from=year_from,
@@ -531,7 +528,6 @@ def search_player_seasons(
         team=team,
         min_games=min_games,
         exclude_player_id=exclude_pid,
-        exclude_season_id=exclude_sid,
     )
 
     ranked = _hybrid_search(

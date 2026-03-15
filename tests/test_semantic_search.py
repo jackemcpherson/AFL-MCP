@@ -77,12 +77,12 @@ class TestBuildPlayerSeasonFilters:
         assert "EXISTS" in conditions[0]
         assert "Geelong" in params
 
-    def test_exclude_player_season(self) -> None:
+    def test_exclude_player(self) -> None:
         conditions, params = _build_player_season_filters(
-            exclude_player_id=1, exclude_season_id=10
+            exclude_player_id=1,
         )
-        assert "NOT" in conditions[0]
-        assert params == [1, 10]
+        assert "player_id != %s" in conditions[0]
+        assert params == [1]
 
 
 class TestSearchMatchSummaries:
