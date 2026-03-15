@@ -335,3 +335,127 @@ def get_player_pav(
     from afl_mcp.core.tools import get_player_pav as _player_pav
 
     return _player_pav(player_id, player_name)
+
+
+# ---------------------------------------------------------------------------
+# Semantic search tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def search_match_summaries(
+    query: str | None = None,
+    match_id: int | None = None,
+    limit: int = 10,
+    year_from: int | None = None,
+    year_to: int | None = None,
+    team: str | None = None,
+    round_type: str | None = None,
+    venue: str | None = None,
+) -> list[dict]:
+    """Search for matches using natural language or find similar matches.
+
+    Uses hybrid search combining vector similarity with keyword matching
+    for best results on both entity names and statistical patterns.
+
+    Provide exactly one of query or match_id:
+    - query: describe what you're looking for (e.g. "close games at
+      the MCG", "high scoring grand finals", "Brisbane blowout")
+    - match_id: find matches similar to a specific match
+
+    Results include top 3 performers per team (by AFL Fantasy score).
+    Team aliases supported (e.g. "Pies", "Cats", "Hawks").
+
+    Args:
+        query: Natural language search text.
+        match_id: Find matches similar to this match ID.
+        limit: Maximum results (default 10, max 50).
+        year_from: Only matches from this year onwards.
+        year_to: Only matches up to this year.
+        team: Only matches involving this team (alias supported).
+        round_type: "Regular" or "Finals".
+        venue: Venue name (partial match).
+
+    Returns:
+        List of match dicts with score, metadata, and top_performers.
+    """
+    from afl_mcp.core.semantic_search import search_match_summaries as _search
+
+    return _search(query, match_id, limit, year_from, year_to, team, round_type, venue)
+
+
+@mcp.tool()
+def search_player_seasons(
+    query: str | None = None,
+    player_id: int | None = None,
+    year: int | None = None,
+    limit: int = 10,
+    year_from: int | None = None,
+    year_to: int | None = None,
+    team: str | None = None,
+    min_games: int | None = None,
+) -> list[dict]:
+    """Search for player seasons using natural language or find similar seasons.
+
+    Uses hybrid search combining vector similarity with keyword matching.
+
+    Provide exactly one of:
+    - query: describe what you're looking for (e.g. "30 disposals per
+      game", "key forward 50 goals", "dominant ruckman season")
+    - player_id + year: find seasons similar to a specific player's
+      season (e.g. player_id=37, year=2024 for Cripps 2024)
+
+    Results include PAV (Player Approximate Value) ratings when available.
+    Use min_games to filter out short cameos.
+
+    Args:
+        query: Natural language search text.
+        player_id: Find seasons similar to this player's season.
+        year: Season year for the similar-season source.
+        limit: Maximum results (default 10, max 50).
+        year_from: Only seasons from this year onwards.
+        year_to: Only seasons up to this year.
+        team: Only seasons at this team (alias supported).
+        min_games: Minimum games played in the season.
+
+    Returns:
+        List of player season dicts with score, player info, and PAV.
+    """
+    from afl_mcp.core.semantic_search import search_player_seasons as _search
+
+    return _search(query, player_id, year, limit, year_from, year_to, team, min_games)
+
+
+@mcp.tool()
+def search_afl(
+    query: str,
+    limit: int = 10,
+    year_from: int | None = None,
+    year_to: int | None = None,
+    team: str | None = None,
+) -> list[dict]:
+    """Search across all AFL data — matches and player seasons together.
+
+    Returns a mixed list of matches and player seasons ranked by
+    relevance. Each result has a "type" field ("match" or
+    "player_season") to distinguish result types.
+
+    Good for broad exploratory queries like "Geelong 2007",
+    "dominant performances at the MCG", or "Brisbane Lions 2024".
+
+    Match results include top performers. Player season results
+    include PAV ratings.
+
+    Args:
+        query: Natural language search text.
+        limit: Maximum total results (default 10, max 50).
+        year_from: Only results from this year onwards.
+        year_to: Only results up to this year.
+        team: Only results involving this team (alias supported).
+
+    Returns:
+        List of dicts with type, score, and enriched metadata.
+    """
+    from afl_mcp.core.semantic_search import search_afl as _search
+
+    return _search(query, limit, year_from, year_to, team)

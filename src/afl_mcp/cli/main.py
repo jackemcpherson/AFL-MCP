@@ -34,13 +34,6 @@ app.add_typer(db_app, name="db")
 console = Console()
 
 
-class EntityType(str, Enum):
-    """Search entity type options."""
-
-    player_season = "player_season"
-    match = "match"
-
-
 class Transport(str, Enum):
     """MCP transport protocol options."""
 
@@ -298,43 +291,17 @@ def search(
         str,
         typer.Argument(help="Natural language search query."),
     ],
-    entity_type: Annotated[
-        EntityType,
-        typer.Option("--type", "-t", help="Entity type to search."),
-    ] = EntityType.player_season,
     team: Annotated[
         str | None,
-        typer.Option("--team", help="Filter by team name.", rich_help_panel="Filters"),
+        typer.Option("--team", "-t", help="Filter by team name or alias."),
     ] = None,
-    season_from: Annotated[
+    year_from: Annotated[
         int | None,
-        typer.Option(
-            "--season-from",
-            "-sf",
-            help="Minimum season year.",
-            rich_help_panel="Filters",
-        ),
+        typer.Option("--from", help="Start year (inclusive)."),
     ] = None,
-    season_to: Annotated[
+    year_to: Annotated[
         int | None,
-        typer.Option(
-            "--season-to", "-st", help="Maximum season year.", rich_help_panel="Filters"
-        ),
-    ] = None,
-    venue: Annotated[
-        str | None,
-        typer.Option(
-            "--venue", help="Filter by venue name.", rich_help_panel="Filters"
-        ),
-    ] = None,
-    player: Annotated[
-        str | None,
-        typer.Option(
-            "--player",
-            "-p",
-            help="Filter by player surname.",
-            rich_help_panel="Filters",
-        ),
+        typer.Option("--to", help="End year (inclusive)."),
     ] = None,
     limit: Annotated[
         int,
@@ -345,24 +312,147 @@ def search(
         typer.Option("--json", "-j", help="Output results as JSON."),
     ] = False,
 ) -> None:
-    """Search for AFL players or matches using natural language."""
-    from afl_mcp.core.search import filtered_semantic_search
+    """Search across all AFL data using natural language."""
+    from afl_mcp.core.semantic_search import search_afl
 
-    results = filtered_semantic_search(
+    results = search_afl(
         query=query_text,
-        entity_type=entity_type.value,
-        team=team,
-        season_from=season_from,
-        season_to=season_to,
-        venue=venue,
-        player_name=player,
         limit=limit,
+        year_from=year_from,
+        year_to=year_to,
+        team=team,
     )
 
     if json_output:
         _print_json(results)
     else:
-        _print_results(results)
+        _print_results(results, title="Search Results")
+
+
+@app.command(name="search-matches")
+def search_matches_cmd(
+    query_text: Annotated[
+        str | None,
+        typer.Argument(help="Natural language search query."),
+    ] = None,
+    match_id: Annotated[
+        int | None,
+        typer.Option("--match-id", help="Find matches similar to this match."),
+    ] = None,
+    team: Annotated[
+        str | None,
+        typer.Option("--team", "-t", help="Filter by team name or alias."),
+    ] = None,
+    round_type: Annotated[
+        str | None,
+        typer.Option("--round-type", help="Regular or Finals."),
+    ] = None,
+    venue: Annotated[
+        str | None,
+        typer.Option("--venue", "-v", help="Filter by venue (partial match)."),
+    ] = None,
+    year_from: Annotated[
+        int | None,
+        typer.Option("--from", help="Start year (inclusive)."),
+    ] = None,
+    year_to: Annotated[
+        int | None,
+        typer.Option("--to", help="End year (inclusive)."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Maximum results."),
+    ] = 10,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Search for matches using natural language or find similar matches."""
+    from afl_mcp.core.semantic_search import search_match_summaries
+
+    try:
+        results = search_match_summaries(
+            query=query_text,
+            match_id=match_id,
+            limit=limit,
+            year_from=year_from,
+            year_to=year_to,
+            team=team,
+            round_type=round_type,
+            venue=venue,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title="Match Search Results")
+
+
+@app.command(name="search-seasons")
+def search_seasons_cmd(
+    query_text: Annotated[
+        str | None,
+        typer.Argument(help="Natural language search query."),
+    ] = None,
+    player_id: Annotated[
+        int | None,
+        typer.Option("--player-id", help="Find seasons similar to this player's."),
+    ] = None,
+    year: Annotated[
+        int | None,
+        typer.Option("--year", "-y", help="Season year for find-similar mode."),
+    ] = None,
+    team: Annotated[
+        str | None,
+        typer.Option("--team", "-t", help="Filter by team name or alias."),
+    ] = None,
+    min_games: Annotated[
+        int | None,
+        typer.Option("--min-games", help="Minimum games played."),
+    ] = None,
+    year_from: Annotated[
+        int | None,
+        typer.Option("--from", help="Start year (inclusive)."),
+    ] = None,
+    year_to: Annotated[
+        int | None,
+        typer.Option("--to", help="End year (inclusive)."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Maximum results."),
+    ] = 10,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Search for player seasons using natural language or find similar seasons."""
+    from afl_mcp.core.semantic_search import search_player_seasons
+
+    try:
+        results = search_player_seasons(
+            query=query_text,
+            player_id=player_id,
+            year=year,
+            limit=limit,
+            year_from=year_from,
+            year_to=year_to,
+            team=team,
+            min_games=min_games,
+        )
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title="Player Season Search Results")
 
 
 @app.command()
