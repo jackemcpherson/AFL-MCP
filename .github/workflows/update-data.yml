@@ -87,6 +87,15 @@ jobs:
           cache-from: type=gha,scope=embed
           cache-to: type=gha,mode=max,scope=embed
 
+      - name: Apply pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          docker run --rm \
+            --env DATABASE_URL \
+            afl-mcp-embed:latest \
+            afl-mcp db migrate
+
       - name: Run incremental embedding
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
