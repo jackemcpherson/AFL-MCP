@@ -9,7 +9,6 @@ build/
 .pytest_cache/
 .ruff_cache/
 .python-version
-uv.lock
 
 # Environment
 .env
