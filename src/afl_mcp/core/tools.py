@@ -7,6 +7,8 @@ comparisons, and match search.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from afl_mcp.core.queries import execute_query
 
 # ---------------------------------------------------------------------------
@@ -211,9 +213,9 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
             If omitted, full regular season.
 
     Returns:
-        List of dicts ordered by ladder position with team, played,
-        wins, losses, draws, points_for, points_against, percentage,
-        premiership_points.
+        List of dicts ordered by ladder position with position, team,
+        played, wins, losses, draws, points_for, points_against,
+        percentage, premiership_points.
     """
     conditions = ["s.year = %s", "m.round_type = 'Regular'"]
     params: list = [year]
@@ -248,25 +250,35 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
                 FROM matches m
                 JOIN seasons s ON s.id = m.season_id
                 WHERE {where}
+            ),
+            ladder AS (
+                SELECT
+                    t.name AS team,
+                    COUNT(*) AS played,
+                    SUM(tr.wins)::int AS wins,
+                    SUM(tr.losses)::int AS losses,
+                    SUM(tr.draws)::int AS draws,
+                    SUM(tr.points_for)::int AS points_for,
+                    SUM(tr.points_against)::int AS points_against,
+                    ROUND(
+                        SUM(tr.points_for)::numeric
+                        / NULLIF(SUM(tr.points_against), 0) * 100, 1
+                    ) AS percentage,
+                    (SUM(tr.wins) * 4 + SUM(tr.draws) * 2)::int
+                        AS premiership_points
+                FROM team_results tr
+                JOIN teams t ON t.id = tr.team_id
+                GROUP BY t.id, t.name
             )
             SELECT
-                t.name AS team,
-                COUNT(*) AS played,
-                SUM(tr.wins)::int AS wins,
-                SUM(tr.losses)::int AS losses,
-                SUM(tr.draws)::int AS draws,
-                SUM(tr.points_for)::int AS points_for,
-                SUM(tr.points_against)::int AS points_against,
-                ROUND(
-                    SUM(tr.points_for)::numeric
-                    / NULLIF(SUM(tr.points_against), 0) * 100, 1
-                ) AS percentage,
-                (SUM(tr.wins) * 4 + SUM(tr.draws) * 2)::int
-                    AS premiership_points
-            FROM team_results tr
-            JOIN teams t ON t.id = tr.team_id
-            GROUP BY t.id, t.name
-            ORDER BY premiership_points DESC, percentage DESC""",
+                ROW_NUMBER() OVER (
+                    ORDER BY premiership_points DESC, percentage DESC
+                )::int AS position,
+                team, played, wins, losses, draws,
+                points_for, points_against, percentage,
+                premiership_points
+            FROM ladder
+            ORDER BY position""",
         all_params,
     )
 
@@ -452,9 +464,21 @@ def player_career_summary(
                SUM(handballs)::int AS handballs,
                SUM(marks)::int AS marks,
                SUM(tackles)::int AS tackles,
+               SUM(contested_possessions)::int AS contested_possessions,
+               SUM(uncontested_possessions)::int AS uncontested_possessions,
+               SUM(clearances)::int AS clearances,
+               SUM(inside_fifties)::int AS inside_fifties,
+               SUM(rebounds)::int AS rebounds,
+               SUM(intercepts)::int AS intercepts,
+               SUM(metres_gained)::int AS metres_gained,
+               SUM(hitouts)::int AS hitouts,
                SUM(brownlow_votes)::int AS brownlow_votes,
                ROUND(AVG(disposals), 1) AS avg_disposals,
                ROUND(AVG(goals), 1) AS avg_goals,
+               ROUND(AVG(marks), 1) AS avg_marks,
+               ROUND(AVG(tackles), 1) AS avg_tackles,
+               ROUND(AVG(afl_fantasy_score), 1) AS avg_fantasy,
+               ROUND(AVG(supercoach_score), 1) AS avg_supercoach,
                MIN(m.date) AS debut,
                MAX(m.date) AS last_game
            FROM player_match_stats pms
@@ -467,7 +491,13 @@ def player_career_summary(
         """SELECT s.year, t.name AS team, COUNT(*) AS games,
                   SUM(goals)::int AS goals,
                   SUM(disposals)::int AS disposals,
-                  ROUND(AVG(disposals), 1) AS avg_disposals
+                  SUM(marks)::int AS marks,
+                  SUM(tackles)::int AS tackles,
+                  SUM(contested_possessions)::int AS contested_possessions,
+                  SUM(clearances)::int AS clearances,
+                  ROUND(AVG(disposals), 1) AS avg_disposals,
+                  ROUND(AVG(afl_fantasy_score), 1) AS avg_fantasy,
+                  ROUND(AVG(supercoach_score), 1) AS avg_supercoach
            FROM player_match_stats pms
            JOIN matches m ON m.id = pms.match_id
            JOIN seasons s ON s.id = m.season_id
@@ -490,21 +520,41 @@ def player_career_summary(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_player_list(players: Sequence[int | str]) -> list[int]:
+    """Resolve a list of player IDs or names to IDs.
+
+    Each element can be an int (used directly), a numeric string
+    (parsed to int), or a player name (resolved via search).
+    """
+    resolved: list[int] = []
+    for player in players:
+        if isinstance(player, int):
+            resolved.append(player)
+        else:
+            try:
+                resolved.append(int(player))
+            except ValueError:
+                resolved.append(_resolve_player_id(None, player))
+    return resolved
+
+
 def player_comparison(
-    player_ids: list[int],
+    players: Sequence[int | str],
     year_from: int | None = None,
     year_to: int | None = None,
 ) -> list[dict]:
     """Compare career or filtered stats for multiple players.
 
     Args:
-        player_ids: List of player IDs to compare.
+        players: List of player IDs or names to compare.
         year_from: Start year filter (inclusive).
         year_to: End year filter (inclusive).
 
     Returns:
         List of dicts (one per player) with aggregated stats.
     """
+    player_ids = _resolve_player_list(players)
+
     conditions = ["pms.player_id = ANY(%s)"]
     params: list = [player_ids]
 
@@ -528,11 +578,19 @@ def player_comparison(
                 SUM(kicks)::int AS kicks,
                 SUM(handballs)::int AS handballs,
                 SUM(marks)::int AS marks,
+                ROUND(AVG(marks), 1) AS avg_marks,
                 SUM(tackles)::int AS tackles,
+                ROUND(AVG(tackles), 1) AS avg_tackles,
                 SUM(contested_possessions)::int AS contested_possessions,
                 SUM(clearances)::int AS clearances,
                 SUM(inside_fifties)::int AS inside_fifties,
-                SUM(brownlow_votes)::int AS brownlow_votes
+                SUM(rebounds)::int AS rebounds,
+                SUM(intercepts)::int AS intercepts,
+                SUM(metres_gained)::int AS metres_gained,
+                SUM(hitouts)::int AS hitouts,
+                SUM(brownlow_votes)::int AS brownlow_votes,
+                ROUND(AVG(afl_fantasy_score), 1) AS avg_fantasy,
+                ROUND(AVG(supercoach_score), 1) AS avg_supercoach
             FROM player_match_stats pms
             JOIN players p ON p.id = pms.player_id
             JOIN matches m ON m.id = pms.match_id

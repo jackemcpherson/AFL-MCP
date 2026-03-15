@@ -212,24 +212,29 @@ def player_career_summary(
 
 @mcp.tool()
 def player_comparison(
-    player_ids: list[int],
+    players: list[int | str],  # noqa: UP006
     year_from: int | None = None,
     year_to: int | None = None,
 ) -> list[dict]:
     """Compare stats for multiple AFL players side by side.
 
+    Accepts player IDs (integers) or player names (strings).
+    Names are resolved via search — use search_players first
+    if you need to disambiguate.
+
     Args:
-        player_ids: List of player IDs to compare.
+        players: List of player IDs or names to compare.
         year_from: Start year filter (inclusive).
         year_to: End year filter (inclusive).
 
     Returns:
         List of dicts (one per player) with aggregated stats
-        including games, goals, disposals, marks, tackles, etc.
+        including games, goals, disposals, marks, tackles,
+        contested possessions, clearances, hitouts, and more.
     """
     from afl_mcp.core.tools import player_comparison as _comparison
 
-    return _comparison(player_ids, year_from, year_to)
+    return _comparison(players, year_from, year_to)
 
 
 @mcp.tool()
