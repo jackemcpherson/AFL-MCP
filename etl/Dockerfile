@@ -1,9 +1,9 @@
-FROM rocker/r-base:4.5.3
+FROM rocker/r-base:4.4.0
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
+    libpq-dev libcurl4-openssl-dev libssl-dev libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN Rscript -e 'install.packages(c("fitzRoy", "readr"), repos = "https://cloud.r-project.org")' \
