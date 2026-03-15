@@ -168,8 +168,10 @@ def _hybrid_search(
     Returns:
         List of dicts with entity_id and score, ordered by score DESC.
     """
-    pool_size = limit * POOL_MULTIPLIER
-    alias = "ms" if table == "match_summaries" else "pss"
+    pool_size = max(1, min(limit, 50)) * POOL_MULTIPLIER
+    if table not in _TABLE_ALIASES:
+        raise ValueError(f"Unknown table: {table!r}")
+    alias = _TABLE_ALIASES[table]
     where = (" AND " + " AND ".join(filter_conditions)) if filter_conditions else ""
 
     vector_params: list = [query_vector, *filter_params, query_vector, pool_size]
@@ -320,7 +322,7 @@ def _enrich_player_seasons(
                       p.first_name, p.surname,
                       s.year,
                       t.name AS team,
-                      COUNT(pms.id) AS games,
+                      gc.games,
                       pav.off_pav, pav.mid_pav, pav.def_pav, pav.total_pav
                FROM player_season_summaries pss
                JOIN players p ON p.id = pss.player_id
@@ -335,19 +337,17 @@ def _enrich_player_seasons(
                    ORDER BY pms2.player_id, m2.date DESC
                    LIMIT 1
                ) t ON true
-               LEFT JOIN player_match_stats pms
-                   ON pms.player_id = pss.player_id
-                   AND pms.match_id IN (
-                       SELECT m3.id FROM matches m3
-                       WHERE m3.season_id = pss.season_id
-                   )
+               LEFT JOIN LATERAL (
+                   SELECT COUNT(*)::int AS games
+                   FROM player_match_stats pms3
+                   JOIN matches m3 ON m3.id = pms3.match_id
+                   WHERE pms3.player_id = pss.player_id
+                     AND m3.season_id = pss.season_id
+               ) gc ON true
                LEFT JOIN player_season_pav pav
                    ON pav.player_id = pss.player_id
                    AND pav.season_id = pss.season_id
-               WHERE pss.id = ANY(%s)
-               GROUP BY pss.id, pss.player_id, pss.season_id,
-                        p.first_name, p.surname, s.year, t.name,
-                        pav.off_pav, pav.mid_pav, pav.def_pav, pav.total_pav""",
+               WHERE pss.id = ANY(%s)""",
             [entity_ids],
         ).fetchall()
 
@@ -406,6 +406,7 @@ def search_match_summaries(
     Raises:
         ValueError: If neither or both of query/match_id provided.
     """
+    limit = max(1, min(limit, 50))
     if (query is None) == (match_id is None):
         raise ValueError("Provide exactly one of 'query' or 'match_id'.")
 
@@ -487,6 +488,7 @@ def search_player_seasons(
     Raises:
         ValueError: If input combination is invalid.
     """
+    limit = max(1, min(limit, 50))
     has_query = query is not None
     has_similar = player_id is not None or year is not None
 
@@ -583,6 +585,7 @@ def search_afl(
         List of dicts with type ("match" or "player_season"),
         score, and enriched metadata.
     """
+    limit = max(1, min(limit, 50))
     query_vector = _get_query_vector(query)
 
     match_conditions, match_params = _build_match_filters(
