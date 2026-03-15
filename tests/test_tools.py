@@ -343,7 +343,7 @@ class TestPlayerComparison:
         ]
         with patch(MOCK_EXECUTE, side_effect=[search_result, []]) as mock:
             player_comparison(["Dustin Martin"])
-            comparison_sql, comparison_params = mock.call_args_list[1][0]
+            _, comparison_params = mock.call_args_list[1][0]
             assert comparison_params[0] == [42]
 
     def test_mixed_ids_and_names(self) -> None:
@@ -357,7 +357,7 @@ class TestPlayerComparison:
         ]
         with patch(MOCK_EXECUTE, side_effect=[search_result, []]) as mock:
             player_comparison([1, "Dustin Martin"])
-            comparison_sql, comparison_params = mock.call_args_list[1][0]
+            _, comparison_params = mock.call_args_list[1][0]
             assert comparison_params[0] == [1, 42]
 
     def test_year_filters(self) -> None:
