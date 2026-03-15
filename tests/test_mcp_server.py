@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from afl_mcp.mcp_server.server import execute_sql, get_schema
+from afl_mcp.mcp_server.server import execute_sql, get_last_updated, get_schema
 
 
 class TestExecuteSql:
@@ -41,11 +41,9 @@ class TestGetSchema:
         """When no table specified, returns both columns and foreign keys."""
         mock_columns = [{"table_name": "matches", "column_name": "id"}]
         mock_fks = [{"table_name": "matches", "foreign_table_name": "seasons"}]
+        expected = {"columns": mock_columns, "foreign_keys": mock_fks}
 
-        with (
-            patch("afl_mcp.core.queries.get_schema_info", return_value=mock_columns),
-            patch("afl_mcp.core.queries.get_foreign_keys", return_value=mock_fks),
-        ):
+        with patch("afl_mcp.core.queries.get_schema_dict", return_value=expected):
             result = get_schema()
             assert result["columns"] == mock_columns
             assert result["foreign_keys"] == mock_fks
@@ -53,8 +51,22 @@ class TestGetSchema:
     def test_single_table_omits_foreign_keys(self) -> None:
         """When a specific table is given, foreign keys are not included."""
         mock_columns = [{"table_name": "players", "column_name": "surname"}]
+        expected = {"columns": mock_columns}
 
-        with patch("afl_mcp.core.queries.get_schema_info", return_value=mock_columns):
+        with patch("afl_mcp.core.queries.get_schema_dict", return_value=expected):
             result = get_schema(table_name="players")
             assert result["columns"] == mock_columns
             assert "foreign_keys" not in result
+
+
+class TestGetLastUpdated:
+    """Verify the get_last_updated MCP tool."""
+
+    def test_delegates_to_core(self) -> None:
+        expected = {"total_matches": 6877, "total_players": 3681}
+        with patch(
+            "afl_mcp.core.queries.get_last_updated", return_value=expected
+        ) as mock:
+            result = get_last_updated()
+            mock.assert_called_once()
+            assert result == expected

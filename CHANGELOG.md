@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-16
+
+### Changed
+
+- Reduced MCP tool surface from 14 tools to 5: `execute_sql`, `get_schema`, `get_ladder`, `search_afl`, `get_last_updated`
+- Removed 10 high-level tools (`search_players`, `stat_leaders`, `head_to_head`, `player_career_summary`, `player_comparison`, `search_matches`, `get_pav_leaders`, `get_player_pav`, `search_match_summaries`, `search_player_seasons`) — all queries composable via `execute_sql`
+- Overhauled CLI: new `sql`, `schema`, `ladder`, `search`, `status` commands with `--format` (json/table/csv) and `--pretty` flags
+- Added hidden command aliases matching MCP tool names (`execute-sql`, `get-schema`, `get-ladder`)
+- Enriched tool descriptions with full schema documentation, join patterns, and PAV interpretation guide
+- Extracted `get_schema_dict()` in core to eliminate duplicated schema assembly logic
+- Derived `_ROUND_MAP` from `_SYNONYM_MAP` to eliminate duplicate round abbreviation data
+- Rewrote `get_last_updated` SQL with CTEs to reduce redundant table scans
+
+### Added
+
+- `get_last_updated` MCP tool and `status` CLI command for data freshness metadata
+- CSV output format for all CLI query commands
+
+### Removed
+
+- 10 MCP tools superseded by `execute_sql` (see Changed)
+- 11 CLI commands backing removed tools (`query`, `players`, `leaders`, `h2h`, `career`, `compare`, `matches`, `pav-leaders`, `pav`, `search-matches`, `search-seasons`)
+
 ## [0.4.1] - 2026-03-15
 
 ### Added

@@ -95,3 +95,107 @@ def get_foreign_keys() -> list[dict]:
              AND tc.table_schema = 'public'
            ORDER BY tc.table_name"""
     )
+
+
+def get_schema_dict(table_name: str | None = None) -> dict:
+    """Return schema info as a dict with columns and optional foreign keys.
+
+    Shared by the MCP server and CLI to avoid duplicating assembly logic.
+    """
+    result: dict = {"columns": get_schema_info(table_name)}
+    if not table_name:
+        result["foreign_keys"] = get_foreign_keys()
+    return result
+
+
+def get_last_updated() -> dict:
+    """Return data freshness metadata.
+
+    Queries the database for the most recent match, player stats,
+    season range, row counts, and PAV availability.
+
+    Returns:
+        Dict with freshness metadata matching the get_last_updated
+        tool specification.
+    """
+    rows = execute_query(
+        """WITH latest_match AS (
+                SELECT m.date, m.round,
+                       ht.name || ' vs ' || at.name AS description
+                FROM matches m
+                JOIN teams ht ON ht.id = m.home_team_id
+                JOIN teams at ON at.id = m.away_team_id
+                ORDER BY m.date DESC
+                LIMIT 1
+            ),
+            latest_stats AS (
+                SELECT m.date, m.round,
+                       ht.name || ' vs ' || at.name AS description
+                FROM matches m
+                JOIN teams ht ON ht.id = m.home_team_id
+                JOIN teams at ON at.id = m.away_team_id
+                WHERE EXISTS (
+                    SELECT 1 FROM player_match_stats pms
+                    WHERE pms.match_id = m.id
+                )
+                ORDER BY m.date DESC
+                LIMIT 1
+            ),
+            season_range AS (
+                SELECT MIN(year) AS min_year, MAX(year) AS max_year
+                FROM seasons
+            ),
+            pav_range AS (
+                SELECT MIN(s.year) AS min_year, MAX(s.year) AS max_year
+                FROM player_season_pav psp
+                JOIN seasons s ON s.id = psp.season_id
+            )
+            SELECT
+                lm.date AS latest_match_date,
+                lm.round AS latest_match_round,
+                lm.description AS latest_match_description,
+                ls.date AS latest_stats_date,
+                ls.round AS latest_stats_round,
+                ls.description AS latest_stats_description,
+                sr.min_year AS min_season,
+                sr.max_year AS max_season,
+                (SELECT COUNT(*)::int FROM matches) AS total_matches,
+                (SELECT COUNT(*)::int FROM players) AS total_players,
+                (SELECT COUNT(*)::int FROM player_match_stats) AS total_stat_rows,
+                pr.min_year AS pav_from,
+                pr.max_year AS pav_to
+            FROM latest_match lm
+            CROSS JOIN latest_stats ls
+            CROSS JOIN season_range sr
+            CROSS JOIN pav_range pr"""
+    )
+
+    if not rows:
+        return {}
+
+    row = rows[0]
+
+    return {
+        "latest_season": row["max_season"],
+        "latest_match": {
+            "date": str(row["latest_match_date"]) if row["latest_match_date"] else None,
+            "round": row["latest_match_round"],
+            "description": row["latest_match_description"],
+        },
+        "latest_player_stats": {
+            "date": str(row["latest_stats_date"]) if row["latest_stats_date"] else None,
+            "round": row["latest_stats_round"],
+            "description": row["latest_stats_description"],
+        },
+        "seasons_available": {
+            "from": row["min_season"],
+            "to": row["max_season"],
+        },
+        "total_matches": row["total_matches"],
+        "total_players": row["total_players"],
+        "total_stat_rows": row["total_stat_rows"],
+        "pav_available": {
+            "from": row["pav_from"],
+            "to": row["pav_to"],
+        },
+    }
