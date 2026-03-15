@@ -48,6 +48,19 @@ jobs:
             afl-mcp-etl:latest \
             sh -c "Rscript etl/extract.R $SEASON && afl-mcp db migrate && afl-mcp db load --data-dir data/raw"
 
+      - name: Calculate PAV for current season
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          SEASON="${{ github.event.inputs.season }}"
+          if [ -z "$SEASON" ]; then
+            SEASON=$(date +%Y)
+          fi
+          docker run --rm \
+            -e DATABASE_URL="$DATABASE_URL" \
+            afl-mcp-etl:latest \
+            afl-mcp db pav --year "$SEASON"
+
   embed:
     name: Generate incremental embeddings
     needs: update

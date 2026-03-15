@@ -177,6 +177,95 @@ def embed(
     )
 
 
+@db_app.command()
+def pav(
+    year: Annotated[
+        int | None,
+        typer.Option("--year", "-y", help="Season year (omit for all 1998+)."),
+    ] = None,
+) -> None:
+    """Calculate and store PAV (Player Approximate Value) ratings."""
+    if year is not None:
+        from afl_mcp.core.pav import calculate_pav
+
+        try:
+            with console.status(f"[bold]Calculating PAV for {year}...", spinner="dots"):
+                count = calculate_pav(year)
+            console.print(f"[green]Calculated PAV for {year}: {count} players[/green]")
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+    else:
+        from afl_mcp.core.pav import calculate_all_pav
+
+        with console.status("[bold]Calculating PAV for all seasons...", spinner="dots"):
+            results = calculate_all_pav()
+
+        _print_results(
+            [{"year": k, "players": v} for k, v in results.items()],
+            title="PAV Calculation Summary",
+        )
+
+
+@app.command(name="pav-leaders")
+def pav_leaders(
+    year: Annotated[int, typer.Argument(help="Season year.")],
+    zone: Annotated[
+        str | None,
+        typer.Option("--zone", "-z", help="Sort by zone: off, mid, or def."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Number of results."),
+    ] = 20,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show PAV leaderboard for a season."""
+    from afl_mcp.core.tools import get_pav_leaders
+
+    try:
+        results = get_pav_leaders(year, zone, limit)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    zone_label = f" ({zone.upper()})" if zone else ""
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=f"{year} PAV Leaders{zone_label}")
+
+
+@app.command(name="pav")
+def pav_player(
+    player: Annotated[str, typer.Argument(help="Player name or ID.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", "-j", help="Output results as JSON."),
+    ] = False,
+) -> None:
+    """Show a player's PAV history."""
+    from afl_mcp.core.tools import get_player_pav
+
+    try:
+        player_id = int(player)
+        results = get_player_pav(player_id=player_id)
+    except ValueError:
+        try:
+            results = get_player_pav(player_name=player)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+    if json_output:
+        _print_json(results)
+    else:
+        _print_results(results, title=f"PAV History: {player}")
+
+
 @app.command()
 def query(
     sql: Annotated[

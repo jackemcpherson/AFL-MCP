@@ -15,6 +15,8 @@ from afl_mcp.core.tools import (
     VALID_STAT_COLUMNS,
     _resolve_team_name,
     get_ladder,
+    get_pav_leaders,
+    get_player_pav,
     head_to_head,
     player_career_summary,
     player_comparison,
@@ -431,3 +433,86 @@ class TestMcpToolDelegation:
         with patch("afl_mcp.core.tools.search_matches", return_value=[]) as mock:
             mcp_matches(team="Carlton", limit=5)
             mock.assert_called_once_with("Carlton", None, None, None, None, None, 5)
+
+    def test_get_pav_leaders_delegates(self) -> None:
+        from afl_mcp.mcp_server.server import get_pav_leaders as mcp_pav
+
+        with patch("afl_mcp.core.tools.get_pav_leaders", return_value=[]) as mock:
+            mcp_pav(2023, "off", 10)
+            mock.assert_called_once_with(2023, "off", 10)
+
+    def test_get_player_pav_delegates(self) -> None:
+        from afl_mcp.mcp_server.server import get_player_pav as mcp_pav
+
+        with patch("afl_mcp.core.tools.get_player_pav", return_value=[]) as mock:
+            mcp_pav(player_id=1)
+            mock.assert_called_once_with(1, None)
+
+
+# ---------------------------------------------------------------------------
+# get_pav_leaders
+# ---------------------------------------------------------------------------
+
+
+class TestGetPavLeaders:
+    """Verify PAV leaders query building."""
+
+    def test_default_sorts_by_total(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]) as mock:
+            get_pav_leaders(2023)
+            sql, params = mock.call_args[0]
+            assert "total_pav DESC" in sql
+            assert params == [2023, 20]
+
+    def test_zone_filter(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]) as mock:
+            get_pav_leaders(2023, zone="def")
+            sql = mock.call_args[0][0]
+            assert "def_pav DESC" in sql
+
+    def test_invalid_zone_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid zone"):
+            get_pav_leaders(2023, zone="attack")
+
+    def test_custom_limit(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]) as mock:
+            get_pav_leaders(2023, limit=5)
+            _, params = mock.call_args[0]
+            assert params == [2023, 5]
+
+
+# ---------------------------------------------------------------------------
+# get_player_pav
+# ---------------------------------------------------------------------------
+
+
+class TestGetPlayerPav:
+    """Verify player PAV history query."""
+
+    def test_by_id(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]) as mock:
+            get_player_pav(player_id=42)
+            sql, params = mock.call_args[0]
+            assert "player_season_pav" in sql
+            assert params == [42]
+
+    def test_by_name_delegates_to_search(self) -> None:
+        search_result = [
+            {
+                "id": 42,
+                "first_name": "Dustin",
+                "surname": "Martin",
+                "current_team": "Richmond",
+            }
+        ]
+        with patch(MOCK_EXECUTE, side_effect=[search_result, []]):
+            get_player_pav(player_name="Dustin Martin")
+
+    def test_requires_id_or_name(self) -> None:
+        with pytest.raises(ValueError, match="Provide either"):
+            get_player_pav()
+
+    def test_player_not_found(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]):
+            with pytest.raises(ValueError, match="No player found"):
+                get_player_pav(player_name="Nobody")

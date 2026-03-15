@@ -596,3 +596,94 @@ def search_matches(
             LIMIT %s""",
         params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Tool 8: get_pav_leaders
+# ---------------------------------------------------------------------------
+
+_VALID_PAV_ZONES = {"off", "mid", "def"}
+
+
+def get_pav_leaders(
+    year: int,
+    zone: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Get the PAV leaderboard for a season.
+
+    Args:
+        year: Season year (1998 onwards).
+        zone: Optional zone to sort by ("off", "mid", "def").
+            If omitted, sorts by total_pav.
+        limit: Number of results.
+
+    Returns:
+        List of dicts with player name, team, and PAV components.
+
+    Raises:
+        ValueError: If zone is invalid.
+    """
+    if zone is not None and zone not in _VALID_PAV_ZONES:
+        raise ValueError(
+            f"Invalid zone: {zone!r}. Valid zones: {', '.join(sorted(_VALID_PAV_ZONES))}"
+        )
+
+    sort_col = f"{zone}_pav" if zone else "total_pav"
+
+    return execute_query(
+        f"""SELECT p.first_name, p.surname, t.name AS team,
+                   psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav
+            FROM player_season_pav psp
+            JOIN players p ON p.id = psp.player_id
+            JOIN teams t ON t.id = psp.team_id
+            JOIN seasons s ON s.id = psp.season_id
+            WHERE s.year = %s
+            ORDER BY {sort_col} DESC
+            LIMIT %s""",
+        [year, limit],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool 9: get_player_pav
+# ---------------------------------------------------------------------------
+
+
+def get_player_pav(
+    player_id: int | None = None,
+    player_name: str | None = None,
+) -> list[dict]:
+    """Get a player's PAV history across all seasons.
+
+    Args:
+        player_id: Player database ID.
+        player_name: Player name to search for (used if player_id
+            not provided).
+
+    Returns:
+        List of dicts with year, team, and PAV components.
+
+    Raises:
+        ValueError: If neither player_id nor player_name provided,
+            or if player not found.
+    """
+    if player_id is None and player_name is None:
+        raise ValueError("Provide either player_id or player_name.")
+
+    if player_id is None:
+        results = search_players(player_name, limit=1)  # type: ignore[arg-type]
+        if not results:
+            raise ValueError(f"No player found matching {player_name!r}.")
+        player_id = results[0]["id"]
+
+    return execute_query(
+        """SELECT s.year, t.name AS team,
+                  psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav
+           FROM player_season_pav psp
+           JOIN seasons s ON s.id = psp.season_id
+           JOIN teams t ON t.id = psp.team_id
+           WHERE psp.player_id = %s
+           ORDER BY s.year""",
+        [player_id],
+    )
