@@ -543,9 +543,9 @@ def career(
 
 @app.command()
 def compare(
-    player_ids: Annotated[
-        list[int],
-        typer.Argument(help="Player IDs to compare."),
+    players: Annotated[
+        list[str],
+        typer.Argument(help="Player IDs or names to compare."),
     ],
     year_from: Annotated[
         int | None,
@@ -563,7 +563,11 @@ def compare(
     """Compare stats for multiple players."""
     from afl_mcp.core.tools import player_comparison
 
-    results = player_comparison(player_ids, year_from, year_to)
+    try:
+        results = player_comparison(players, year_from, year_to)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
     if json_output:
         _print_json(results)
     else:

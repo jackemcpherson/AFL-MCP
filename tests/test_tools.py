@@ -124,6 +124,13 @@ class TestGetLadder:
             assert "premiership_points" in sql
             assert "wins" in sql and "draws" in sql
 
+    def test_includes_position_column(self) -> None:
+        with patch(MOCK_EXECUTE, return_value=[]) as mock:
+            get_ladder(2024)
+            sql = mock.call_args[0][0]
+            assert "ROW_NUMBER()" in sql
+            assert "position" in sql
+
 
 # ---------------------------------------------------------------------------
 # stat_leaders
@@ -324,6 +331,34 @@ class TestPlayerComparison:
             sql, params = mock.call_args[0]
             assert "ANY(%s)" in sql
             assert params[0] == [1, 2, 3]
+
+    def test_resolves_names(self) -> None:
+        search_result = [
+            {
+                "id": 42,
+                "first_name": "Dustin",
+                "surname": "Martin",
+                "current_team": "Richmond",
+            }
+        ]
+        with patch(MOCK_EXECUTE, side_effect=[search_result, []]) as mock:
+            player_comparison(["Dustin Martin"])
+            _, comparison_params = mock.call_args_list[1][0]
+            assert comparison_params[0] == [42]
+
+    def test_mixed_ids_and_names(self) -> None:
+        search_result = [
+            {
+                "id": 42,
+                "first_name": "Dustin",
+                "surname": "Martin",
+                "current_team": "Richmond",
+            }
+        ]
+        with patch(MOCK_EXECUTE, side_effect=[search_result, []]) as mock:
+            player_comparison([1, "Dustin Martin"])
+            _, comparison_params = mock.call_args_list[1][0]
+            assert comparison_params[0] == [1, 42]
 
     def test_year_filters(self) -> None:
         with patch(MOCK_EXECUTE, return_value=[]) as mock:
