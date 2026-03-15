@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-15
+
+### Added
+
+- Hybrid semantic search with Reciprocal Rank Fusion (vector + full-text)
+- search_match_summaries tool: find matches by query or similarity to existing match
+- search_player_seasons tool: find player seasons by query or similarity
+- search_afl tool: unified cross-table search returning mixed results
+- "Find similar" mode using stored embeddings (no embedding API call needed)
+- Match results enriched with top 3 performers per team (by AFL Fantasy score)
+- Player season results enriched with PAV ratings
+- GIN full-text indexes on summary tables for keyword matching
+- Switched to uv for dependency management with committed lockfile
+
 ## [0.2.0] - 2026-03-15
 
 ### Added

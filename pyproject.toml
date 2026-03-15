@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "afl-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "AFL statistics platform with PostgreSQL storage, CLI, and MCP server"
 requires-python = ">=3.11"
 dependencies = [
@@ -38,3 +38,10 @@ pythonVersion = "3.11"
 typeCheckingMode = "basic"
 venvPath = "."
 venv = ".venv"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "pytest>=9.0.2",
+    "ruff>=0.15.6",
+]
