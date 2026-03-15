@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "afl-mcp"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -30,6 +30,7 @@ test = [
 [package.dev-dependencies]
 dev = [
     { name = "pyright" },
+    { name = "pytest" },
     { name = "ruff" },
 ]
 
@@ -49,6 +50,7 @@ provides-extras = ["ml", "test"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pyright", specifier = ">=1.1.408" },
+    { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.15.6" },
 ]
 
