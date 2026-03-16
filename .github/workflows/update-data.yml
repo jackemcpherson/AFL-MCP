@@ -50,21 +50,20 @@ jobs:
           if [ -z "$SEASON" ]; then
             SEASON=$(date +%Y)
           fi
-          NEW_DATA=$(docker run --rm \
+          RESULT=$(docker run --rm \
             --env DATABASE_URL \
             afl-mcp-etl:latest \
             sh -c "
-              Rscript etl/extract.R $SEASON &&
-              afl-mcp db migrate &&
-              if afl-mcp db check-freshness --data-dir data/raw; then
+              Rscript etl/extract.R $SEASON >&2 &&
+              afl-mcp db migrate >&2 &&
+              if afl-mcp db check-freshness --data-dir data/raw >&2; then
                 afl-mcp db load --data-dir data/raw >&2 &&
                 echo true
               else
-                echo 'No new data — skipping load' >&2 &&
                 echo false
               fi
             ")
-          echo "new_data=${NEW_DATA}" >> "$GITHUB_OUTPUT"
+          echo "new_data=${RESULT}" >> "$GITHUB_OUTPUT"
 
       - name: Calculate PAV for current season
         if: steps.etl.outputs.new_data == 'true'

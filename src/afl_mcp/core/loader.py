@@ -1420,9 +1420,10 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
 
     pool = get_pool()
     with pool.connection() as conn:
-        result = conn.execute("SELECT MAX(date) FROM matches").fetchone()
+        cur = conn.execute("SELECT MAX(date) FROM matches")
+        row = cur.fetchone()
 
-    db_max = result[0] if result else None
+    db_max = row[0] if row else None  # type: ignore[index]
     db_latest = str(db_max) if db_max else None
 
     if db_latest is None:
