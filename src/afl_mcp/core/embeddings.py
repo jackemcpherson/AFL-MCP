@@ -182,8 +182,12 @@ def _embed_and_upsert(
     logger.info("Embedding %d %s", len(summaries), label)
     embeddings = embed_batch(summaries)
 
-    for summary, row, embedding in zip(summaries, rows, embeddings):
-        conn.execute(upsert_sql, extract_params(row, summary, embedding))  # type: ignore[union-attr]
+    params_list = [
+        extract_params(row, summary, embedding)
+        for summary, row, embedding in zip(summaries, rows, embeddings)
+    ]
+    cur = conn.cursor()  # type: ignore[union-attr]
+    cur.executemany(upsert_sql, params_list)
     conn.commit()  # type: ignore[union-attr]
 
     return len(rows)
@@ -266,13 +270,14 @@ def _embed_player_seasons(conn: object, rows: list[dict], label: str) -> int:
     logger.info("Embedding %d %s (anonymous)", len(anon_summaries), label)
     anon_embeddings = embed_batch(anon_summaries)
 
-    for row, summary, named_emb, anon_emb in zip(
-        rows, named_summaries, named_embeddings, anon_embeddings
-    ):
-        conn.execute(  # type: ignore[union-attr]
-            _PLAYER_SEASON_UPSERT,
-            (row["player_id"], row["season_id"], summary, named_emb, anon_emb),
+    params_list = [
+        (row["player_id"], row["season_id"], summary, named_emb, anon_emb)
+        for row, summary, named_emb, anon_emb in zip(
+            rows, named_summaries, named_embeddings, anon_embeddings
         )
+    ]
+    cur = conn.cursor()  # type: ignore[union-attr]
+    cur.executemany(_PLAYER_SEASON_UPSERT, params_list)
     conn.commit()  # type: ignore[union-attr]
 
     return len(rows)
