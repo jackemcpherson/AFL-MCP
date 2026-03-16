@@ -116,11 +116,15 @@ if (is_current) {
   cat(sprintf("  Written %d rows to %s\n\n", nrow(player_stats), stats_path))
 }
 
-# Player details always from afltables
+# Player details always from afltables (optional — not used by Python loader)
 cat("Fetching player details (afltables)...\n")
-players <- fetch_player_details(season = SEASONS, source = "afltables", comp = COMP)
-players_path <- file.path(OUTPUT_DIR, "players.csv")
-write_csv(players, players_path)
-cat(sprintf("  Written %d rows to %s\n\n", nrow(players), players_path))
+tryCatch({
+  players <- fetch_player_details(season = SEASONS, source = "afltables", comp = COMP)
+  players_path <- file.path(OUTPUT_DIR, "players.csv")
+  write_csv(players, players_path)
+  cat(sprintf("  Written %d rows to %s\n\n", nrow(players), players_path))
+}, error = function(e) {
+  cat(sprintf("  Player details failed (non-fatal): %s\n\n", e$message))
+})
 
 cat("=== Extraction complete ===\n")
