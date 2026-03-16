@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
+from unittest.mock import MagicMock, patch
+
 from afl_mcp.core.loader import (
     TEAM_NAME_MAP,
     VENUE_NAME_MAP,
@@ -19,6 +21,7 @@ from afl_mcp.core.loader import (
     _normalise_team,
     _normalise_venue,
     _str_or_none,
+    check_freshness,
 )
 
 
@@ -264,3 +267,69 @@ class TestSourceFileDetection:
         (tmp_path / "random.csv").touch()
         files = _detect_source_files(tmp_path)
         assert len(files) == 0
+
+
+def _write_results_csv(path: Path, dates: list[str]) -> None:
+    """Write a minimal results CSV with the given match dates."""
+    with open(path, "w") as f:
+        f.write("Date,Home.Team,Away.Team,Venue,Round,Home.Points,Away.Points\n")
+        for d in dates:
+            f.write(f"{d},Richmond,Carlton,MCG,R1,100,80\n")
+
+
+def _mock_pool_with_max_date(max_date: str | None) -> MagicMock:
+    """Build a mock pool whose connection returns the given max date."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (max_date,)
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value = mock_cursor
+    mock_pool = MagicMock()
+    mock_pool.connection.return_value.__enter__ = lambda _: mock_conn
+    mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_pool
+
+
+class TestCheckFreshness:
+    """Verify freshness check compares CSV dates against the database."""
+
+    @patch("afl_mcp.core.db.get_pool")
+    def test_new_data_when_csv_newer(
+        self, mock_get_pool: MagicMock, tmp_path: Path
+    ) -> None:
+        """CSV with a newer date signals new data available."""
+        _write_results_csv(tmp_path / "results.csv", ["2026-03-15", "2026-03-22"])
+        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15")
+
+        result = check_freshness(tmp_path)
+        assert result["has_new_data"] is True
+        assert result["csv_latest_date"] == "2026-03-22"
+        assert result["db_latest_date"] == "2026-03-15"
+
+    @patch("afl_mcp.core.db.get_pool")
+    def test_no_new_data_when_dates_equal(
+        self, mock_get_pool: MagicMock, tmp_path: Path
+    ) -> None:
+        """CSV with same latest date as DB signals no new data."""
+        _write_results_csv(tmp_path / "results.csv", ["2026-03-15"])
+        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15")
+
+        result = check_freshness(tmp_path)
+        assert result["has_new_data"] is False
+
+    @patch("afl_mcp.core.db.get_pool")
+    def test_new_data_when_db_empty(
+        self, mock_get_pool: MagicMock, tmp_path: Path
+    ) -> None:
+        """Empty database always signals new data."""
+        _write_results_csv(tmp_path / "results.csv", ["2026-03-15"])
+        mock_get_pool.return_value = _mock_pool_with_max_date(None)
+
+        result = check_freshness(tmp_path)
+        assert result["has_new_data"] is True
+        assert result["reason"] == "Database is empty"
+
+    def test_no_csv_files(self, tmp_path: Path) -> None:
+        """No CSV files returns no new data without querying DB."""
+        result = check_freshness(tmp_path)
+        assert result["has_new_data"] is False
+        assert "No CSV files" in str(result["reason"])

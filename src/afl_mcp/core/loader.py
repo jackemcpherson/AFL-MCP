@@ -1369,3 +1369,79 @@ def load_all(data_dir: str | Path) -> dict[str, int]:
 
     logger.info("Load complete: %s", counts)
     return counts
+
+
+def check_freshness(data_dir: str | Path) -> dict[str, object]:
+    """Compare extracted CSV data against the database to detect new matches.
+
+    Reads the highest-priority results CSV, finds its latest match date,
+    and compares against the most recent match date in the database.
+
+    Args:
+        data_dir: Path to directory containing the CSV files.
+
+    Returns:
+        Dict with ``has_new_data`` (bool), ``csv_latest_date``,
+        ``db_latest_date``, and ``reason`` (human-readable explanation).
+    """
+    from afl_mcp.core.db import get_pool
+
+    data_dir = Path(data_dir)
+    sources = _detect_source_files(data_dir)
+
+    if not sources:
+        return {
+            "has_new_data": False,
+            "csv_latest_date": None,
+            "db_latest_date": None,
+            "reason": "No CSV files found",
+        }
+
+    results_data, _, _, _ = _resolve_sources(sources)
+
+    if not results_data:
+        return {
+            "has_new_data": False,
+            "csv_latest_date": None,
+            "db_latest_date": None,
+            "reason": "No results CSV found",
+        }
+
+    csv_dates = [r["Date"][:10] for r in results_data if r.get("Date")]
+    csv_latest = max(csv_dates) if csv_dates else None
+
+    if not csv_latest:
+        return {
+            "has_new_data": False,
+            "csv_latest_date": None,
+            "db_latest_date": None,
+            "reason": "No dates found in CSV",
+        }
+
+    pool = get_pool()
+    with pool.connection() as conn:
+        result = conn.execute("SELECT MAX(date) FROM matches").fetchone()
+
+    db_max = result[0] if result else None
+    db_latest = str(db_max) if db_max else None
+
+    if db_latest is None:
+        return {
+            "has_new_data": True,
+            "csv_latest_date": csv_latest,
+            "db_latest_date": None,
+            "reason": "Database is empty",
+        }
+
+    has_new_data = csv_latest > db_latest
+    if has_new_data:
+        reason = f"CSV has matches up to {csv_latest}, DB only has up to {db_latest}"
+    else:
+        reason = f"DB is up to date ({db_latest})"
+
+    return {
+        "has_new_data": has_new_data,
+        "csv_latest_date": csv_latest,
+        "db_latest_date": db_latest,
+        "reason": reason,
+    }

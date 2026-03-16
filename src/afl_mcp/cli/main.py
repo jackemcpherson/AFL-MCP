@@ -232,9 +232,29 @@ def pav(
         )
 
 
-# ---------------------------------------------------------------------------
-# Tool commands
-# ---------------------------------------------------------------------------
+@db_app.command(name="check-freshness")
+def check_freshness_cmd(
+    data_dir: Annotated[
+        str,
+        typer.Option("--data-dir", "-d", help="Directory containing CSV files."),
+    ] = "data/raw",
+) -> None:
+    """Check if extracted CSVs contain data newer than the database.
+
+    Exits with code 0 if new data is available (proceed with load),
+    or code 1 if the database is already up to date (skip load).
+    """
+    from afl_mcp.core.loader import check_freshness
+
+    result = check_freshness(data_dir)
+    has_new_data = result["has_new_data"]
+
+    if has_new_data:
+        console.print(f"[green]New data available:[/green] {result['reason']}")
+    else:
+        console.print(f"[yellow]Already fresh:[/yellow] {result['reason']}")
+
+    raise typer.Exit(code=0 if has_new_data else 1)
 
 
 def _sql_impl(
