@@ -14,6 +14,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src/ src/
 COPY etl/ etl/
+COPY db/ db/
 
 RUN uv sync --no-cache --frozen
 
