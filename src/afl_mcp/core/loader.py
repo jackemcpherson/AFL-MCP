@@ -1,13 +1,17 @@
 """CSV data loader for populating PostgreSQL from extracted fitzRoy data.
 
-Reads results.csv and player_stats.csv, normalises team and venue names,
-and loads data in dependency order with idempotent upserts.
+Supports multi-source loading with priority:
+1. AFL official API (results_afl.csv, player_stats_afl.csv) — primary
+2. FootyWire (results_footywire.csv) — fallback for results
+3. Fryzigg (player_stats_fryzigg.csv) — enrichment for advanced stats
+4. Legacy (results.csv, player_stats.csv) — backward compatibility
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import psycopg
@@ -19,8 +23,15 @@ logger = logging.getLogger(__name__)
 TEAM_NAME_MAP: dict[str, str] = {
     "Greater Western Sydney": "GWS Giants",
     "GWS": "GWS Giants",
+    "GWS GIANTS": "GWS Giants",
     "Brisbane Bears": "Brisbane Lions",
+    "Brisbane": "Brisbane Lions",
     "Footscray": "Western Bulldogs",
+    "Sydney Swans": "Sydney",
+    "Geelong Cats": "Geelong",
+    "Adelaide Crows": "Adelaide",
+    "West Coast Eagles": "West Coast",
+    "Gold Coast SUNS": "Gold Coast",
 }
 
 VENUE_NAME_MAP: dict[str, str] = {
@@ -30,6 +41,7 @@ VENUE_NAME_MAP: dict[str, str] = {
     "Etihad Stadium": "Marvel Stadium",
     "GMHBA Stadium": "Kardinia Park",
     "Manuka Oval": "Manuka Oval",
+    "Corroboree Group Oval Manuka": "Manuka Oval",
     "Blundstone Arena": "Blundstone Arena",
     "Bellerive Oval": "Blundstone Arena",
     "Sydney Showground": "Sydney Showground",
@@ -40,6 +52,7 @@ VENUE_NAME_MAP: dict[str, str] = {
     "Cazaly's Stadium": "Cazalys Stadium",
     "TIO Stadium": "TIO Stadium",
     "Marrara Oval": "TIO Stadium",
+    "TIO Traeger Park": "Traeger Park",
     "Mars Stadium": "Mars Stadium",
     "Eureka Stadium": "Mars Stadium",
     "People First Stadium": "Carrara",
@@ -61,9 +74,123 @@ VENUE_NAME_MAP: dict[str, str] = {
 
 COMPETITION_CODE = "AFLM"
 
+AFL_RESULTS_COLUMN_MAP: dict[str, str] = {
+    "match.matchId": "external_afl_id",
+    "match.date": "Date",
+    "match.homeTeam.name": "Home.Team",
+    "match.awayTeam.name": "Away.Team",
+    "venue.name": "Venue",
+    "round.name": "Round",
+    "round.roundNumber": "Round.Number",
+    "homeTeamScore.matchScore.goals": "Home.Goals",
+    "homeTeamScore.matchScore.behinds": "Home.Behinds",
+    "homeTeamScore.matchScore.totalScore": "Home.Points",
+    "awayTeamScore.matchScore.goals": "Away.Goals",
+    "awayTeamScore.matchScore.behinds": "Away.Behinds",
+    "awayTeamScore.matchScore.totalScore": "Away.Points",
+}
+
+AFL_STATS_COLUMN_MAP: dict[str, str] = {
+    "providerId": "match_afl_id",
+    "utcStartTime": "match_date",
+    "home.team.name": "match_home_team",
+    "away.team.name": "match_away_team",
+    "venue.name": "venue_name",
+    "team.name": "player_team",
+    "player.player.player.playerId": "player_id",
+    "player.player.player.givenName": "player_first_name",
+    "player.player.player.surname": "player_last_name",
+    "player.jumperNumber": "guernsey_number",
+    "player.player.player.playerJumperNumber": "guernsey_number_alt",
+    "player.player.position": "player_position",
+    "timeOnGroundPercentage": "time_on_ground_percentage",
+    "kicks": "kicks",
+    "handballs": "handballs",
+    "disposals": "disposals",
+    "marks": "marks",
+    "bounces": "bounces",
+    "tackles": "tackles",
+    "contestedPossessions": "contested_possessions",
+    "uncontestedPossessions": "uncontested_possessions",
+    "goals": "goals",
+    "behinds": "behinds",
+    "goalAssists": "goal_assists",
+    "shotsAtGoal": "shots_at_goal",
+    "scoreInvolvements": "score_involvements",
+    "clearances.centreClearances": "centre_clearances",
+    "clearances.stoppageClearances": "stoppage_clearances",
+    "clearances.totalClearances": "clearances",
+    "contestedMarks": "contested_marks",
+    "marksInside50": "marks_inside_fifty",
+    "onePercenters": "one_percenters",
+    "clangers": "clangers",
+    "freesFor": "free_kicks_for",
+    "freesAgainst": "free_kicks_against",
+    "hitouts": "hitouts",
+    "inside50s": "inside_fifties",
+    "rebound50s": "rebounds",
+    "turnovers": "turnovers",
+    "intercepts": "intercepts",
+    "metresGained": "metres_gained",
+    "tacklesInside50": "tackles_inside_fifty",
+    "disposalEfficiency": "disposal_efficiency_percentage",
+    "dreamTeamPoints": "afl_fantasy_score",
+    "ratingPoints": "rating_points",
+    "extendedStats.effectiveKicks": "effective_kicks",
+    "extendedStats.effectiveDisposals": "effective_disposals",
+    "extendedStats.marksOnLead": "marks_on_lead",
+    "extendedStats.interceptMarks": "intercept_marks",
+    "extendedStats.hitoutsToAdvantage": "hitouts_to_advantage",
+    "extendedStats.hitoutWinPercentage": "hitout_win_percentage",
+    "extendedStats.groundBallGets": "ground_ball_gets",
+    "extendedStats.f50GroundBallGets": "f50_ground_ball_gets",
+    "extendedStats.scoreLaunches": "score_launches",
+    "extendedStats.pressureActs": "pressure_acts",
+    "extendedStats.defHalfPressureActs": "def_half_pressure_acts",
+    "extendedStats.spoils": "spoils",
+    "extendedStats.ruckContests": "ruck_contests",
+    "extendedStats.contestDefOneOnOnes": "contest_def_one_on_ones",
+    "extendedStats.contestDefLosses": "contest_def_losses",
+    "extendedStats.contestOffOneOnOnes": "contest_off_one_on_ones",
+    "extendedStats.contestOffWins": "contest_off_wins",
+}
+
+FOOTYWIRE_RESULTS_COLUMN_MAP: dict[str, str] = {
+    "Date": "Date",
+    "Home.Team": "Home.Team",
+    "Away.Team": "Away.Team",
+    "Venue": "Venue",
+    "Round": "Round",
+    "Home.Points": "Home.Points",
+    "Away.Points": "Away.Points",
+    "Time": "Time",
+}
+
+
+def _remap_columns(
+    rows: list[dict[str, str]], column_map: dict[str, str]
+) -> list[dict[str, str]]:
+    """Remap column names in CSV rows using a column map.
+
+    Only columns present in the map are included in the output.
+    Columns not in the map are dropped.
+
+    Args:
+        rows: List of row dicts with original column names.
+        column_map: Mapping from source column names to target names.
+
+    Returns:
+        List of row dicts with remapped column names.
+    """
+    return [
+        {dst: row[src] for src, dst in column_map.items() if src in row} for row in rows
+    ]
+
 
 def _normalise_team(name: str) -> str:
     """Normalise a team name to its canonical form.
+
+    Strips leading/trailing whitespace before lookup.
 
     Args:
         name: Raw team name from CSV.
@@ -71,11 +198,15 @@ def _normalise_team(name: str) -> str:
     Returns:
         Canonical team name.
     """
+    name = name.strip()
     return TEAM_NAME_MAP.get(name, name)
 
 
 def _normalise_venue(name: str) -> str:
     """Normalise a venue name to its canonical form.
+
+    Strips leading/trailing whitespace before lookup (FootyWire has
+    leading spaces in venue names).
 
     Args:
         name: Raw venue name from CSV.
@@ -83,6 +214,7 @@ def _normalise_venue(name: str) -> str:
     Returns:
         Canonical venue name.
     """
+    name = name.strip()
     return VENUE_NAME_MAP.get(name, name)
 
 
@@ -148,6 +280,31 @@ def _bool_from_str(val: str) -> bool | None:
     return val.upper() == "TRUE"
 
 
+_ParseFn = Callable[[str], int | float | None]
+
+FRYZIGG_ENRICHMENT_COLUMNS: list[tuple[str, str, _ParseFn]] = [
+    ("pressure_acts", "pressure_acts", _int_or_none),
+    ("def_half_pressure_acts", "def_half_pressure_acts", _int_or_none),
+    ("metres_gained", "metres_gained", _int_or_none),
+    ("contest_def_losses", "contest_def_losses", _int_or_none),
+    ("contest_def_one_on_ones", "contest_def_one_on_ones", _int_or_none),
+    ("contest_off_one_on_ones", "contest_off_one_on_ones", _int_or_none),
+    ("contest_off_wins", "contest_off_wins", _int_or_none),
+    ("effective_kicks", "effective_kicks", _int_or_none),
+    ("ground_ball_gets", "ground_ball_gets", _int_or_none),
+    ("f50_ground_ball_gets", "f50_ground_ball_gets", _int_or_none),
+    ("intercept_marks", "intercept_marks", _int_or_none),
+    ("marks_on_lead", "marks_on_lead", _int_or_none),
+    ("score_launches", "score_launches", _int_or_none),
+    ("hitouts_to_advantage", "hitouts_to_advantage", _int_or_none),
+    ("hitout_win_percentage", "hitout_win_pct", _float_or_none),
+    ("ruck_contests", "ruck_contests", _int_or_none),
+    ("spoils", "spoils", _int_or_none),
+    ("effective_disposals", "effective_disposals", _int_or_none),
+    ("rating_points", "rating_points", _float_or_none),
+]
+
+
 def _read_csv(path: Path) -> list[dict[str, str]]:
     """Read a CSV file into a list of dicts.
 
@@ -196,8 +353,8 @@ def _load_venues(
 
     Args:
         conn: Database connection.
-        results: Rows from results.csv.
-        stats_data: Rows from player_stats.csv.
+        results: Rows from results CSV (any source).
+        stats_data: Rows from player_stats CSV (any source).
 
     Returns:
         Mapping of normalised venue name to database ID.
@@ -237,8 +394,8 @@ def _load_teams(
 
     Args:
         conn: Database connection.
-        results: Rows from results.csv.
-        stats_data: Rows from player_stats.csv.
+        results: Rows from results CSV (any source).
+        stats_data: Rows from player_stats CSV (any source).
         competition_id: The competition FK.
 
     Returns:
@@ -278,11 +435,11 @@ def _load_seasons(
     results: list[dict[str, str]],
     competition_id: int,
 ) -> dict[int, int]:
-    """Load unique seasons from results.csv.
+    """Load unique seasons from results CSV.
 
     Args:
         conn: Database connection.
-        results: Rows from results.csv.
+        results: Rows from results CSV (any source).
         competition_id: The competition FK.
 
     Returns:
@@ -309,11 +466,14 @@ def _load_players(
     conn: psycopg.Connection[dict],
     stats_data: list[dict[str, str]],
 ) -> dict[str, int]:
-    """Load unique players from player_stats.csv.
+    """Load unique players from player_stats CSV.
+
+    When a player appears in multiple rows, later rows with height or
+    weight data are preferred over earlier rows missing those fields.
 
     Args:
         conn: Database connection.
-        stats_data: Rows from player_stats.csv.
+        stats_data: Rows from player_stats CSV (any source).
 
     Returns:
         Mapping of external player ID to database ID.
@@ -326,7 +486,6 @@ def _load_players(
         if pid not in seen:
             seen[pid] = dict(row)
         else:
-            # Prefer rows that have height/weight data
             if not seen[pid].get("player_height_cm") and row.get("player_height_cm"):
                 seen[pid]["player_height_cm"] = row["player_height_cm"]
             if not seen[pid].get("player_weight_kg") and row.get("player_weight_kg"):
@@ -372,7 +531,7 @@ def _load_matches(
     team_map: dict[str, int],
     venue_map: dict[str, int],
 ) -> int:
-    """Load matches from results.csv.
+    """Load matches from afltables results.csv (legacy path).
 
     Args:
         conn: Database connection.
@@ -440,6 +599,167 @@ def _load_matches(
     return count
 
 
+def _load_matches_from_afl(
+    conn: psycopg.Connection[dict],
+    results: list[dict[str, str]],
+    season_map: dict[int, int],
+    team_map: dict[str, int],
+    venue_map: dict[str, int],
+) -> int:
+    """Load matches from AFL API results_afl.csv.
+
+    Upserts on (date, home_team_id, away_team_id) and stores external_afl_id.
+    AFL API dates may include a time component, so only the first 10
+    characters (YYYY-MM-DD) are used.
+
+    Args:
+        conn: Database connection.
+        results: Remapped rows from results_afl.csv.
+        season_map: Year to season ID mapping.
+        team_map: Team name to team ID mapping.
+        venue_map: Venue name to venue ID mapping.
+
+    Returns:
+        Number of matches loaded.
+    """
+    count = 0
+    for r in results:
+        date = _str_or_none(r.get("Date", ""))
+        if not date:
+            continue
+        date = date[:10]
+
+        year = int(date[:4])
+        season_id = season_map.get(year)
+        if season_id is None:
+            continue
+
+        home_team = _normalise_team(r.get("Home.Team", ""))
+        away_team = _normalise_team(r.get("Away.Team", ""))
+        venue_name = _normalise_venue(r.get("Venue", ""))
+        external_afl_id = _str_or_none(r.get("external_afl_id", ""))
+
+        home_team_id = team_map.get(home_team)
+        away_team_id = team_map.get(away_team)
+        if not home_team_id or not away_team_id:
+            continue
+
+        conn.execute(
+            """INSERT INTO matches (season_id, round, round_number, date,
+                                    venue_id, home_team_id, away_team_id,
+                                    home_goals, home_behinds, home_points,
+                                    away_goals, away_behinds, away_points,
+                                    external_afl_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE SET
+                   home_goals = EXCLUDED.home_goals,
+                   home_behinds = EXCLUDED.home_behinds,
+                   home_points = EXCLUDED.home_points,
+                   away_goals = EXCLUDED.away_goals,
+                   away_behinds = EXCLUDED.away_behinds,
+                   away_points = EXCLUDED.away_points,
+                   external_afl_id = COALESCE(EXCLUDED.external_afl_id, matches.external_afl_id)""",
+            (
+                season_id,
+                r.get("Round", ""),
+                _int_or_none(r.get("Round.Number", "")),
+                date,
+                venue_map.get(venue_name),
+                home_team_id,
+                away_team_id,
+                _int_or_none(r.get("Home.Goals", "")),
+                _int_or_none(r.get("Home.Behinds", "")),
+                _int_or_none(r.get("Home.Points", "")),
+                _int_or_none(r.get("Away.Goals", "")),
+                _int_or_none(r.get("Away.Behinds", "")),
+                _int_or_none(r.get("Away.Points", "")),
+                external_afl_id,
+            ),
+        )
+        count += 1
+
+    conn.commit()
+    return count
+
+
+def _load_matches_from_footywire(
+    conn: psycopg.Connection[dict],
+    results: list[dict[str, str]],
+    season_map: dict[int, int],
+    team_map: dict[str, int],
+    venue_map: dict[str, int],
+) -> int:
+    """Load matches from FootyWire results_footywire.csv.
+
+    Inserts only matches not already present (uses tuple key for dedup).
+
+    Args:
+        conn: Database connection.
+        results: Rows from results_footywire.csv.
+        season_map: Year to season ID mapping.
+        team_map: Team name to team ID mapping.
+        venue_map: Venue name to venue ID mapping.
+
+    Returns:
+        Number of matches loaded.
+    """
+    count = 0
+    for r in results:
+        date = _str_or_none(r.get("Date", ""))
+        if not date:
+            continue
+        date = date[:10]
+
+        year = int(date[:4])
+        season_id = season_map.get(year)
+        if season_id is None:
+            continue
+
+        home_team = _normalise_team(r.get("Home.Team", ""))
+        away_team = _normalise_team(r.get("Away.Team", ""))
+        venue_name = _normalise_venue(r.get("Venue", ""))
+
+        home_team_id = team_map.get(home_team)
+        away_team_id = team_map.get(away_team)
+        if not home_team_id or not away_team_id:
+            continue
+
+        home_points = _int_or_none(r.get("Home.Points", ""))
+        away_points = _int_or_none(r.get("Away.Points", ""))
+        margin = None
+        if home_points is not None and away_points is not None:
+            margin = home_points - away_points
+
+        conn.execute(
+            """INSERT INTO matches (season_id, round, date,
+                                    venue_id, home_team_id, away_team_id,
+                                    home_goals, home_behinds, home_points,
+                                    away_goals, away_behinds, away_points,
+                                    margin)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (date, home_team_id, away_team_id) DO NOTHING""",
+            (
+                season_id,
+                r.get("Round", ""),
+                date,
+                venue_map.get(venue_name),
+                home_team_id,
+                away_team_id,
+                _int_or_none(r.get("Home.Goals", "")),
+                _int_or_none(r.get("Home.Behinds", "")),
+                home_points,
+                _int_or_none(r.get("Away.Goals", "")),
+                _int_or_none(r.get("Away.Behinds", "")),
+                away_points,
+                margin,
+            ),
+        )
+        count += 1
+
+    conn.commit()
+    return count
+
+
 def _enrich_matches_from_stats(
     conn: psycopg.Connection[dict],
     stats_data: list[dict[str, str]],
@@ -448,7 +768,9 @@ def _enrich_matches_from_stats(
     """Add metadata from player_stats.csv to matches.
 
     Populates local_time, attendance, weather, and the fryzigg
-    external ID, matched by date and home/away team.
+    external ID, matched by date and home/away team. If the initial
+    lookup fails, retries with swapped home/away teams since sources
+    sometimes disagree on which team is home.
 
     Args:
         conn: Database connection.
@@ -502,7 +824,6 @@ def _enrich_matches_from_stats(
             ),
         )
         if result.rowcount == 0:
-            # Try swapped home/away (sources sometimes disagree)
             conn.execute(
                 """UPDATE matches SET
                        local_time = COALESCE(%s::time, local_time),
@@ -533,6 +854,9 @@ def _build_match_lookup(
 ) -> dict[tuple[str, str, str], int]:
     """Build a lookup from (date, home_team, away_team) to match ID.
 
+    Both orderings of (home, away) are indexed since data sources
+    sometimes disagree on which team is home.
+
     Args:
         conn: Database connection.
 
@@ -549,7 +873,6 @@ def _build_match_lookup(
     for r in rows:
         date_str = str(r["date"]) if r["date"] else ""
         lookup[(date_str, r["home_team"], r["away_team"])] = r["id"]
-        # Also index with swapped home/away for sources that disagree
         lookup[(date_str, r["away_team"], r["home_team"])] = r["id"]
     return lookup
 
@@ -559,20 +882,23 @@ def _load_player_match_stats(
     stats_data: list[dict[str, str]],
     player_map: dict[str, int],
     team_map: dict[str, int],
+    match_lookup: dict[tuple[str, str, str], int] | None = None,
 ) -> int:
-    """Load player match stats from player_stats.csv.
+    """Load player match stats from player_stats CSV (fryzigg format).
 
     Args:
         conn: Database connection.
-        stats_data: Rows from player_stats.csv.
+        stats_data: Rows from player_stats.csv (fryzigg column names).
         player_map: External player ID to database ID mapping.
         team_map: Team name to team ID mapping.
+        match_lookup: Pre-built lookup, or None to build one.
 
     Returns:
         Number of stat rows loaded.
     """
     count = 0
-    match_lookup = _build_match_lookup(conn)
+    if match_lookup is None:
+        match_lookup = _build_match_lookup(conn)
 
     for s in stats_data:
         match_date = s.get("match_date", "")[:10]
@@ -766,12 +1092,212 @@ def _load_player_match_stats(
     return count
 
 
+def _enrich_from_fryzigg(
+    conn: psycopg.Connection[dict],
+    stats_data: list[dict[str, str]],
+    player_map: dict[str, int],
+    team_map: dict[str, int],
+    match_lookup: dict[tuple[str, str, str], int] | None = None,
+) -> int:
+    """Enrich existing player_match_stats with fryzigg advanced columns.
+
+    Only updates columns that are NULL in the existing row (COALESCE semantics).
+
+    Args:
+        conn: Database connection.
+        stats_data: Rows from player_stats_fryzigg.csv.
+        player_map: External player ID to database ID mapping.
+        team_map: Team name to team ID mapping.
+        match_lookup: Pre-built lookup, or None to build one.
+
+    Returns:
+        Number of rows enriched.
+    """
+    if match_lookup is None:
+        match_lookup = _build_match_lookup(conn)
+    count = 0
+
+    for s in stats_data:
+        match_date = s.get("match_date", "")[:10]
+        home_team = _normalise_team(s.get("match_home_team", ""))
+        away_team = _normalise_team(s.get("match_away_team", ""))
+        match_id = match_lookup.get((match_date, home_team, away_team))
+        if match_id is None:
+            continue
+
+        player_id = player_map.get(s.get("player_id", ""))
+        if player_id is None:
+            continue
+
+        set_clauses = []
+        values: list[int | float | None] = []
+        for csv_col, db_col, parser in FRYZIGG_ENRICHMENT_COLUMNS:
+            set_clauses.append(f"{db_col} = COALESCE({db_col}, %s)")
+            values.append(parser(s.get(csv_col, "")))
+
+        if not set_clauses:
+            continue
+
+        values.extend([match_id, player_id])
+        conn.execute(
+            f"""UPDATE player_match_stats SET
+                   {", ".join(set_clauses)}
+               WHERE match_id = %s AND player_id = %s""",
+            values,
+        )
+        count += 1
+
+        if count % 5000 == 0:
+            conn.commit()
+
+    conn.commit()
+    return count
+
+
+def _detect_source_files(data_dir: Path) -> dict[str, Path]:
+    """Detect which source files are present in the data directory.
+
+    Args:
+        data_dir: Path to directory containing CSV files.
+
+    Returns:
+        Dict mapping source keys to file paths.
+    """
+    files: dict[str, Path] = {}
+
+    candidates = {
+        "results_afl": "results_afl.csv",
+        "results_footywire": "results_footywire.csv",
+        "results_legacy": "results.csv",
+        "stats_afl": "player_stats_afl.csv",
+        "stats_fryzigg": "player_stats_fryzigg.csv",
+        "stats_legacy": "player_stats.csv",
+    }
+
+    for key, filename in candidates.items():
+        path = data_dir / filename
+        if path.exists():
+            files[key] = path
+
+    return files
+
+
+def _resolve_sources(
+    sources: dict[str, Path],
+) -> tuple[
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[dict[str, str]] | None,
+    str | None,
+]:
+    """Read and remap CSV data from detected source files.
+
+    Selects the highest-priority source for results and stats,
+    applies column remapping for AFL API sources, and loads
+    fryzigg data separately for enrichment.
+
+    Args:
+        sources: Mapping of source keys to file paths from
+            ``_detect_source_files``.
+
+    Returns:
+        A tuple of (results_data, stats_data, fryzigg_data,
+        results_source) where results_source is ``"afl"``,
+        ``"footywire"``, ``"legacy"``, or ``None``.
+    """
+    results_data: list[dict[str, str]] = []
+    stats_data: list[dict[str, str]] = []
+    fryzigg_data: list[dict[str, str]] | None = None
+    results_source: str | None = None
+
+    if "results_afl" in sources:
+        raw = _read_csv(sources["results_afl"])
+        results_data = _remap_columns(raw, AFL_RESULTS_COLUMN_MAP)
+        results_source = "afl"
+        logger.info("Using AFL API results (%d rows)", len(results_data))
+    elif "results_footywire" in sources:
+        results_data = _read_csv(sources["results_footywire"])
+        results_source = "footywire"
+        logger.info("Using FootyWire results (%d rows)", len(results_data))
+    elif "results_legacy" in sources:
+        results_data = _read_csv(sources["results_legacy"])
+        results_source = "legacy"
+        logger.info("Using legacy results (%d rows)", len(results_data))
+
+    if "stats_afl" in sources:
+        raw = _read_csv(sources["stats_afl"])
+        stats_data = _remap_columns(raw, AFL_STATS_COLUMN_MAP)
+        logger.info("Using AFL API player stats (%d rows)", len(stats_data))
+    elif "stats_legacy" in sources:
+        stats_data = _read_csv(sources["stats_legacy"])
+        logger.info("Using legacy player stats (%d rows)", len(stats_data))
+
+    if "stats_fryzigg" in sources:
+        fryzigg_data = _read_csv(sources["stats_fryzigg"])
+        logger.info("Fryzigg enrichment data available (%d rows)", len(fryzigg_data))
+
+    return results_data, stats_data, fryzigg_data, results_source
+
+
+def _load_matches_by_priority(
+    conn: psycopg.Connection[dict],
+    results_source: str | None,
+    results_data: list[dict[str, str]],
+    sources: dict[str, Path],
+    season_map: dict[int, int],
+    team_map: dict[str, int],
+    venue_map: dict[str, int],
+) -> dict[str, int]:
+    """Load matches using the appropriate loader for the detected source.
+
+    AFL API results take priority, with FootyWire loaded as a supplement
+    when both are present. FootyWire-only and legacy paths are also
+    handled.
+
+    Args:
+        conn: Database connection.
+        results_source: Which source provided results.
+        results_data: Rows from the primary results CSV.
+        sources: Full source file mapping for supplemental reads.
+        season_map: Year to season ID mapping.
+        team_map: Team name to team ID mapping.
+        venue_map: Venue name to venue ID mapping.
+
+    Returns:
+        Dict of count keys to row counts for match loading.
+    """
+    counts: dict[str, int] = {}
+
+    if results_source == "afl":
+        counts["matches"] = _load_matches_from_afl(
+            conn, results_data, season_map, team_map, venue_map
+        )
+        if "results_footywire" in sources:
+            fw_data = _read_csv(sources["results_footywire"])
+            counts["matches_footywire_supplement"] = _load_matches_from_footywire(
+                conn, fw_data, season_map, team_map, venue_map
+            )
+    elif results_source == "footywire":
+        counts["matches"] = _load_matches_from_footywire(
+            conn, results_data, season_map, team_map, venue_map
+        )
+    else:
+        counts["matches"] = _load_matches(
+            conn, results_data, season_map, team_map, venue_map
+        )
+
+    return counts
+
+
 def load_all(data_dir: str | Path) -> dict[str, int]:
     """Load all CSV data into the database.
 
-    Reads results.csv and player_stats.csv from the given directory
-    and loads data in dependency order: venues, teams, seasons,
-    players, matches, match metadata enrichment, player match stats.
+    Auto-detects source files by filename pattern and loads in priority order:
+    1. AFL API results, then FootyWire results, then legacy afltables results
+    2. AFL API player stats, then legacy fryzigg player stats
+    3. Fryzigg enrichment if both AFL stats and fryzigg stats are present
+
+    Falls back to legacy behavior if only results.csv + player_stats.csv exist.
 
     Args:
         data_dir: Path to directory containing the CSV files.
@@ -781,18 +1307,24 @@ def load_all(data_dir: str | Path) -> dict[str, int]:
     """
     data_dir = Path(data_dir)
     counts: dict[str, int] = {}
+    sources = _detect_source_files(data_dir)
+    logger.info("Detected source files: %s", list(sources.keys()))
 
-    results_data = _read_csv(data_dir / "results.csv")
-    stats_data = _read_csv(data_dir / "player_stats.csv")
+    results_data, stats_data, fryzigg_data, results_source = _resolve_sources(sources)
+
+    if not results_data:
+        logger.warning("No results CSV found in %s", data_dir)
+        return counts
 
     with get_admin_connection() as conn:
         competition_id = _ensure_competition(conn)
+        all_stats = stats_data + fryzigg_data if fryzigg_data else stats_data
 
-        venue_map = _load_venues(conn, results_data, stats_data)
+        venue_map = _load_venues(conn, results_data, all_stats)
         counts["venues"] = len(venue_map)
         conn.commit()
 
-        team_map = _load_teams(conn, results_data, stats_data, competition_id)
+        team_map = _load_teams(conn, results_data, all_stats, competition_id)
         counts["teams"] = len(team_map)
         conn.commit()
 
@@ -800,18 +1332,40 @@ def load_all(data_dir: str | Path) -> dict[str, int]:
         counts["seasons"] = len(season_map)
         conn.commit()
 
-        player_map = _load_players(conn, stats_data)
+        player_map = _load_players(conn, all_stats)
         counts["players"] = len(player_map)
         conn.commit()
 
-        match_count = _load_matches(conn, results_data, season_map, team_map, venue_map)
-        counts["matches"] = match_count
+        match_counts = _load_matches_by_priority(
+            conn,
+            results_source,
+            results_data,
+            sources,
+            season_map,
+            team_map,
+            venue_map,
+        )
+        counts.update(match_counts)
 
-        enriched = _enrich_matches_from_stats(conn, stats_data, team_map)
-        counts["matches_enriched"] = enriched
+        if fryzigg_data:
+            enriched = _enrich_matches_from_stats(conn, fryzigg_data, team_map)
+            counts["matches_enriched"] = enriched
+        elif "stats_afl" not in sources:
+            enriched = _enrich_matches_from_stats(conn, stats_data, team_map)
+            counts["matches_enriched"] = enriched
 
-        stats_count = _load_player_match_stats(conn, stats_data, player_map, team_map)
+        match_lookup = _build_match_lookup(conn)
+
+        stats_count = _load_player_match_stats(
+            conn, stats_data, player_map, team_map, match_lookup
+        )
         counts["player_match_stats"] = stats_count
+
+        if fryzigg_data and "stats_afl" in sources:
+            enrich_count = _enrich_from_fryzigg(
+                conn, fryzigg_data, player_map, team_map, match_lookup
+            )
+            counts["fryzigg_enrichment"] = enrich_count
 
     logger.info("Load complete: %s", counts)
     return counts

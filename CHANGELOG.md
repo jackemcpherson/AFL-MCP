@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-16
+
+### Added
+
+- Multi-source ETL: AFL official API as primary data source (fastest updates), FootyWire as fallback, fryzigg as enrichment for advanced stats
+- Column mapping infrastructure for AFL API and FootyWire data formats (`AFL_RESULTS_COLUMN_MAP`, `AFL_STATS_COLUMN_MAP`, `FOOTYWIRE_RESULTS_COLUMN_MAP`)
+- `_load_matches_from_afl()` loader with upsert on `(date, home_team_id, away_team_id)` natural key
+- `_load_matches_from_footywire()` loader with insert-only dedup via `ON CONFLICT DO NOTHING`
+- `_enrich_from_fryzigg()` function for COALESCE-based enrichment of 19 advanced stat columns
+- `_detect_source_files()` and `_resolve_sources()` for auto-detecting CSV source files by filename pattern
+- Database migration `007_add_afl_source_tracking.sql`: `external_afl_id` column, tuple-based unique constraint, performance index
+- New team name mappings for AFL API (`Sydney Swans`, `Geelong Cats`, `GWS GIANTS`, etc.) and FootyWire (`Brisbane`)
+- New venue name mappings for AFL API (`Corroboree Group Oval Manuka`, `TIO Traeger Park`)
+- Whitespace stripping in `_normalise_team()` and `_normalise_venue()` for FootyWire leading-space data
+- Test suite for column remapping, enrichment semantics, and source file detection (`test_enrichment.py`)
+
+### Changed
+
+- ETL extraction script (`etl/extract.R`) uses AFL API as primary source for seasons >= 2020, with FootyWire fallback and fryzigg enrichment pass
+- `load_all()` auto-detects source files and routes to appropriate loaders by priority; fully backward compatible with legacy `results.csv` + `player_stats.csv`
+- Data update workflow cron frequency increased from every 6 hours to every 2 hours
+- Match lookup built once and shared between stats loading and fryzigg enrichment (eliminates duplicate table scan)
+
 ## [1.0.0] - 2026-03-16
 
 ### Changed

@@ -6,11 +6,14 @@ data transformation logic that maps raw CSV values to database types.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 from afl_mcp.core.loader import (
     TEAM_NAME_MAP,
     VENUE_NAME_MAP,
     _bool_from_str,
+    _detect_source_files,
     _float_or_none,
     _int_or_none,
     _normalise_team,
@@ -133,9 +136,10 @@ class TestTeamNormalisation:
     """Verify team name mapping from source variations to canonical names."""
 
     def test_gws_variants(self) -> None:
-        """Both afltables and fryzigg GWS names map to 'GWS Giants'."""
+        """All source GWS names map to 'GWS Giants'."""
         assert _normalise_team("Greater Western Sydney") == "GWS Giants"
         assert _normalise_team("GWS") == "GWS Giants"
+        assert _normalise_team("GWS GIANTS") == "GWS Giants"
 
     def test_footscray_maps_to_western_bulldogs(self) -> None:
         """Historical name maps to current name."""
@@ -144,6 +148,24 @@ class TestTeamNormalisation:
     def test_brisbane_bears_maps_to_lions(self) -> None:
         """Defunct team maps to successor."""
         assert _normalise_team("Brisbane Bears") == "Brisbane Lions"
+
+    def test_afl_api_team_variants(self) -> None:
+        """AFL API full team names map to short canonical names."""
+        assert _normalise_team("Sydney Swans") == "Sydney"
+        assert _normalise_team("Geelong Cats") == "Geelong"
+        assert _normalise_team("Adelaide Crows") == "Adelaide"
+        assert _normalise_team("West Coast Eagles") == "West Coast"
+        assert _normalise_team("Gold Coast SUNS") == "Gold Coast"
+
+    def test_footywire_brisbane_maps_to_lions(self) -> None:
+        """FootyWire's 'Brisbane' maps to 'Brisbane Lions'."""
+        assert _normalise_team("Brisbane") == "Brisbane Lions"
+
+    def test_leading_whitespace_stripped(self) -> None:
+        """Leading/trailing whitespace is stripped before lookup."""
+        assert _normalise_team(" GWS ") == "GWS Giants"
+        assert _normalise_venue(" MCG") == "MCG"
+        assert _normalise_venue(" ENGIE Stadium ") == "Sydney Showground"
 
     def test_unmapped_name_passes_through(self) -> None:
         """Teams not in the map are returned unchanged."""
@@ -182,6 +204,11 @@ class TestVenueNormalisation:
         assert _normalise_venue("People First Stadium") == "Carrara"
         assert _normalise_venue("Heritage Bank Stadium") == "Carrara"
 
+    def test_afl_api_venue_variants(self) -> None:
+        """AFL API venue names map to canonical names."""
+        assert _normalise_venue("Corroboree Group Oval Manuka") == "Manuka Oval"
+        assert _normalise_venue("TIO Traeger Park") == "Traeger Park"
+
     def test_unmapped_venue_passes_through(self) -> None:
         """Venues not in the map are returned unchanged."""
         assert _normalise_venue("Adelaide Oval") == "Adelaide Oval"
@@ -194,3 +221,46 @@ class TestVenueNormalisation:
             assert result == canonical, (
                 f"Canonical venue '{canonical}' re-normalises to '{result}'"
             )
+
+
+class TestSourceFileDetection:
+    """Verify source file detection picks up the right files."""
+
+    def test_detects_afl_files(self, tmp_path: Path) -> None:
+        """AFL API files are detected correctly."""
+        (tmp_path / "results_afl.csv").touch()
+        (tmp_path / "player_stats_afl.csv").touch()
+        files = _detect_source_files(tmp_path)
+        assert "results_afl" in files
+        assert "stats_afl" in files
+
+    def test_detects_legacy_files(self, tmp_path: Path) -> None:
+        """Legacy files are detected correctly."""
+        (tmp_path / "results.csv").touch()
+        (tmp_path / "player_stats.csv").touch()
+        files = _detect_source_files(tmp_path)
+        assert "results_legacy" in files
+        assert "stats_legacy" in files
+
+    def test_detects_all_sources(self, tmp_path: Path) -> None:
+        """All source types detected when present."""
+        (tmp_path / "results_afl.csv").touch()
+        (tmp_path / "results_footywire.csv").touch()
+        (tmp_path / "results.csv").touch()
+        (tmp_path / "player_stats_afl.csv").touch()
+        (tmp_path / "player_stats_fryzigg.csv").touch()
+        (tmp_path / "player_stats.csv").touch()
+        files = _detect_source_files(tmp_path)
+        assert len(files) == 6
+
+    def test_empty_directory(self, tmp_path: Path) -> None:
+        """Empty directory returns no files."""
+        files = _detect_source_files(tmp_path)
+        assert len(files) == 0
+
+    def test_ignores_unrelated_files(self, tmp_path: Path) -> None:
+        """Non-matching CSV files are ignored."""
+        (tmp_path / "players.csv").touch()
+        (tmp_path / "random.csv").touch()
+        files = _detect_source_files(tmp_path)
+        assert len(files) == 0
