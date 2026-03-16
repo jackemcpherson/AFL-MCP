@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from afl_mcp.core.loader import (
     AFL_RESULTS_COLUMN_MAP,
     AFL_STATS_COLUMN_MAP,
     FOOTYWIRE_RESULTS_COLUMN_MAP,
     FRYZIGG_ENRICHMENT_COLUMNS,
+    _load_players,
     _remap_columns,
 )
 
@@ -193,3 +196,197 @@ class TestColumnMapCompleteness:
         }
         actual_targets = set(AFL_STATS_COLUMN_MAP.values())
         assert extended_targets.issubset(actual_targets)
+
+
+def _mock_conn_for_load_players(
+    *,
+    name_matches: list[list[dict[str, object]]] | None = None,
+    cross_linked: list[dict[str, object]] | None = None,
+) -> MagicMock:
+    """Build a mock connection for _load_players tests.
+
+    Args:
+        name_matches: Successive return values for name-lookup queries.
+        cross_linked: Rows returned by the final cross-link query.
+    """
+    conn = MagicMock()
+    if name_matches is None:
+        name_matches = []
+    if cross_linked is None:
+        cross_linked = []
+
+    # Track calls to conn.execute and return appropriate mocks.
+    call_results: list[MagicMock] = []
+
+    def execute_side_effect(sql: str, params: tuple = ()) -> MagicMock:  # noqa: ARG001
+        result = MagicMock()
+        sql_stripped = sql.strip()
+
+        if (
+            sql_stripped.startswith("INSERT INTO players")
+            and "external_id" in sql_stripped
+        ):
+            # Pass 1: fryzigg upsert — return a row with an incrementing id.
+            fryzigg_id = len([r for r in call_results if r._is_fryzigg]) + 1
+            result.fetchone.return_value = {"id": fryzigg_id}
+            result._is_fryzigg = True
+        elif sql_stripped.startswith("SELECT id, external_id FROM players"):
+            # Pass 2: name lookup.
+            if name_matches:
+                result.fetchall.return_value = name_matches.pop(0)
+            else:
+                result.fetchall.return_value = []
+            result._is_fryzigg = False
+        elif sql_stripped.startswith("UPDATE players SET external_afl_player_id"):
+            result._is_fryzigg = False
+        elif (
+            sql_stripped.startswith("INSERT INTO players")
+            and "external_afl_player_id" in sql_stripped
+        ):
+            # Pass 2: new AFL-only player insert.
+            afl_id = 100 + len([r for r in call_results if r._is_afl_insert])
+            result.fetchone.return_value = {"id": afl_id}
+            result._is_afl_insert = True
+            result._is_fryzigg = False
+        elif sql_stripped.startswith("SELECT id, external_id, external_afl_player_id"):
+            # Final cross-link query.
+            result.fetchall.return_value = cross_linked
+            result._is_fryzigg = False
+        else:
+            result._is_fryzigg = False
+
+        if not hasattr(result, "_is_afl_insert"):
+            result._is_afl_insert = False
+        call_results.append(result)
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    return conn
+
+
+class TestCrossSourcePlayerMatching:
+    """Verify _load_players handles mixed AFL API and fryzigg IDs."""
+
+    def test_same_player_both_sources_maps_both_ids(self) -> None:
+        """A player present in both sources gets both IDs in the map."""
+        stats = [
+            {
+                "player_id": "12070",
+                "player_first_name": "Taylor",
+                "player_last_name": "Adams",
+                "player_height_cm": "182",
+                "player_weight_kg": "85",
+                "player_is_retired": "FALSE",
+                "player_team": "Collingwood",
+            },
+            {
+                "player_id": "CD_I291776",
+                "player_first_name": "Taylor",
+                "player_last_name": "Adams",
+                "player_height_cm": "182",
+                "player_weight_kg": "85",
+                "player_is_retired": "FALSE",
+                "player_team": "Collingwood",
+            },
+        ]
+
+        conn = _mock_conn_for_load_players(
+            # Name lookup for CD_I291776 finds the fryzigg-inserted player.
+            name_matches=[[{"id": 1, "external_id": "12070"}]],
+            # Cross-link query returns the now-linked player.
+            cross_linked=[
+                {
+                    "id": 1,
+                    "external_id": "12070",
+                    "external_afl_player_id": "CD_I291776",
+                }
+            ],
+        )
+
+        result = _load_players(conn, stats)
+
+        # Both IDs should map to the same database ID.
+        assert result["12070"] == result["CD_I291776"]
+        assert result["12070"] == 1
+
+    def test_afl_only_player_creates_new_row(self) -> None:
+        """A player only in AFL API data gets inserted with no external_id."""
+        stats = [
+            {
+                "player_id": "CD_I999999",
+                "player_first_name": "New",
+                "player_last_name": "Player",
+                "player_height_cm": "190",
+                "player_weight_kg": "90",
+                "player_is_retired": "FALSE",
+                "player_team": "Richmond",
+            },
+        ]
+
+        conn = _mock_conn_for_load_players(
+            # Name lookup returns no matches.
+            name_matches=[[]],
+            cross_linked=[],
+        )
+
+        result = _load_players(conn, stats)
+
+        assert "CD_I999999" in result
+
+    def test_name_collision_different_players(self) -> None:
+        """Two players with the same name should not be merged when ambiguous."""
+        stats = [
+            {
+                "player_id": "11111",
+                "player_first_name": "Josh",
+                "player_last_name": "Kelly",
+                "player_height_cm": "186",
+                "player_weight_kg": "83",
+                "player_is_retired": "FALSE",
+                "player_team": "GWS Giants",
+            },
+            {
+                "player_id": "CD_I500000",
+                "player_first_name": "Josh",
+                "player_last_name": "Kelly",
+                "player_height_cm": "186",
+                "player_weight_kg": "83",
+                "player_is_retired": "FALSE",
+                "player_team": "GWS Giants",
+            },
+        ]
+
+        # Name lookup returns TWO matches (ambiguous).
+        # Team disambig query finds no recent stats (empty DB).
+        team_result = MagicMock()
+        team_result.fetchone.return_value = None
+
+        conn = _mock_conn_for_load_players(
+            name_matches=[
+                [
+                    {"id": 1, "external_id": "11111"},
+                    {"id": 2, "external_id": "22222"},
+                ]
+            ],
+            cross_linked=[],
+        )
+
+        # Override the team lookup to return None (no recent stats).
+        original_side_effect = conn.execute.side_effect
+
+        def patched_execute(sql: str, params: tuple = ()) -> MagicMock:
+            if "player_match_stats" in sql:
+                result = MagicMock()
+                result.fetchone.return_value = None
+                result._is_fryzigg = False
+                result._is_afl_insert = False
+                return result
+            return original_side_effect(sql, params)
+
+        conn.execute.side_effect = patched_execute
+
+        result = _load_players(conn, stats)
+
+        # Both IDs should be in the map.
+        assert "11111" in result
+        assert "CD_I500000" in result

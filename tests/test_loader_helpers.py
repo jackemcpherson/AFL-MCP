@@ -18,6 +18,7 @@ from afl_mcp.core.loader import (
     _detect_source_files,
     _float_or_none,
     _int_or_none,
+    _is_afl_api_id,
     _normalise_team,
     _normalise_venue,
     _str_or_none,
@@ -333,3 +334,23 @@ class TestCheckFreshness:
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is False
         assert "No CSV files" in str(result["reason"])
+
+
+class TestIsAflApiId:
+    """Verify AFL API player ID detection."""
+
+    def test_cd_i_prefix_is_afl(self) -> None:
+        """CD_I prefixed IDs are AFL API IDs."""
+        assert _is_afl_api_id("CD_I291776") is True
+
+    def test_bare_numeric_is_not_afl(self) -> None:
+        """Bare numeric IDs (fryzigg) are not AFL API IDs."""
+        assert _is_afl_api_id("12070") is False
+
+    def test_empty_string_is_not_afl(self) -> None:
+        """Empty string is not an AFL API ID."""
+        assert _is_afl_api_id("") is False
+
+    def test_cd_m_prefix_is_not_player(self) -> None:
+        """CD_M (match) prefix is not a player ID."""
+        assert _is_afl_api_id("CD_M20260101001") is False

@@ -462,22 +462,38 @@ def _load_seasons(
     return mapping
 
 
+def _is_afl_api_id(pid: str) -> bool:
+    """Check whether a player ID is from the AFL API (Champion Data format).
+
+    AFL API player IDs use the ``CD_I`` prefix (e.g. ``CD_I291776``),
+    while fryzigg/legacy IDs are bare numeric strings.
+    """
+    return pid.startswith("CD_I")
+
+
 def _load_players(
     conn: psycopg.Connection[dict],
     stats_data: list[dict[str, str]],
 ) -> dict[str, int]:
-    """Load unique players from player_stats CSV.
+    """Load unique players from player_stats CSV data.
 
-    When a player appears in multiple rows, later rows with height or
-    weight data are preferred over earlier rows missing those fields.
+    Uses a two-pass approach to handle incompatible ID systems:
+    1. Upsert fryzigg/legacy players (bare numeric IDs) via external_id.
+    2. Link AFL API players (CD_I IDs) to existing rows by name match,
+       or insert new rows if no match is found.
+
+    The returned mapping contains entries for **both** ID formats pointing
+    to the same database row, so downstream enrichment works regardless
+    of which source's ID is used for lookup.
 
     Args:
         conn: Database connection.
-        stats_data: Rows from player_stats CSV (any source).
+        stats_data: Rows from player_stats CSV (any source, mixed OK).
 
     Returns:
         Mapping of external player ID to database ID.
     """
+    # Deduplicate rows per player ID, preferring rows with physical stats.
     seen: dict[str, dict[str, str]] = {}
     for row in stats_data:
         pid = row.get("player_id", "")
@@ -492,7 +508,11 @@ def _load_players(
                 seen[pid]["player_weight_kg"] = row["player_weight_kg"]
 
     mapping: dict[str, int] = {}
+
+    # --- Pass 1: fryzigg / legacy players (bare numeric IDs) ---
     for pid, s in seen.items():
+        if _is_afl_api_id(pid):
+            continue
         surname = s.get("player_last_name", "")
         if not surname:
             continue
@@ -520,6 +540,127 @@ def _load_players(
         if row is None:
             raise RuntimeError("Failed to insert/fetch row")
         mapping[pid] = row["id"]
+
+    # --- Pass 2: AFL API players (CD_I IDs) ---
+    for pid, s in seen.items():
+        if not _is_afl_api_id(pid):
+            continue
+        surname = s.get("player_last_name", "")
+        first_name = s.get("player_first_name", "")
+        if not surname:
+            continue
+
+        # Try to find existing player by name.
+        matches = conn.execute(
+            """SELECT id, external_id FROM players
+               WHERE LOWER(first_name) = LOWER(%s)
+                 AND LOWER(surname) = LOWER(%s)""",
+            (first_name, surname),
+        ).fetchall()
+
+        if len(matches) == 1:
+            # Unique name match — link AFL API ID to existing row.
+            db_id = matches[0]["id"]
+            conn.execute(
+                """UPDATE players SET external_afl_player_id = %s
+                   WHERE id = %s AND external_afl_player_id IS NULL""",
+                (pid, db_id),
+            )
+            mapping[pid] = db_id
+        elif len(matches) > 1:
+            # Ambiguous: multiple players with the same name.
+            # Try to disambiguate using the team from the stats row.
+            team_name = _normalise_team(s.get("player_team", ""))
+            resolved_id: int | None = None
+            for m in matches:
+                existing_id = m["id"]
+                recent = conn.execute(
+                    """SELECT t.name FROM player_match_stats pms
+                       JOIN teams t ON t.id = pms.team_id
+                       WHERE pms.player_id = %s
+                       ORDER BY pms.id DESC LIMIT 1""",
+                    (existing_id,),
+                ).fetchone()
+                if recent and recent["name"] == team_name:
+                    resolved_id = existing_id
+                    break
+            if resolved_id is not None:
+                conn.execute(
+                    """UPDATE players SET external_afl_player_id = %s
+                       WHERE id = %s AND external_afl_player_id IS NULL""",
+                    (pid, resolved_id),
+                )
+                mapping[pid] = resolved_id
+            else:
+                logger.warning(
+                    "Ambiguous name match for AFL player %s (%s %s) — "
+                    "inserting as new row",
+                    pid,
+                    first_name,
+                    surname,
+                )
+                row = conn.execute(
+                    """INSERT INTO players
+                           (first_name, surname, external_afl_player_id,
+                            height_cm, weight_kg, is_retired)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (external_afl_player_id)
+                           WHERE external_afl_player_id IS NOT NULL
+                           DO UPDATE SET
+                               height_cm = COALESCE(EXCLUDED.height_cm, players.height_cm),
+                               weight_kg = COALESCE(EXCLUDED.weight_kg, players.weight_kg)
+                       RETURNING id""",
+                    (
+                        _str_or_none(first_name),
+                        surname,
+                        pid,
+                        _int_or_none(s.get("player_height_cm", "")),
+                        _int_or_none(s.get("player_weight_kg", "")),
+                        _bool_from_str(s.get("player_is_retired", "")),
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("Failed to insert/fetch row")
+                mapping[pid] = row["id"]
+        else:
+            # No existing player — insert with AFL API ID only.
+            row = conn.execute(
+                """INSERT INTO players
+                       (first_name, surname, external_afl_player_id,
+                        height_cm, weight_kg, is_retired)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (external_afl_player_id)
+                       WHERE external_afl_player_id IS NOT NULL
+                       DO UPDATE SET
+                           first_name = EXCLUDED.first_name,
+                           surname = EXCLUDED.surname,
+                           height_cm = COALESCE(EXCLUDED.height_cm, players.height_cm),
+                           weight_kg = COALESCE(EXCLUDED.weight_kg, players.weight_kg),
+                           is_retired = EXCLUDED.is_retired
+                   RETURNING id""",
+                (
+                    _str_or_none(first_name),
+                    surname,
+                    pid,
+                    _int_or_none(s.get("player_height_cm", "")),
+                    _int_or_none(s.get("player_weight_kg", "")),
+                    _bool_from_str(s.get("player_is_retired", "")),
+                ),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Failed to insert/fetch row")
+            mapping[pid] = row["id"]
+
+    # Build unified map: also include fryzigg IDs for players matched by AFL ID.
+    # Query all players that have both IDs and add cross-references.
+    cross_linked = conn.execute(
+        """SELECT id, external_id, external_afl_player_id FROM players
+           WHERE external_id IS NOT NULL
+             AND external_afl_player_id IS NOT NULL""",
+    ).fetchall()
+    for p in cross_linked:
+        mapping[p["external_id"]] = p["id"]
+        mapping[p["external_afl_player_id"]] = p["id"]
 
     return mapping
 
