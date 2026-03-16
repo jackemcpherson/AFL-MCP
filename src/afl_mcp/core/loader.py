@@ -550,6 +550,16 @@ def _load_players(
         if not surname:
             continue
 
+        # Fast path: AFL ID already linked from a previous run.
+        existing = conn.execute(
+            """SELECT id FROM players
+               WHERE external_afl_player_id = %s""",
+            (pid,),
+        ).fetchone()
+        if existing is not None:
+            mapping[pid] = existing["id"]
+            continue
+
         # Try to find existing player by name.
         matches = conn.execute(
             """SELECT id, external_id FROM players
