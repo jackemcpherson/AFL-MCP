@@ -125,3 +125,7 @@ class TestForbiddenPatternEdgeCases:
         """
         sql = "SELECT * FROM players WHERE surname = 'Grant'"
         assert _FORBIDDEN_PATTERN.search(sql) is not None
+
+    def test_copy_statement_blocked(self) -> None:
+        """COPY statements are caught by the forbidden pattern."""
+        assert _FORBIDDEN_PATTERN.search("COPY matches TO '/tmp/data.csv'") is not None

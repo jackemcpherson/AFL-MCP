@@ -8,9 +8,19 @@ matches, stored in pgvector-backed tables.
 from __future__ import annotations
 
 import logging
-from typing import Callable
+import threading
+from typing import Any, Callable
+
+import psycopg
 
 from afl_mcp.core.db import get_admin_connection
+
+__all__ = [
+    "embed_text",
+    "embed_batch",
+    "generate_all_embeddings",
+    "generate_incremental_embeddings",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -18,23 +28,26 @@ MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 BATCH_SIZE = 256
 
-_model = None
+_model: Any = None
+_model_lock = threading.Lock()
 
 
-def _get_model():  # type: ignore[no-untyped-def]
+def _get_model() -> Any:
     """Load and cache the sentence-transformer model.
 
     Lazily imports sentence_transformers to avoid loading PyTorch
-    until embeddings are actually needed.
+    until embeddings are actually needed. Thread-safe via lock.
 
     Returns:
         The cached SentenceTransformer model instance.
     """
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
+        with _model_lock:
+            if _model is None:
+                from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer(MODEL_NAME)
+                _model = SentenceTransformer(MODEL_NAME)
     return _model
 
 
@@ -141,20 +154,29 @@ def _build_match_summary(row: dict) -> str:
     Returns:
         A human-readable summary string.
     """
-    result = "def." if row["home_points"] > row["away_points"] else "lost to"
-    if row["home_points"] == row["away_points"]:
+    home_points = row.get("home_points", 0) or 0
+    away_points = row.get("away_points", 0) or 0
+    result = "def." if home_points > away_points else "lost to"
+    if home_points == away_points:
         result = "drew with"
 
+    round_label = row.get("round_number") or row.get("round", "?")
+    home_team = row.get("home_team", "Unknown")
+    away_team = row.get("away_team", "Unknown")
+    venue = row.get("venue", "Unknown")
+    year = row.get("year", "?")
+    margin = abs(row.get("margin") or 0)
+
     return (
-        f"Round {row['round_number'] or row['round']}, {row['year']}: "
-        f"{row['home_team']} ({row['home_points']}) {result} "
-        f"{row['away_team']} ({row['away_points']}) at {row['venue']}. "
-        f"Margin: {abs(row['margin'] or 0)} points."
+        f"Round {round_label}, {year}: "
+        f"{home_team} ({home_points}) {result} "
+        f"{away_team} ({away_points}) at {venue}. "
+        f"Margin: {margin} points."
     )
 
 
 def _embed_and_upsert(
-    conn: object,
+    conn: psycopg.Connection[dict],
     rows: list[dict],
     build_summary: Callable[[dict], str],
     upsert_sql: str,
@@ -186,9 +208,9 @@ def _embed_and_upsert(
         extract_params(row, summary, embedding)
         for summary, row, embedding in zip(summaries, rows, embeddings)
     ]
-    cur = conn.cursor()  # type: ignore[union-attr]
+    cur = conn.cursor()
     cur.executemany(upsert_sql, params_list)
-    conn.commit()  # type: ignore[union-attr]
+    conn.commit()
 
     return len(rows)
 
@@ -253,7 +275,7 @@ def _match_params(row: dict, summary: str, embedding: list[float]) -> tuple:
     return (row["match_id"], summary, embedding)
 
 
-def _embed_player_seasons(conn: object, rows: list[dict], label: str) -> int:
+def _embed_player_seasons(conn: psycopg.Connection[dict], rows: list[dict], label: str) -> int:
     """Build named + anonymous summaries, embed both, and upsert.
 
     Player seasons get two embeddings: the named one (for text query
@@ -276,9 +298,9 @@ def _embed_player_seasons(conn: object, rows: list[dict], label: str) -> int:
             rows, named_summaries, named_embeddings, anon_embeddings
         )
     ]
-    cur = conn.cursor()  # type: ignore[union-attr]
+    cur = conn.cursor()
     cur.executemany(_PLAYER_SEASON_UPSERT, params_list)
-    conn.commit()  # type: ignore[union-attr]
+    conn.commit()
 
     return len(rows)
 

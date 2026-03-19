@@ -15,6 +15,8 @@ from psycopg.rows import dict_row
 from afl_mcp.core.db import get_pool
 from afl_mcp.core.tools import _resolve_team_name
 
+__all__ = ["search_afl"]
+
 RRF_K = 60
 POOL_MULTIPLIER = 5
 
@@ -62,8 +64,15 @@ def _expand_query(query: str) -> str:
 _CLOSE_WORDS = re.compile(r"close|narrow|tight|under", re.IGNORECASE)
 _BIG_WORDS = re.compile(r"blowout|demolition|over|big|huge", re.IGNORECASE)
 
-# Round name → abbreviation, also present in _SYNONYM_MAP for query expansion.
-_ROUND_MAP: dict[str, str] = {k: v for k, v in _SYNONYM_MAP.items() if len(v) == 2}
+# Round name → abbreviation, explicit mapping for clarity.
+_ROUND_MAP: dict[str, str] = {
+    "grand final": "GF",
+    "preliminary final": "PF",
+    "semi final": "SF",
+    "semifinal": "SF",
+    "elimination final": "EF",
+    "qualifying final": "QF",
+}
 
 _PMS_AVG_SUBQUERY = """(
     SELECT AVG(pms_n.{col}) FROM player_match_stats pms_n
@@ -224,11 +233,14 @@ def _get_query_vector(query: str) -> list[float]:
     return embed_text(expanded)
 
 
+_VALID_TABLES = {"match_summaries", "player_season_summaries"}
+
+
 def _get_stored_embedding(table: str, where: str, params: list) -> list[float]:
     """Fetch a stored embedding vector from the database.
 
     Args:
-        table: Table name containing the embedding.
+        table: Table name containing the embedding (must be in _VALID_TABLES).
         where: WHERE clause to identify the row.
         params: Parameters for the WHERE clause.
 
@@ -236,8 +248,10 @@ def _get_stored_embedding(table: str, where: str, params: list) -> list[float]:
         The stored embedding vector.
 
     Raises:
-        ValueError: If the referenced row does not exist.
+        ValueError: If table is not in the allow-list or the row does not exist.
     """
+    if table not in _VALID_TABLES:
+        raise ValueError(f"Invalid table: {table!r}")
     pool = get_pool()
     with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:  # type: ignore[union-attr]
         row = cur.execute(
@@ -377,7 +391,13 @@ def _hybrid_search(
     pool_size = max(1, min(limit, 50)) * POOL_MULTIPLIER
     if table not in _TABLE_ALIASES:
         raise ValueError(f"Unknown table: {table!r}")
+    _VALID_ID_COLUMNS = {"match_id", "id"}
+    if id_column not in _VALID_ID_COLUMNS:
+        raise ValueError(f"Invalid id column: {id_column!r}")
     alias = _TABLE_ALIASES[table]
+    # filter_conditions are built by _build_match_filters /
+    # _build_player_season_filters / _extract_query_filters which produce
+    # hardcoded SQL fragments with %s placeholders — never user input.
     where = (" AND " + " AND ".join(filter_conditions)) if filter_conditions else ""
 
     emb_col = f"{alias}.{embedding_column}"

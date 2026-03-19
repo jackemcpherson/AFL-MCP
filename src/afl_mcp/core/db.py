@@ -10,15 +10,24 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import threading
 from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+__all__ = [
+    "get_pool",
+    "get_admin_connection",
+    "run_migrations",
+    "close_pool",
+]
+
 logger = logging.getLogger(__name__)
 
 _pool: ConnectionPool | None = None  # type: ignore[type-arg]
+_pool_lock = threading.Lock()
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
@@ -70,18 +79,20 @@ def get_pool() -> ConnectionPool:
     """
     global _pool
     if _pool is None:
-        from dotenv import load_dotenv
+        with _pool_lock:
+            if _pool is None:
+                from dotenv import load_dotenv
 
-        load_dotenv()
+                load_dotenv()
 
-        _pool = ConnectionPool(  # type: ignore[assignment]
-            _get_dsn(),
-            min_size=1,
-            max_size=5,
-            configure=_configure_pool_connection,
-            kwargs={"row_factory": dict_row},
-        )
-        atexit.register(close_pool)
+                _pool = ConnectionPool(  # type: ignore[assignment]
+                    _get_dsn(),
+                    min_size=1,
+                    max_size=5,
+                    configure=_configure_pool_connection,
+                    kwargs={"row_factory": dict_row},
+                )
+                atexit.register(close_pool)
     return _pool  # type: ignore[return-value]
 
 
@@ -97,7 +108,13 @@ def get_admin_connection() -> psycopg.Connection[dict]:
 
     load_dotenv()
 
-    return psycopg.connect(_get_dsn(), row_factory=dict_row)  # type: ignore[return-value]
+    conn = psycopg.connect(
+        _get_dsn(),
+        row_factory=dict_row,
+        connect_timeout=30,
+    )
+    conn.execute("SET statement_timeout = 300000")  # 5 minutes
+    return conn  # type: ignore[return-value]
 
 
 def run_migrations() -> list[str]:
@@ -106,6 +123,10 @@ def run_migrations() -> list[str]:
     Reads SQL files sorted by their numeric prefix (e.g. 001_, 002_),
     skips already-applied versions tracked in schema_migrations, and
     applies each remaining migration in its own committed transaction.
+
+    Each migration file may contain multiple SQL statements separated
+    by semicolons. Statements are executed individually within a single
+    transaction.
 
     Returns:
         List of filenames that were applied.
@@ -133,7 +154,12 @@ def run_migrations() -> list[str]:
                 continue
 
             sql = migration_file.read_text()
-            conn.execute(sql)  # type: ignore[arg-type]
+            # Execute each statement separately so multi-statement
+            # migration files work correctly with psycopg3.
+            for statement in sql.split(";"):
+                statement = statement.strip()
+                if statement:
+                    conn.execute(statement)  # type: ignore[arg-type]
             conn.execute(
                 "INSERT INTO schema_migrations (version, filename) VALUES (%s, %s)",
                 (version, migration_file.name),

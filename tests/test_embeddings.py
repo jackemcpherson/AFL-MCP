@@ -17,65 +17,68 @@ from afl_mcp.core.embeddings import (
 )
 
 
+def _make_player_row(**overrides: object) -> dict:
+    """Build a base player season row with sensible defaults.
+
+    Shared by both named and anonymous summary tests.
+
+    Args:
+        **overrides: Fields to override in the default row.
+
+    Returns:
+        A dict mimicking the aggregation query result.
+    """
+    base: dict = {
+        "first_name": "Patrick",
+        "surname": "Cripps",
+        "team_name": "Carlton",
+        "year": 2023,
+        "matches_played": 22,
+        "avg_disposals": 28.5,
+        "avg_kicks": 12.3,
+        "avg_marks": 4.1,
+        "avg_tackles": 6.7,
+        "total_goals": 15,
+        "avg_supercoach": 112.4,
+        "avg_fantasy": 105.2,
+    }
+    base.update(overrides)
+    return base
+
+
 class TestBuildPlayerSeasonSummary:
     """Verify player season summary text generation."""
 
-    def _make_row(self, **overrides: object) -> dict:
-        """Build a base player season row with sensible defaults.
-
-        Args:
-            **overrides: Fields to override in the default row.
-
-        Returns:
-            A dict mimicking the aggregation query result.
-        """
-        base: dict = {
-            "first_name": "Patrick",
-            "surname": "Cripps",
-            "team_name": "Carlton",
-            "year": 2023,
-            "matches_played": 22,
-            "avg_disposals": 28.5,
-            "avg_kicks": 12.3,
-            "avg_marks": 4.1,
-            "avg_tackles": 6.7,
-            "total_goals": 15,
-            "avg_supercoach": 112.4,
-            "avg_fantasy": 105.2,
-        }
-        base.update(overrides)
-        return base
-
     def test_includes_player_name_and_team(self) -> None:
         """Summary contains the player's name, team, and year."""
-        result = _build_player_season_summary(self._make_row())
+        result = _build_player_season_summary(_make_player_row())
         assert "Patrick Cripps" in result
         assert "Carlton" in result
         assert "2023" in result
 
     def test_includes_matches_played(self) -> None:
         """Summary states the number of matches played."""
-        result = _build_player_season_summary(self._make_row())
+        result = _build_player_season_summary(_make_player_row())
         assert "22 matches" in result
 
     def test_includes_disposals(self) -> None:
         """Summary includes average disposals when present."""
-        result = _build_player_season_summary(self._make_row())
+        result = _build_player_season_summary(_make_player_row())
         assert "28.5 disposals" in result
 
     def test_includes_goals_when_nonzero(self) -> None:
         """Summary mentions goals when the player kicked some."""
-        result = _build_player_season_summary(self._make_row(total_goals=30))
+        result = _build_player_season_summary(_make_player_row(total_goals=30))
         assert "30 goals" in result
 
     def test_omits_goals_when_zero(self) -> None:
         """Summary omits the goals line for players who kicked none."""
-        result = _build_player_season_summary(self._make_row(total_goals=0))
+        result = _build_player_season_summary(_make_player_row(total_goals=0))
         assert "goals" not in result.lower()
 
     def test_handles_none_stats_gracefully(self) -> None:
         """Summary works when optional stat fields are None."""
-        row = self._make_row(
+        row = _make_player_row(
             avg_disposals=None,
             avg_kicks=None,
             avg_marks=None,
@@ -89,7 +92,7 @@ class TestBuildPlayerSeasonSummary:
 
     def test_includes_supercoach_average(self) -> None:
         """Summary includes SuperCoach average when present."""
-        result = _build_player_season_summary(self._make_row())
+        result = _build_player_season_summary(_make_player_row())
         assert "112.4" in result
         assert "SuperCoach" in result
 
@@ -97,50 +100,32 @@ class TestBuildPlayerSeasonSummary:
 class TestBuildAnonPlayerSeasonSummary:
     """Verify anonymized player season summary text generation."""
 
-    def _make_row(self, **overrides: object) -> dict:
-        base: dict = {
-            "first_name": "Patrick",
-            "surname": "Cripps",
-            "team_name": "Carlton",
-            "year": 2023,
-            "matches_played": 22,
-            "avg_disposals": 28.5,
-            "avg_kicks": 12.3,
-            "avg_marks": 4.1,
-            "avg_tackles": 6.7,
-            "total_goals": 15,
-            "avg_supercoach": 112.4,
-            "avg_fantasy": 105.2,
-        }
-        base.update(overrides)
-        return base
-
     def test_excludes_player_name(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "Patrick" not in result
         assert "Cripps" not in result
 
     def test_excludes_team_name(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "Carlton" not in result
 
     def test_includes_year(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "2023" in result
 
     def test_includes_stats(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "28.5 disposals" in result
         assert "22 matches" in result
         assert "15 goals" in result
 
     def test_includes_supercoach(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "112.4" in result
         assert "SuperCoach" in result
 
     def test_includes_fantasy(self) -> None:
-        result = _build_anon_player_season_summary(self._make_row())
+        result = _build_anon_player_season_summary(_make_player_row())
         assert "105.2" in result
         assert "AFL Fantasy" in result
 
@@ -217,6 +202,13 @@ class TestBuildMatchSummary:
         """Falls back to round name string when round_number is None."""
         result = _build_match_summary(self._make_row(round="QF", round_number=None))
         assert "Round QF" in result
+
+    def test_handles_missing_keys_gracefully(self) -> None:
+        """Summary handles missing keys via .get() defaults."""
+        minimal_row: dict = {}
+        result = _build_match_summary(minimal_row)
+        assert "Unknown" in result
+        assert "0 points" in result
 
 
 class TestGenerateIncrementalEmbeddings:

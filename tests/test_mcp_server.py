@@ -70,3 +70,13 @@ class TestGetLastUpdated:
             result = get_last_updated()
             mock.assert_called_once()
             assert result == expected
+
+
+class TestHealthEndpoint:
+    """Verify the /health endpoint is defined."""
+
+    def test_health_function_exists(self) -> None:
+        """The health handler is registered on the MCP server."""
+        from afl_mcp.mcp_server.server import health
+
+        assert callable(health)

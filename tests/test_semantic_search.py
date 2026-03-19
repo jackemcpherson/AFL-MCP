@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from afl_mcp.core.semantic_search import (
     _build_match_filters,
     _build_player_season_filters,
     _expand_query,
     _extract_query_filters,
+    _get_stored_embedding,
+    _hybrid_search,
     search_afl,
 )
 
@@ -431,6 +435,73 @@ class TestExtractQueryFilters:
     def test_match_margin_ignored_for_player_season(self) -> None:
         conds, params = _extract_query_filters("margin 10", "player_season")
         assert conds == []
+
+
+class TestGetStoredEmbeddingValidation:
+    """Verify _get_stored_embedding validates the table parameter."""
+
+    def test_rejects_invalid_table(self) -> None:
+        """An unknown table name raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid table"):
+            _get_stored_embedding("evil_table", "id = %s", [1])
+
+    def test_accepts_match_summaries(self) -> None:
+        """match_summaries is a valid table (would fail on DB, but passes validation)."""
+        with patch(MOCK_POOL) as mock_pool:
+            mock_conn = MagicMock()
+            mock_conn.cursor.return_value.execute.return_value.fetchone.return_value = None
+            mock_pool.return_value.connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_pool.return_value.connection.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            with pytest.raises(ValueError, match="No embedding found"):
+                _get_stored_embedding("match_summaries", "match_id = %s", [1])
+
+
+class TestHybridSearchValidation:
+    """Verify _hybrid_search validates input parameters."""
+
+    def test_rejects_invalid_table(self) -> None:
+        with pytest.raises(ValueError, match="Unknown table"):
+            _hybrid_search(
+                query_vector=[0.1] * 384,
+                query_text=None,
+                table="evil_table",
+                id_column="id",
+                join_sql="",
+                filter_conditions=[],
+                filter_params=[],
+                limit=10,
+            )
+
+    def test_rejects_invalid_embedding_column(self) -> None:
+        with pytest.raises(ValueError, match="Invalid embedding column"):
+            _hybrid_search(
+                query_vector=[0.1] * 384,
+                query_text=None,
+                table="match_summaries",
+                id_column="match_id",
+                join_sql="",
+                filter_conditions=[],
+                filter_params=[],
+                limit=10,
+                embedding_column="evil_col",
+            )
+
+    def test_rejects_invalid_id_column(self) -> None:
+        with pytest.raises(ValueError, match="Invalid id column"):
+            _hybrid_search(
+                query_vector=[0.1] * 384,
+                query_text=None,
+                table="match_summaries",
+                id_column="evil_id",
+                join_sql="",
+                filter_conditions=[],
+                filter_params=[],
+                limit=10,
+            )
 
 
 class TestMcpDelegation:

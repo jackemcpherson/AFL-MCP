@@ -6,10 +6,18 @@ execute_sql, get_schema, get_ladder, search_afl, get_last_updated.
 
 from __future__ import annotations
 
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-
 from fastmcp import FastMCP
+
+try:
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+except ImportError:  # pragma: no cover
+    # starlette comes transitively via fastmcp; this guard makes the
+    # dependency explicit so upgrades don't silently break imports.
+    raise ImportError(
+        "starlette is required for the MCP server health endpoint. "
+        "Install it with: pip install starlette"
+    )
 
 mcp = FastMCP("AFL-MCP")
 
