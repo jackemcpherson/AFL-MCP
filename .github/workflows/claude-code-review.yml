@@ -3,26 +3,27 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Custom review prompt'
+        required: false
+        default: >-
+          Perform a thorough baseline code review of the entire codebase.
+          Review all Python files under src/ and tests/ for: code quality,
+          security issues, type safety, error handling, performance concerns,
+          adherence to project conventions in CLAUDE.md, and test coverage gaps.
+          Create a GitHub issue summarising your findings, grouped by severity
+          (critical, warning, suggestion). Title the issue
+          "Baseline Code Review — <date>".
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
-      issues: read
+      issues: write
       id-token: write
 
     steps:
@@ -31,8 +32,8 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Run Claude Code Review
-        id: claude-review
+      - name: Run Claude Code Review (PR)
+        if: github.event_name == 'pull_request'
         uses: anthropics/claude-code-action@v1
         with:
           model: claude-opus-4-6
@@ -40,6 +41,12 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+
+      - name: Run Claude Code Review (Full Codebase)
+        if: github.event_name == 'workflow_dispatch'
+        uses: anthropics/claude-code-action@v1
+        with:
+          model: claude-opus-4-6
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ github.event.inputs.prompt }}
 
