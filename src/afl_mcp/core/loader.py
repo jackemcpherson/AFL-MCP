@@ -1158,8 +1158,7 @@ def _load_player_match_stats(
             continue
 
         stat_values = [
-            parser(s.get(csv_col, ""))
-            for csv_col, _, parser in _PMS_COLUMNS
+            parser(s.get(csv_col, "")) for csv_col, _, parser in _PMS_COLUMNS
         ]
 
         conn.execute(
