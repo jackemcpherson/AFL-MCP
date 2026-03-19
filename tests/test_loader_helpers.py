@@ -281,7 +281,7 @@ def _write_results_csv(path: Path, dates: list[str]) -> None:
 def _mock_pool_with_max_date(max_date: str | None) -> MagicMock:
     """Build a mock pool whose connection returns the given max date."""
     mock_cursor = MagicMock()
-    mock_cursor.fetchone.return_value = (max_date,)
+    mock_cursor.fetchone.return_value = {"max": max_date}
     mock_conn = MagicMock()
     mock_conn.execute.return_value = mock_cursor
     mock_pool = MagicMock()

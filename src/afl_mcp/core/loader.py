@@ -1591,7 +1591,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
         cur = conn.execute("SELECT MAX(date) FROM matches")
         row = cur.fetchone()
 
-    db_max = row[0] if row else None  # type: ignore[index]
+    db_max = row["max"] if row else None
     db_latest = str(db_max) if db_max else None
 
     if db_latest is None:
