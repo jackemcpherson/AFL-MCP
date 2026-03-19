@@ -185,8 +185,7 @@ def _remap_columns(
         List of row dicts with remapped column names.
     """
     return [
-        {dst: row[src] for src, dst in column_map.items() if src in row}
-        for row in rows
+        {dst: row[src] for src, dst in column_map.items() if src in row} for row in rows
     ]
 
 
