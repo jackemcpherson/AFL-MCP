@@ -185,7 +185,8 @@ def _remap_columns(
         List of row dicts with remapped column names.
     """
     return [
-        {dst: row[src] for src, dst in column_map.items() if src in row} for row in rows
+        {dst: row[src] for src, dst in column_map.items() if src in row}
+        for row in rows
     ]
 
 
@@ -1230,7 +1231,7 @@ def _enrich_from_fryzigg(
         if player_id is None:
             continue
 
-        values: list[int | float | None] = [
+        values: list[int | float | str | None] = [
             parser(s.get(csv_col, ""))
             for csv_col, _, parser in FRYZIGG_ENRICHMENT_COLUMNS
         ]
