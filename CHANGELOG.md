@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-03-19
+
+### Fixed
+
+- Duplicate player entries in production database caused by CD_I (AFL API) player IDs being inserted into the `external_id` column instead of `external_afl_player_id`
+- Player loader now self-heals misplaced CD_I IDs found in `external_id` during Pass 2, moving them to `external_afl_player_id` and linking to the correct player record
+- Added whitespace stripping on `player_id` values during CSV ingestion to prevent ID routing errors
+
 ## [1.1.0] - 2026-03-16
 
 ### Added

@@ -496,7 +496,7 @@ def _load_players(
     # Deduplicate rows per player ID, preferring rows with physical stats.
     seen: dict[str, dict[str, str]] = {}
     for row in stats_data:
-        pid = row.get("player_id", "")
+        pid = row.get("player_id", "").strip()
         if not pid:
             continue
         if pid not in seen:
@@ -558,6 +558,23 @@ def _load_players(
         ).fetchone()
         if existing is not None:
             mapping[pid] = existing["id"]
+            continue
+
+        # Check if CD_I ID was previously stored in external_id by mistake.
+        misplaced = conn.execute(
+            """SELECT id FROM players WHERE external_id = %s""",
+            (pid,),
+        ).fetchone()
+        if misplaced is not None:
+            # Fix the misplaced ID: move it to external_afl_player_id.
+            conn.execute(
+                """UPDATE players
+                   SET external_afl_player_id = external_id,
+                       external_id = NULL
+                   WHERE id = %s AND external_afl_player_id IS NULL""",
+                (misplaced["id"],),
+            )
+            mapping[pid] = misplaced["id"]
             continue
 
         # Try to find existing player by name.
