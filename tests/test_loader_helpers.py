@@ -293,7 +293,7 @@ def _mock_pool_with_max_date(
         year_counts = {}
 
     max_date_cursor = MagicMock()
-    max_date_cursor.fetchone.return_value = {"max": max_date}
+    max_date_cursor.fetchone.return_value = {"max_date": max_date}
 
     year_count_rows = [{"year": y, "cnt": c} for y, c in year_counts.items()]
     year_count_cursor = MagicMock()

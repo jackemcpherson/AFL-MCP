@@ -209,7 +209,7 @@ def _embed_and_upsert(
         for summary, row, embedding in zip(summaries, rows, embeddings)
     ]
     cur = conn.cursor()
-    cur.executemany(upsert_sql, params_list)
+    cur.executemany(upsert_sql, params_list)  # type: ignore[arg-type]
     conn.commit()
 
     return len(rows)

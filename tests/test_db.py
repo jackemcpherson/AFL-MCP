@@ -73,7 +73,7 @@ class TestRunMigrations:
         self, mock_admin: MagicMock, tmp_path: object
     ) -> None:
         """Migration files with multiple statements are split on semicolons."""
-        from afl_mcp.core.db import run_migrations, MIGRATIONS_DIR
+        from afl_mcp.core.db import run_migrations
 
         mock_conn = MagicMock()
         mock_admin.return_value.__enter__ = MagicMock(return_value=mock_conn)

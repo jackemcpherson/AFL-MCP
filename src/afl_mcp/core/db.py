@@ -110,7 +110,7 @@ def get_admin_connection() -> psycopg.Connection[dict]:
 
     conn = psycopg.connect(
         _get_dsn(),
-        row_factory=dict_row,
+        row_factory=dict_row,  # type: ignore[arg-type]
         connect_timeout=30,
     )
     conn.execute("SET statement_timeout = 300000")  # 5 minutes

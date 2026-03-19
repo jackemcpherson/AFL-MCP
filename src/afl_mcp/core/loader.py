@@ -1160,7 +1160,7 @@ def _load_player_match_stats(
         stat_values = [parser(s.get(csv_col, "")) for csv_col, _, parser in _PMS_COLUMNS]
 
         conn.execute(
-            _PMS_INSERT_SQL,
+            _PMS_INSERT_SQL,  # type: ignore[arg-type]
             (match_id, player_id, team_id, *stat_values),
         )
         count += 1
@@ -1234,7 +1234,7 @@ def _enrich_from_fryzigg(
             for csv_col, _, parser in FRYZIGG_ENRICHMENT_COLUMNS
         ]
         values.extend([match_id, player_id])
-        conn.execute(enrichment_sql, values)
+        conn.execute(enrichment_sql, values)  # type: ignore[arg-type]
         count += 1
 
         if count % 5000 == 0:

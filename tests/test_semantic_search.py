@@ -449,7 +449,10 @@ class TestGetStoredEmbeddingValidation:
         """match_summaries is a valid table (would fail on DB, but passes validation)."""
         with patch(MOCK_POOL) as mock_pool:
             mock_conn = MagicMock()
-            mock_conn.cursor.return_value.execute.return_value.fetchone.return_value = None
+            mock_cur = MagicMock()
+            mock_cur.execute.return_value.fetchone.return_value = None
+            mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+            mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
             mock_pool.return_value.connection.return_value.__enter__ = MagicMock(
                 return_value=mock_conn
             )

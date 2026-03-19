@@ -6,9 +6,6 @@ require a database connection or Rich console.
 
 from __future__ import annotations
 
-import io
-import json
-
 from afl_mcp.cli.main import _is_numeric, _print_table, _print_json, _print_csv, _output, OutputFormat
 
 
