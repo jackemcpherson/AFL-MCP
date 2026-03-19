@@ -11,7 +11,13 @@ import re
 
 from afl_mcp.core.db import get_pool
 
-__all__ = ["execute_query", "get_schema_info", "get_foreign_keys", "get_schema_dict", "get_last_updated"]
+__all__ = [
+    "execute_query",
+    "get_schema_info",
+    "get_foreign_keys",
+    "get_schema_dict",
+    "get_last_updated",
+]
 
 # Application-layer regex guard for write operations.
 #

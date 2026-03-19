@@ -282,7 +282,7 @@ def _bool_from_str(val: str) -> bool | None:
     return val.upper() == "TRUE"
 
 
-_ParseFn = Callable[[str], int | float | None]
+_ParseFn = Callable[[str], int | float | str | None]
 
 FRYZIGG_ENRICHMENT_COLUMNS: list[tuple[str, str, _ParseFn]] = [
     ("pressure_acts", "pressure_acts", _int_or_none),
@@ -1157,7 +1157,10 @@ def _load_player_match_stats(
         if team_id is None:
             continue
 
-        stat_values = [parser(s.get(csv_col, "")) for csv_col, _, parser in _PMS_COLUMNS]
+        stat_values = [
+            parser(s.get(csv_col, ""))
+            for csv_col, _, parser in _PMS_COLUMNS
+        ]
 
         conn.execute(
             _PMS_INSERT_SQL,  # type: ignore[arg-type]
@@ -1200,9 +1203,7 @@ def _enrich_from_fryzigg(
     # Pre-validate db_col values against known column names to prevent
     # SQL injection if FRYZIGG_ENRICHMENT_COLUMNS is ever populated from
     # external config. All values must be simple identifiers.
-    _VALID_ENRICHMENT_DB_COLS = {
-        db_col for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS
-    }
+    _VALID_ENRICHMENT_DB_COLS = {db_col for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS}
     for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS:
         if not db_col.isidentifier():
             raise ValueError(f"Invalid enrichment column name: {db_col!r}")
@@ -1477,7 +1478,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
         Dict with ``has_new_data`` (bool), ``csv_latest_date``,
         ``db_latest_date``, and ``reason`` (human-readable explanation).
     """
-    from afl_mcp.core.db import get_pool  # noqa: F811 — lazy import to avoid circular deps
+    from afl_mcp.core.db import get_pool  # noqa: F811
 
     data_dir = Path(data_dir)
     sources = _detect_source_files(data_dir)

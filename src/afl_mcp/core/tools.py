@@ -97,8 +97,9 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
         "        CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws"
         "    FROM matches m"
         "    JOIN seasons s ON s.id = m.season_id"
-        "    WHERE s.year = %s AND m.round_type = 'Regular'" + round_filter +
-        "    UNION ALL"
+        "    WHERE s.year = %s AND m.round_type = 'Regular'"
+        + round_filter
+        + "    UNION ALL"
         "    SELECT"
         "        m.away_team_id AS team_id,"
         "        m.away_points AS points_for,"
@@ -108,8 +109,9 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
         "        CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws"
         "    FROM matches m"
         "    JOIN seasons s ON s.id = m.season_id"
-        "    WHERE s.year = %s AND m.round_type = 'Regular'" + round_filter +
-        "),"
+        "    WHERE s.year = %s AND m.round_type = 'Regular'"
+        + round_filter
+        + "),"
         " ladder AS ("
         "    SELECT"
         "        t.name AS team,"

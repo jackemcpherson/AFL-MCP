@@ -91,9 +91,7 @@ def _print_table(rows: list[dict], title: str | None = None) -> None:
     # Check multiple rows to determine numeric columns, not just the first
     # (the first row may have None for a column that is numeric in others).
     sample = rows[:10]
-    numeric_cols = {
-        k for k in keys if any(_is_numeric(row[k]) for row in sample)
-    }
+    numeric_cols = {k for k in keys if any(_is_numeric(row[k]) for row in sample)}
 
     for key in keys:
         justify = "right" if key in numeric_cols else "left"

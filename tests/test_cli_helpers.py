@@ -6,7 +6,14 @@ require a database connection or Rich console.
 
 from __future__ import annotations
 
-from afl_mcp.cli.main import _is_numeric, _print_table, _print_json, _print_csv, _output, OutputFormat
+from afl_mcp.cli.main import (
+    OutputFormat,
+    _is_numeric,
+    _output,
+    _print_csv,
+    _print_json,
+    _print_table,
+)
 
 
 class TestIsNumeric:

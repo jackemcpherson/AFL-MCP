@@ -275,7 +275,11 @@ def _match_params(row: dict, summary: str, embedding: list[float]) -> tuple:
     return (row["match_id"], summary, embedding)
 
 
-def _embed_player_seasons(conn: psycopg.Connection[dict], rows: list[dict], label: str) -> int:
+def _embed_player_seasons(
+    conn: psycopg.Connection[dict],
+    rows: list[dict],
+    label: str,
+) -> int:
     """Build named + anonymous summaries, embed both, and upsert.
 
     Player seasons get two embeddings: the named one (for text query
