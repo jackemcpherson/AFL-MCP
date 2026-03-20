@@ -1544,6 +1544,9 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
 
     Reads the highest-priority results CSV, finds its latest match date,
     and compares against the most recent match date in the database.
+    Also compares match counts per season to detect gaps where the DB
+    is missing matches on dates it already covers (e.g. a game added
+    to the source after later games were already loaded).
 
     Args:
         data_dir: Path to directory containing the CSV files.
@@ -1586,13 +1589,30 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
             "reason": "No dates found in CSV",
         }
 
+    # Count CSV matches per season year for gap detection.
+    csv_counts_by_year: dict[str, int] = {}
+    for d in csv_dates:
+        year = d[:4]
+        csv_counts_by_year[year] = csv_counts_by_year.get(year, 0) + 1
+
     pool = get_pool()
     with pool.connection() as conn:
         cur = conn.execute("SELECT MAX(date) FROM matches")
         row = cur.fetchone()
+        db_max = row["max"] if row else None
+        db_latest = str(db_max) if db_max else None
 
-    db_max = row["max"] if row else None
-    db_latest = str(db_max) if db_max else None
+        # Fetch DB match counts per season year for comparison.
+        db_counts_by_year: dict[str, int] = {}
+        if db_latest is not None:
+            year_rows = conn.execute(
+                """SELECT EXTRACT(YEAR FROM m.date)::text AS year,
+                          COUNT(*) AS cnt
+                   FROM matches m
+                   GROUP BY 1"""
+            ).fetchall()
+            for yr in year_rows:
+                db_counts_by_year[yr["year"]] = yr["cnt"]
 
     if db_latest is None:
         return {
@@ -1602,15 +1622,35 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
             "reason": "Database is empty",
         }
 
-    has_new_data = csv_latest > db_latest
-    if has_new_data:
-        reason = f"CSV has matches up to {csv_latest}, DB only has up to {db_latest}"
-    else:
-        reason = f"DB is up to date ({db_latest})"
+    # Primary check: CSV has matches on a newer date.
+    if csv_latest > db_latest:
+        return {
+            "has_new_data": True,
+            "csv_latest_date": csv_latest,
+            "db_latest_date": db_latest,
+            "reason": f"CSV has matches up to {csv_latest}, DB only has up to {db_latest}",
+        }
+
+    # Secondary check: CSV has more matches than DB for any season year.
+    # This catches gaps where the DB is missing matches on dates it already
+    # covers (e.g. a game that appeared in the source after later games
+    # were loaded, so the date-only check would miss it).
+    for year, csv_count in csv_counts_by_year.items():
+        db_count = db_counts_by_year.get(year, 0)
+        if csv_count > db_count:
+            return {
+                "has_new_data": True,
+                "csv_latest_date": csv_latest,
+                "db_latest_date": db_latest,
+                "reason": (
+                    f"CSV has {csv_count} matches for {year} but DB only has "
+                    f"{db_count} (latest date {db_latest})"
+                ),
+            }
 
     return {
-        "has_new_data": has_new_data,
+        "has_new_data": False,
         "csv_latest_date": csv_latest,
         "db_latest_date": db_latest,
-        "reason": reason,
+        "reason": f"DB is up to date ({db_latest})",
     }

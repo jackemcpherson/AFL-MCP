@@ -278,12 +278,30 @@ def _write_results_csv(path: Path, dates: list[str]) -> None:
             f.write(f"{d},Richmond,Carlton,MCG,R1,100,80\n")
 
 
-def _mock_pool_with_max_date(max_date: str | None) -> MagicMock:
-    """Build a mock pool whose connection returns the given max date."""
-    mock_cursor = MagicMock()
-    mock_cursor.fetchone.return_value = {"max": max_date}
+def _mock_pool_with_max_date(
+    max_date: str | None,
+    year_counts: dict[str, int] | None = None,
+) -> MagicMock:
+    """Build a mock pool whose connection returns the given max date and counts.
+
+    Args:
+        max_date: Value for ``SELECT MAX(date) FROM matches``.
+        year_counts: Mapping of year string to match count for the
+            per-year count query.  Defaults to empty if *max_date* is None.
+    """
+    if year_counts is None:
+        year_counts = {}
+
+    max_date_cursor = MagicMock()
+    max_date_cursor.fetchone.return_value = {"max": max_date}
+
+    year_count_rows = [{"year": y, "cnt": c} for y, c in year_counts.items()]
+    year_count_cursor = MagicMock()
+    year_count_cursor.fetchall.return_value = year_count_rows
+
     mock_conn = MagicMock()
-    mock_conn.execute.return_value = mock_cursor
+    mock_conn.execute.side_effect = [max_date_cursor, year_count_cursor]
+
     mock_pool = MagicMock()
     mock_pool.connection.return_value.__enter__ = lambda _: mock_conn
     mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
@@ -299,7 +317,9 @@ class TestCheckFreshness:
     ) -> None:
         """CSV with a newer date signals new data available."""
         _write_results_csv(tmp_path / "results.csv", ["2026-03-15", "2026-03-22"])
-        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15")
+        mock_get_pool.return_value = _mock_pool_with_max_date(
+            "2026-03-15", {"2026": 1}
+        )
 
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is True
@@ -307,15 +327,41 @@ class TestCheckFreshness:
         assert result["db_latest_date"] == "2026-03-15"
 
     @patch("afl_mcp.core.db.get_pool")
-    def test_no_new_data_when_dates_equal(
+    def test_no_new_data_when_dates_and_counts_equal(
         self, mock_get_pool: MagicMock, tmp_path: Path
     ) -> None:
-        """CSV with same latest date as DB signals no new data."""
+        """CSV with same latest date and match count as DB signals no new data."""
         _write_results_csv(tmp_path / "results.csv", ["2026-03-15"])
-        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15")
+        mock_get_pool.return_value = _mock_pool_with_max_date(
+            "2026-03-15", {"2026": 1}
+        )
 
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is False
+
+    @patch("afl_mcp.core.db.get_pool")
+    def test_new_data_when_csv_has_more_matches(
+        self, mock_get_pool: MagicMock, tmp_path: Path
+    ) -> None:
+        """CSV with same latest date but more matches signals new data.
+
+        This covers the gap scenario where the DB loaded later games
+        before an earlier game appeared in the source (e.g. a Thursday
+        night opener that fitzRoy published after Friday/Saturday games).
+        """
+        _write_results_csv(
+            tmp_path / "results.csv",
+            ["2026-03-19", "2026-03-20", "2026-03-22"],
+        )
+        # DB has same latest date but only 2 of the 3 matches.
+        mock_get_pool.return_value = _mock_pool_with_max_date(
+            "2026-03-22", {"2026": 2}
+        )
+
+        result = check_freshness(tmp_path)
+        assert result["has_new_data"] is True
+        assert "3 matches" in result["reason"]
+        assert "2 " in result["reason"]
 
     @patch("afl_mcp.core.db.get_pool")
     def test_new_data_when_db_empty(
