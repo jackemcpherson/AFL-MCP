@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-20
+
+### Added
+
+- Quarter-by-quarter match scores (16 new columns: home/away Q1-Q4 goals and behinds)
+- Match weather data from AFL API (temperature, weather type)
+- Match local start time from AFL API
+- Match rushed behinds and minutes in front from AFL API
+- 13 new player stat columns from AFL API: goal accuracy, goal efficiency, shot efficiency, kick efficiency, kick-to-handball ratio, contested possession rate, contest def loss percentage, contest off wins percentage, centre bounce attendances, kick-ins, kick-ins play-on, interchange counts, total possessions
+- SuperCoach score enrichment from fryzigg source
+- FootyWire results now capture goals, behinds, margin, and round number (previously dropped)
+
+### Fixed
+
+- Match margin now computed and stored during AFL API load (was always NULL)
+- Nested AFL API period scores flattened in R extraction before CSV export
+
 ## [1.1.2] - 2026-03-20
 
 ### Fixed
