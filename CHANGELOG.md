@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-20
+
+### Fixed
+
+- Removed broken Claude Code Review workflow that failed due to authentication issues
+- Refactored connection pool and admin connection handling with proper type narrowing and error messages
+- Improved embedding and semantic search modules with explicit error handling and type safety
+- Simplified loader internals: flattened nested comprehensions, extracted helper functions, reduced cognitive complexity
+- Hardened PAV calculation with bounds checking and explicit type annotations
+- Improved SQL query safety with consistent error handling patterns
+- Cleaned up MCP server tool registration with better type annotations
+
+### Added
+
+- Comprehensive test coverage for CLI helpers, database module, embeddings, MCP server, PAV calculations, and semantic search
+- Query safety tests for additional SQL injection patterns
+
 ## [1.1.1] - 2026-03-19
 
 ### Fixed
