@@ -18,6 +18,8 @@ import psycopg
 
 from afl_mcp.core.db import get_admin_connection
 
+__all__ = ["load_all", "check_freshness"]
+
 logger = logging.getLogger(__name__)
 
 TEAM_NAME_MAP: dict[str, str] = {
@@ -280,7 +282,7 @@ def _bool_from_str(val: str) -> bool | None:
     return val.upper() == "TRUE"
 
 
-_ParseFn = Callable[[str], int | float | None]
+_ParseFn = Callable[[str], int | float | str | None]
 
 FRYZIGG_ENRICHMENT_COLUMNS: list[tuple[str, str, _ParseFn]] = [
     ("pressure_acts", "pressure_acts", _int_or_none),
@@ -1045,6 +1047,76 @@ def _build_match_lookup(
     return lookup
 
 
+_PMS_COLUMNS: list[tuple[str, str, _ParseFn]] = [
+    ("guernsey_number", "guernsey_number", _int_or_none),
+    ("player_position", "player_position", _str_or_none),
+    ("subbed", "subbed", _str_or_none),
+    ("time_on_ground_percentage", "time_on_ground_pct", _float_or_none),
+    ("kicks", "kicks", _int_or_none),
+    ("handballs", "handballs", _int_or_none),
+    ("disposals", "disposals", _int_or_none),
+    ("effective_disposals", "effective_disposals", _int_or_none),
+    ("disposal_efficiency_percentage", "disposal_efficiency_pct", _float_or_none),
+    ("marks", "marks", _int_or_none),
+    ("bounces", "bounces", _int_or_none),
+    ("tackles", "tackles", _int_or_none),
+    ("one_percenters", "one_percenters", _int_or_none),
+    ("clangers", "clangers", _int_or_none),
+    ("contested_possessions", "contested_possessions", _int_or_none),
+    ("uncontested_possessions", "uncontested_possessions", _int_or_none),
+    ("goals", "goals", _int_or_none),
+    ("behinds", "behinds", _int_or_none),
+    ("goal_assists", "goal_assists", _int_or_none),
+    ("shots_at_goal", "shots_at_goal", _int_or_none),
+    ("score_involvements", "score_involvements", _int_or_none),
+    ("score_launches", "score_launches", _int_or_none),
+    ("centre_clearances", "centre_clearances", _int_or_none),
+    ("stoppage_clearances", "stoppage_clearances", _int_or_none),
+    ("clearances", "clearances", _int_or_none),
+    ("contested_marks", "contested_marks", _int_or_none),
+    ("marks_inside_fifty", "marks_inside_fifty", _int_or_none),
+    ("intercept_marks", "intercept_marks", _int_or_none),
+    ("marks_on_lead", "marks_on_lead", _int_or_none),
+    ("free_kicks_for", "free_kicks_for", _int_or_none),
+    ("free_kicks_against", "free_kicks_against", _int_or_none),
+    ("hitouts", "hitouts", _int_or_none),
+    ("hitouts_to_advantage", "hitouts_to_advantage", _int_or_none),
+    ("hitout_win_percentage", "hitout_win_pct", _float_or_none),
+    ("ruck_contests", "ruck_contests", _int_or_none),
+    ("inside_fifties", "inside_fifties", _int_or_none),
+    ("rebounds", "rebounds", _int_or_none),
+    ("turnovers", "turnovers", _int_or_none),
+    ("intercepts", "intercepts", _int_or_none),
+    ("metres_gained", "metres_gained", _int_or_none),
+    ("pressure_acts", "pressure_acts", _int_or_none),
+    ("def_half_pressure_acts", "def_half_pressure_acts", _int_or_none),
+    ("tackles_inside_fifty", "tackles_inside_fifty", _int_or_none),
+    ("spoils", "spoils", _int_or_none),
+    ("contest_def_losses", "contest_def_losses", _int_or_none),
+    ("contest_def_one_on_ones", "contest_def_one_on_ones", _int_or_none),
+    ("contest_off_one_on_ones", "contest_off_one_on_ones", _int_or_none),
+    ("contest_off_wins", "contest_off_wins", _int_or_none),
+    ("effective_kicks", "effective_kicks", _int_or_none),
+    ("ground_ball_gets", "ground_ball_gets", _int_or_none),
+    ("f50_ground_ball_gets", "f50_ground_ball_gets", _int_or_none),
+    ("brownlow_votes", "brownlow_votes", _int_or_none),
+    ("rating_points", "rating_points", _float_or_none),
+    ("afl_fantasy_score", "afl_fantasy_score", _int_or_none),
+    ("supercoach_score", "supercoach_score", _int_or_none),
+]
+
+# Pre-build SQL from column list to keep it maintainable and aligned.
+_PMS_DB_COLS = [db_col for _, db_col, _ in _PMS_COLUMNS]
+_PMS_INSERT_SQL = (
+    "INSERT INTO player_match_stats (match_id, player_id, team_id, "
+    + ", ".join(_PMS_DB_COLS)
+    + ") VALUES ("
+    + ", ".join(["%s"] * (3 + len(_PMS_DB_COLS)))
+    + ") ON CONFLICT (match_id, player_id) DO UPDATE SET "
+    + ", ".join(f"{col} = EXCLUDED.{col}" for col in ["team_id", *_PMS_DB_COLS])
+)
+
+
 def _load_player_match_stats(
     conn: psycopg.Connection[dict],
     stats_data: list[dict[str, str]],
@@ -1085,171 +1157,13 @@ def _load_player_match_stats(
         if team_id is None:
             continue
 
+        stat_values = [
+            parser(s.get(csv_col, "")) for csv_col, _, parser in _PMS_COLUMNS
+        ]
+
         conn.execute(
-            """INSERT INTO player_match_stats (
-                   match_id, player_id, team_id,
-                   guernsey_number, player_position, subbed,
-                   time_on_ground_pct,
-                   kicks, handballs, disposals, effective_disposals,
-                   disposal_efficiency_pct, marks, bounces, tackles,
-                   one_percenters, clangers,
-                   contested_possessions, uncontested_possessions,
-                   goals, behinds, goal_assists, shots_at_goal,
-                   score_involvements, score_launches,
-                   centre_clearances, stoppage_clearances, clearances,
-                   contested_marks, marks_inside_fifty, intercept_marks, marks_on_lead,
-                   free_kicks_for, free_kicks_against,
-                   hitouts, hitouts_to_advantage, hitout_win_pct, ruck_contests,
-                   inside_fifties, rebounds, turnovers, intercepts, metres_gained,
-                   pressure_acts, def_half_pressure_acts,
-                   tackles_inside_fifty, spoils,
-                   contest_def_losses, contest_def_one_on_ones,
-                   contest_off_one_on_ones, contest_off_wins,
-                   effective_kicks,
-                   ground_ball_gets, f50_ground_ball_gets,
-                   brownlow_votes, rating_points,
-                   afl_fantasy_score, supercoach_score
-               ) VALUES (
-                   %s, %s, %s,
-                   %s, %s, %s,
-                   %s,
-                   %s, %s, %s, %s,
-                   %s, %s, %s, %s,
-                   %s, %s,
-                   %s, %s,
-                   %s, %s, %s, %s,
-                   %s, %s,
-                   %s, %s, %s,
-                   %s, %s, %s, %s,
-                   %s, %s,
-                   %s, %s, %s, %s,
-                   %s, %s, %s, %s, %s,
-                   %s, %s,
-                   %s, %s,
-                   %s, %s,
-                   %s, %s,
-                   %s,
-                   %s, %s,
-                   %s, %s,
-                   %s, %s
-               )
-               ON CONFLICT (match_id, player_id) DO UPDATE SET
-                   team_id = EXCLUDED.team_id,
-                   guernsey_number = EXCLUDED.guernsey_number,
-                   player_position = EXCLUDED.player_position,
-                   subbed = EXCLUDED.subbed,
-                   time_on_ground_pct = EXCLUDED.time_on_ground_pct,
-                   kicks = EXCLUDED.kicks,
-                   handballs = EXCLUDED.handballs,
-                   disposals = EXCLUDED.disposals,
-                   effective_disposals = EXCLUDED.effective_disposals,
-                   disposal_efficiency_pct = EXCLUDED.disposal_efficiency_pct,
-                   marks = EXCLUDED.marks,
-                   bounces = EXCLUDED.bounces,
-                   tackles = EXCLUDED.tackles,
-                   one_percenters = EXCLUDED.one_percenters,
-                   clangers = EXCLUDED.clangers,
-                   contested_possessions = EXCLUDED.contested_possessions,
-                   uncontested_possessions = EXCLUDED.uncontested_possessions,
-                   goals = EXCLUDED.goals,
-                   behinds = EXCLUDED.behinds,
-                   goal_assists = EXCLUDED.goal_assists,
-                   shots_at_goal = EXCLUDED.shots_at_goal,
-                   score_involvements = EXCLUDED.score_involvements,
-                   score_launches = EXCLUDED.score_launches,
-                   centre_clearances = EXCLUDED.centre_clearances,
-                   stoppage_clearances = EXCLUDED.stoppage_clearances,
-                   clearances = EXCLUDED.clearances,
-                   contested_marks = EXCLUDED.contested_marks,
-                   marks_inside_fifty = EXCLUDED.marks_inside_fifty,
-                   intercept_marks = EXCLUDED.intercept_marks,
-                   marks_on_lead = EXCLUDED.marks_on_lead,
-                   free_kicks_for = EXCLUDED.free_kicks_for,
-                   free_kicks_against = EXCLUDED.free_kicks_against,
-                   hitouts = EXCLUDED.hitouts,
-                   hitouts_to_advantage = EXCLUDED.hitouts_to_advantage,
-                   hitout_win_pct = EXCLUDED.hitout_win_pct,
-                   ruck_contests = EXCLUDED.ruck_contests,
-                   inside_fifties = EXCLUDED.inside_fifties,
-                   rebounds = EXCLUDED.rebounds,
-                   turnovers = EXCLUDED.turnovers,
-                   intercepts = EXCLUDED.intercepts,
-                   metres_gained = EXCLUDED.metres_gained,
-                   pressure_acts = EXCLUDED.pressure_acts,
-                   def_half_pressure_acts = EXCLUDED.def_half_pressure_acts,
-                   tackles_inside_fifty = EXCLUDED.tackles_inside_fifty,
-                   spoils = EXCLUDED.spoils,
-                   contest_def_losses = EXCLUDED.contest_def_losses,
-                   contest_def_one_on_ones = EXCLUDED.contest_def_one_on_ones,
-                   contest_off_one_on_ones = EXCLUDED.contest_off_one_on_ones,
-                   contest_off_wins = EXCLUDED.contest_off_wins,
-                   effective_kicks = EXCLUDED.effective_kicks,
-                   ground_ball_gets = EXCLUDED.ground_ball_gets,
-                   f50_ground_ball_gets = EXCLUDED.f50_ground_ball_gets,
-                   brownlow_votes = EXCLUDED.brownlow_votes,
-                   rating_points = EXCLUDED.rating_points,
-                   afl_fantasy_score = EXCLUDED.afl_fantasy_score,
-                   supercoach_score = EXCLUDED.supercoach_score""",
-            (
-                match_id,
-                player_id,
-                team_id,
-                _int_or_none(s.get("guernsey_number", "")),
-                _str_or_none(s.get("player_position", "")),
-                _str_or_none(s.get("subbed", "")),
-                _float_or_none(s.get("time_on_ground_percentage", "")),
-                _int_or_none(s.get("kicks", "")),
-                _int_or_none(s.get("handballs", "")),
-                _int_or_none(s.get("disposals", "")),
-                _int_or_none(s.get("effective_disposals", "")),
-                _float_or_none(s.get("disposal_efficiency_percentage", "")),
-                _int_or_none(s.get("marks", "")),
-                _int_or_none(s.get("bounces", "")),
-                _int_or_none(s.get("tackles", "")),
-                _int_or_none(s.get("one_percenters", "")),
-                _int_or_none(s.get("clangers", "")),
-                _int_or_none(s.get("contested_possessions", "")),
-                _int_or_none(s.get("uncontested_possessions", "")),
-                _int_or_none(s.get("goals", "")),
-                _int_or_none(s.get("behinds", "")),
-                _int_or_none(s.get("goal_assists", "")),
-                _int_or_none(s.get("shots_at_goal", "")),
-                _int_or_none(s.get("score_involvements", "")),
-                _int_or_none(s.get("score_launches", "")),
-                _int_or_none(s.get("centre_clearances", "")),
-                _int_or_none(s.get("stoppage_clearances", "")),
-                _int_or_none(s.get("clearances", "")),
-                _int_or_none(s.get("contested_marks", "")),
-                _int_or_none(s.get("marks_inside_fifty", "")),
-                _int_or_none(s.get("intercept_marks", "")),
-                _int_or_none(s.get("marks_on_lead", "")),
-                _int_or_none(s.get("free_kicks_for", "")),
-                _int_or_none(s.get("free_kicks_against", "")),
-                _int_or_none(s.get("hitouts", "")),
-                _int_or_none(s.get("hitouts_to_advantage", "")),
-                _float_or_none(s.get("hitout_win_percentage", "")),
-                _int_or_none(s.get("ruck_contests", "")),
-                _int_or_none(s.get("inside_fifties", "")),
-                _int_or_none(s.get("rebounds", "")),
-                _int_or_none(s.get("turnovers", "")),
-                _int_or_none(s.get("intercepts", "")),
-                _int_or_none(s.get("metres_gained", "")),
-                _int_or_none(s.get("pressure_acts", "")),
-                _int_or_none(s.get("def_half_pressure_acts", "")),
-                _int_or_none(s.get("tackles_inside_fifty", "")),
-                _int_or_none(s.get("spoils", "")),
-                _int_or_none(s.get("contest_def_losses", "")),
-                _int_or_none(s.get("contest_def_one_on_ones", "")),
-                _int_or_none(s.get("contest_off_one_on_ones", "")),
-                _int_or_none(s.get("contest_off_wins", "")),
-                _int_or_none(s.get("effective_kicks", "")),
-                _int_or_none(s.get("ground_ball_gets", "")),
-                _int_or_none(s.get("f50_ground_ball_gets", "")),
-                _int_or_none(s.get("brownlow_votes", "")),
-                _float_or_none(s.get("rating_points", "")),
-                _int_or_none(s.get("afl_fantasy_score", "")),
-                _int_or_none(s.get("supercoach_score", "")),
-            ),
+            _PMS_INSERT_SQL,  # type: ignore[arg-type]
+            (match_id, player_id, team_id, *stat_values),
         )
         count += 1
 
@@ -1285,6 +1199,24 @@ def _enrich_from_fryzigg(
         match_lookup = _build_match_lookup(conn)
     count = 0
 
+    # Pre-validate db_col values against known column names to prevent
+    # SQL injection if FRYZIGG_ENRICHMENT_COLUMNS is ever populated from
+    # external config. All values must be simple identifiers.
+    _VALID_ENRICHMENT_DB_COLS = {db_col for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS}
+    for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS:
+        if not db_col.isidentifier():
+            raise ValueError(f"Invalid enrichment column name: {db_col!r}")
+
+    # Pre-build the SET clause once since it's the same for every row.
+    set_clauses = [
+        f"{db_col} = COALESCE({db_col}, %s)"
+        for _, db_col, _ in FRYZIGG_ENRICHMENT_COLUMNS
+    ]
+    enrichment_sql = (
+        f"UPDATE player_match_stats SET {', '.join(set_clauses)}"
+        " WHERE match_id = %s AND player_id = %s"
+    )
+
     for s in stats_data:
         match_date = s.get("match_date", "")[:10]
         home_team = _normalise_team(s.get("match_home_team", ""))
@@ -1297,22 +1229,12 @@ def _enrich_from_fryzigg(
         if player_id is None:
             continue
 
-        set_clauses = []
-        values: list[int | float | None] = []
-        for csv_col, db_col, parser in FRYZIGG_ENRICHMENT_COLUMNS:
-            set_clauses.append(f"{db_col} = COALESCE({db_col}, %s)")
-            values.append(parser(s.get(csv_col, "")))
-
-        if not set_clauses:
-            continue
-
+        values: list[int | float | str | None] = [
+            parser(s.get(csv_col, ""))
+            for csv_col, _, parser in FRYZIGG_ENRICHMENT_COLUMNS
+        ]
         values.extend([match_id, player_id])
-        conn.execute(
-            f"""UPDATE player_match_stats SET
-                   {", ".join(set_clauses)}
-               WHERE match_id = %s AND player_id = %s""",
-            values,
-        )
+        conn.execute(enrichment_sql, values)  # type: ignore[arg-type]
         count += 1
 
         if count % 5000 == 0:
@@ -1555,7 +1477,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
         Dict with ``has_new_data`` (bool), ``csv_latest_date``,
         ``db_latest_date``, and ``reason`` (human-readable explanation).
     """
-    from afl_mcp.core.db import get_pool
+    from afl_mcp.core.db import get_pool  # noqa: F811
 
     data_dir = Path(data_dir)
     sources = _detect_source_files(data_dir)
@@ -1597,9 +1519,8 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
 
     pool = get_pool()
     with pool.connection() as conn:
-        cur = conn.execute("SELECT MAX(date) FROM matches")
-        row = cur.fetchone()
-        db_max = row["max"] if row else None
+        row = conn.execute("SELECT MAX(date) AS max_date FROM matches").fetchone()
+        db_max = row["max_date"] if row else None  # type: ignore[call-overload]
         db_latest = str(db_max) if db_max else None
 
         # Fetch DB match counts per season year for comparison.
@@ -1612,7 +1533,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
                    GROUP BY 1"""
             ).fetchall()
             for yr in year_rows:
-                db_counts_by_year[yr["year"]] = yr["cnt"]
+                db_counts_by_year[yr["year"]] = yr["cnt"]  # type: ignore[call-overload]
 
     if db_latest is None:
         return {

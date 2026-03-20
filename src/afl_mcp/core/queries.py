@@ -11,8 +11,28 @@ import re
 
 from afl_mcp.core.db import get_pool
 
+__all__ = [
+    "execute_query",
+    "get_schema_info",
+    "get_foreign_keys",
+    "get_schema_dict",
+    "get_last_updated",
+]
+
+# Application-layer regex guard for write operations.
+#
+# Known limitations — this regex cannot detect:
+# - Keywords hidden inside string literals (e.g. WHERE note = 'DELETE ME')
+#   This is a known false positive — intentionally conservative.
+# - CTEs that wrap write operations (WITH x AS (DELETE ...))
+#   The CTE case is caught because DELETE itself is still present.
+#
+# The PostgreSQL session-level read-only mode
+# (SET default_transaction_read_only = on) is the authoritative guard.
+# This regex is a defence-in-depth layer that catches obvious mistakes
+# before they reach the database.
 _FORBIDDEN_PATTERN = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b",
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY)\b",
     re.IGNORECASE,
 )
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from afl_mcp.core.queries import execute_query
 
+__all__ = ["get_ladder", "TEAM_ALIAS_MAP"]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -75,67 +77,65 @@ def get_ladder(year: int, round_number: int | None = None) -> list[dict]:
         played, wins, losses, draws, points_for, points_against,
         percentage, premiership_points.
     """
-    conditions = ["s.year = %s", "m.round_type = 'Regular'"]
-    params: list = [year]
-
+    # Build WHERE clause from hardcoded conditions only — no user input
+    # is interpolated into the SQL string.
+    round_filter = " AND m.round_number <= %s" if round_number is not None else ""
+    base_params: list = [year]
     if round_number is not None:
-        conditions.append("m.round_number <= %s")
-        params.append(round_number)
+        base_params.append(round_number)
+    # Parameters are duplicated for the two UNION ALL halves.
+    all_params = base_params + base_params
 
-    where = " AND ".join(conditions)
-    all_params = params + params
-
-    return execute_query(
-        f"""WITH team_results AS (
-                SELECT
-                    m.home_team_id AS team_id,
-                    m.home_points AS points_for,
-                    m.away_points AS points_against,
-                    CASE WHEN m.margin > 0 THEN 1 ELSE 0 END AS wins,
-                    CASE WHEN m.margin < 0 THEN 1 ELSE 0 END AS losses,
-                    CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws
-                FROM matches m
-                JOIN seasons s ON s.id = m.season_id
-                WHERE {where}
-                UNION ALL
-                SELECT
-                    m.away_team_id AS team_id,
-                    m.away_points AS points_for,
-                    m.home_points AS points_against,
-                    CASE WHEN m.margin < 0 THEN 1 ELSE 0 END AS wins,
-                    CASE WHEN m.margin > 0 THEN 1 ELSE 0 END AS losses,
-                    CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws
-                FROM matches m
-                JOIN seasons s ON s.id = m.season_id
-                WHERE {where}
-            ),
-            ladder AS (
-                SELECT
-                    t.name AS team,
-                    COUNT(*) AS played,
-                    SUM(tr.wins)::int AS wins,
-                    SUM(tr.losses)::int AS losses,
-                    SUM(tr.draws)::int AS draws,
-                    SUM(tr.points_for)::int AS points_for,
-                    SUM(tr.points_against)::int AS points_against,
-                    ROUND(
-                        SUM(tr.points_for)::numeric
-                        / NULLIF(SUM(tr.points_against), 0) * 100, 1
-                    ) AS percentage,
-                    (SUM(tr.wins) * 4 + SUM(tr.draws) * 2)::int
-                        AS premiership_points
-                FROM team_results tr
-                JOIN teams t ON t.id = tr.team_id
-                GROUP BY t.id, t.name
-            )
+    sql = f"""WITH team_results AS (
             SELECT
-                ROW_NUMBER() OVER (
-                    ORDER BY premiership_points DESC, percentage DESC
-                )::int AS position,
-                team, played, wins, losses, draws,
-                points_for, points_against, percentage,
-                premiership_points
-            FROM ladder
-            ORDER BY position""",
-        all_params,
-    )
+                m.home_team_id AS team_id,
+                m.home_points AS points_for,
+                m.away_points AS points_against,
+                CASE WHEN m.margin > 0 THEN 1 ELSE 0 END AS wins,
+                CASE WHEN m.margin < 0 THEN 1 ELSE 0 END AS losses,
+                CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws
+            FROM matches m
+            JOIN seasons s ON s.id = m.season_id
+            WHERE s.year = %s AND m.round_type = 'Regular'{round_filter}
+            UNION ALL
+            SELECT
+                m.away_team_id AS team_id,
+                m.away_points AS points_for,
+                m.home_points AS points_against,
+                CASE WHEN m.margin < 0 THEN 1 ELSE 0 END AS wins,
+                CASE WHEN m.margin > 0 THEN 1 ELSE 0 END AS losses,
+                CASE WHEN m.margin = 0 THEN 1 ELSE 0 END AS draws
+            FROM matches m
+            JOIN seasons s ON s.id = m.season_id
+            WHERE s.year = %s AND m.round_type = 'Regular'{round_filter}
+        ),
+        ladder AS (
+            SELECT
+                t.name AS team,
+                COUNT(*) AS played,
+                SUM(tr.wins)::int AS wins,
+                SUM(tr.losses)::int AS losses,
+                SUM(tr.draws)::int AS draws,
+                SUM(tr.points_for)::int AS points_for,
+                SUM(tr.points_against)::int AS points_against,
+                ROUND(
+                    SUM(tr.points_for)::numeric
+                    / NULLIF(SUM(tr.points_against), 0) * 100, 1
+                ) AS percentage,
+                (SUM(tr.wins) * 4 + SUM(tr.draws) * 2)::int
+                    AS premiership_points
+            FROM team_results tr
+            JOIN teams t ON t.id = tr.team_id
+            GROUP BY t.id, t.name
+        )
+        SELECT
+            ROW_NUMBER() OVER (
+                ORDER BY premiership_points DESC, percentage DESC
+            )::int AS position,
+            team, played, wins, losses, draws,
+            points_for, points_against, percentage,
+            premiership_points
+        FROM ladder
+        ORDER BY position"""
+
+    return execute_query(sql, all_params)

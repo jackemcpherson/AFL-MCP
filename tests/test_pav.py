@@ -138,3 +138,27 @@ class TestCalculatePav:
     def test_min_pav_year_constant(self) -> None:
         """MIN_PAV_YEAR is set to 1998."""
         assert MIN_PAV_YEAR == 1998
+
+
+class TestCalculateAllPav:
+    """Verify calculate_all_pav function behavior."""
+
+    def test_iterates_over_seasons(self) -> None:
+        """calculate_all_pav processes all seasons from 1998 onwards."""
+        from afl_mcp.core.pav import calculate_all_pav
+
+        with patch("afl_mcp.core.pav.get_admin_connection") as mock_admin:
+            mock_conn = MagicMock()
+            mock_admin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_admin.return_value.__exit__ = MagicMock(return_value=False)
+
+            mock_conn.execute.return_value.fetchall.return_value = [
+                {"year": 2023},
+                {"year": 2024},
+            ]
+            mock_conn.execute.return_value.rowcount = 50
+
+            results = calculate_all_pav()
+
+            assert 2023 in results
+            assert 2024 in results

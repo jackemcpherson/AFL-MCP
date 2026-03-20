@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import logging
 
+import psycopg
+
 from afl_mcp.core.db import get_admin_connection
+
+__all__ = ["calculate_pav", "calculate_all_pav"]
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +215,7 @@ ON CONFLICT (player_id, season_id, team_id) DO UPDATE SET
 """
 
 
-def _execute_pav(conn: object, year: int) -> int:
+def _execute_pav(conn: psycopg.Connection[dict], year: int) -> int:
     """Execute PAV calculation for a single season on an existing connection.
 
     Args:
@@ -221,9 +225,9 @@ def _execute_pav(conn: object, year: int) -> int:
     Returns:
         Number of player-season-team rows upserted.
     """
-    cur = conn.execute(_PAV_SQL, {"year": year})  # type: ignore[union-attr]
+    cur = conn.execute(_PAV_SQL, {"year": year})
     count = cur.rowcount
-    conn.commit()  # type: ignore[union-attr]
+    conn.commit()
     logger.info("Calculated PAV for %d: %d player rows", year, count)
     return count
 
