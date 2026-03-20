@@ -1520,7 +1520,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
     pool = get_pool()
     with pool.connection() as conn:
         row = conn.execute("SELECT MAX(date) AS max_date FROM matches").fetchone()
-        db_max = row["max_date"] if row else None
+        db_max = row["max_date"] if row else None  # type: ignore[call-overload]
         db_latest = str(db_max) if db_max else None
 
         # Fetch DB match counts per season year for comparison.
@@ -1533,7 +1533,7 @@ def check_freshness(data_dir: str | Path) -> dict[str, object]:
                    GROUP BY 1"""
             ).fetchall()
             for yr in year_rows:
-                db_counts_by_year[yr["year"]] = yr["cnt"]
+                db_counts_by_year[yr["year"]] = yr["cnt"]  # type: ignore[call-overload]
 
     if db_latest is None:
         return {
