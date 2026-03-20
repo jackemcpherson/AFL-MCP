@@ -90,6 +90,29 @@ AFL_RESULTS_COLUMN_MAP: dict[str, str] = {
     "awayTeamScore.matchScore.goals": "Away.Goals",
     "awayTeamScore.matchScore.behinds": "Away.Behinds",
     "awayTeamScore.matchScore.totalScore": "Away.Points",
+    "match.venueLocalStartTime": "local_time_raw",
+    "homeTeamScore.rushedBehinds": "Home.RushedBehinds",
+    "awayTeamScore.rushedBehinds": "Away.RushedBehinds",
+    "homeTeamScore.minutesInFront": "Home.MinutesInFront",
+    "awayTeamScore.minutesInFront": "Away.MinutesInFront",
+    "weather.tempInCelsius": "weather_temp_c",
+    "weather.weatherType": "weather_type",
+    "home_q1_goals": "home_q1_goals",
+    "home_q1_behinds": "home_q1_behinds",
+    "home_q2_goals": "home_q2_goals",
+    "home_q2_behinds": "home_q2_behinds",
+    "home_q3_goals": "home_q3_goals",
+    "home_q3_behinds": "home_q3_behinds",
+    "home_q4_goals": "home_q4_goals",
+    "home_q4_behinds": "home_q4_behinds",
+    "away_q1_goals": "away_q1_goals",
+    "away_q1_behinds": "away_q1_behinds",
+    "away_q2_goals": "away_q2_goals",
+    "away_q2_behinds": "away_q2_behinds",
+    "away_q3_goals": "away_q3_goals",
+    "away_q3_behinds": "away_q3_behinds",
+    "away_q4_goals": "away_q4_goals",
+    "away_q4_behinds": "away_q4_behinds",
 }
 
 AFL_STATS_COLUMN_MAP: dict[str, str] = {
@@ -155,6 +178,19 @@ AFL_STATS_COLUMN_MAP: dict[str, str] = {
     "extendedStats.contestDefLosses": "contest_def_losses",
     "extendedStats.contestOffOneOnOnes": "contest_off_one_on_ones",
     "extendedStats.contestOffWins": "contest_off_wins",
+    "goalAccuracy": "goal_accuracy",
+    "goalEfficiency": "goal_efficiency",
+    "shotEfficiency": "shot_efficiency",
+    "extendedStats.kickEfficiency": "kick_efficiency",
+    "extendedStats.kickToHandballRatio": "kick_to_handball_ratio",
+    "extendedStats.contestedPossessionRate": "contested_possession_rate",
+    "extendedStats.contestDefLossPercentage": "contest_def_loss_pct",
+    "extendedStats.contestOffWinsPercentage": "contest_off_wins_pct",
+    "extendedStats.centreBounceAttendances": "centre_bounce_attendances",
+    "extendedStats.kickins": "kickins",
+    "extendedStats.kickinsPlayon": "kickins_playon",
+    "interchangeCounts": "interchange_counts",
+    "totalPossessions": "total_possessions",
 }
 
 FOOTYWIRE_RESULTS_COLUMN_MAP: dict[str, str] = {
@@ -163,8 +199,14 @@ FOOTYWIRE_RESULTS_COLUMN_MAP: dict[str, str] = {
     "Away.Team": "Away.Team",
     "Venue": "Venue",
     "Round": "Round",
+    "Round.Number": "Round.Number",
+    "Home.Goals": "Home.Goals",
+    "Home.Behinds": "Home.Behinds",
     "Home.Points": "Home.Points",
+    "Away.Goals": "Away.Goals",
+    "Away.Behinds": "Away.Behinds",
     "Away.Points": "Away.Points",
+    "Margin": "Margin",
     "Time": "Time",
 }
 
@@ -304,6 +346,7 @@ FRYZIGG_ENRICHMENT_COLUMNS: list[tuple[str, str, _ParseFn]] = [
     ("spoils", "spoils", _int_or_none),
     ("effective_disposals", "effective_disposals", _int_or_none),
     ("rating_points", "rating_points", _float_or_none),
+    ("supercoach_score", "supercoach_score", _int_or_none),
 ]
 
 
@@ -814,13 +857,40 @@ def _load_matches_from_afl(
         if not home_team_id or not away_team_id:
             continue
 
+        home_points = _int_or_none(r.get("Home.Points", ""))
+        away_points = _int_or_none(r.get("Away.Points", ""))
+        margin = None
+        if home_points is not None and away_points is not None:
+            margin = home_points - away_points
+
+        # Extract time portion from ISO datetime (e.g. "2026-03-19T19:30:00")
+        local_time_raw = r.get("local_time_raw", "")
+        local_time = None
+        if local_time_raw and "T" in local_time_raw:
+            local_time = local_time_raw.split("T")[1][:8]
+
         conn.execute(
             """INSERT INTO matches (season_id, round, round_number, date,
-                                    venue_id, home_team_id, away_team_id,
+                                    local_time, venue_id,
+                                    home_team_id, away_team_id,
                                     home_goals, home_behinds, home_points,
                                     away_goals, away_behinds, away_points,
+                                    margin,
+                                    home_rushed_behinds, away_rushed_behinds,
+                                    home_minutes_in_front, away_minutes_in_front,
+                                    weather_temp_c, weather_type,
+                                    home_q1_goals, home_q1_behinds,
+                                    home_q2_goals, home_q2_behinds,
+                                    home_q3_goals, home_q3_behinds,
+                                    home_q4_goals, home_q4_behinds,
+                                    away_q1_goals, away_q1_behinds,
+                                    away_q2_goals, away_q2_behinds,
+                                    away_q3_goals, away_q3_behinds,
+                                    away_q4_goals, away_q4_behinds,
                                     external_afl_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE SET
                    home_goals = EXCLUDED.home_goals,
                    home_behinds = EXCLUDED.home_behinds,
@@ -828,21 +898,69 @@ def _load_matches_from_afl(
                    away_goals = EXCLUDED.away_goals,
                    away_behinds = EXCLUDED.away_behinds,
                    away_points = EXCLUDED.away_points,
+                   margin = EXCLUDED.margin,
+                   local_time = COALESCE(EXCLUDED.local_time, matches.local_time),
+                   home_rushed_behinds = EXCLUDED.home_rushed_behinds,
+                   away_rushed_behinds = EXCLUDED.away_rushed_behinds,
+                   home_minutes_in_front = EXCLUDED.home_minutes_in_front,
+                   away_minutes_in_front = EXCLUDED.away_minutes_in_front,
+                   weather_temp_c = COALESCE(EXCLUDED.weather_temp_c, matches.weather_temp_c),
+                   weather_type = COALESCE(EXCLUDED.weather_type, matches.weather_type),
+                   home_q1_goals = EXCLUDED.home_q1_goals,
+                   home_q1_behinds = EXCLUDED.home_q1_behinds,
+                   home_q2_goals = EXCLUDED.home_q2_goals,
+                   home_q2_behinds = EXCLUDED.home_q2_behinds,
+                   home_q3_goals = EXCLUDED.home_q3_goals,
+                   home_q3_behinds = EXCLUDED.home_q3_behinds,
+                   home_q4_goals = EXCLUDED.home_q4_goals,
+                   home_q4_behinds = EXCLUDED.home_q4_behinds,
+                   away_q1_goals = EXCLUDED.away_q1_goals,
+                   away_q1_behinds = EXCLUDED.away_q1_behinds,
+                   away_q2_goals = EXCLUDED.away_q2_goals,
+                   away_q2_behinds = EXCLUDED.away_q2_behinds,
+                   away_q3_goals = EXCLUDED.away_q3_goals,
+                   away_q3_behinds = EXCLUDED.away_q3_behinds,
+                   away_q4_goals = EXCLUDED.away_q4_goals,
+                   away_q4_behinds = EXCLUDED.away_q4_behinds,
                    external_afl_id = COALESCE(EXCLUDED.external_afl_id, matches.external_afl_id)""",
             (
                 season_id,
                 r.get("Round", ""),
                 _int_or_none(r.get("Round.Number", "")),
                 date,
+                local_time,
                 venue_map.get(venue_name),
                 home_team_id,
                 away_team_id,
                 _int_or_none(r.get("Home.Goals", "")),
                 _int_or_none(r.get("Home.Behinds", "")),
-                _int_or_none(r.get("Home.Points", "")),
+                home_points,
                 _int_or_none(r.get("Away.Goals", "")),
                 _int_or_none(r.get("Away.Behinds", "")),
-                _int_or_none(r.get("Away.Points", "")),
+                away_points,
+                margin,
+                _int_or_none(r.get("Home.RushedBehinds", "")),
+                _int_or_none(r.get("Away.RushedBehinds", "")),
+                _int_or_none(r.get("Home.MinutesInFront", "")),
+                _int_or_none(r.get("Away.MinutesInFront", "")),
+                _float_or_none(r.get("weather_temp_c", "")),
+                _str_or_none(r.get("weather_type", "")),
+                _int_or_none(r.get("home_q1_goals", "")),
+                _int_or_none(r.get("home_q1_behinds", "")),
+                _int_or_none(r.get("home_q2_goals", "")),
+                _int_or_none(r.get("home_q2_behinds", "")),
+                _int_or_none(r.get("home_q3_goals", "")),
+                _int_or_none(r.get("home_q3_behinds", "")),
+                _int_or_none(r.get("home_q4_goals", "")),
+                _int_or_none(r.get("home_q4_behinds", "")),
+                _int_or_none(r.get("away_q1_goals", "")),
+                _int_or_none(r.get("away_q1_behinds", "")),
+                _int_or_none(r.get("away_q2_goals", "")),
+                _int_or_none(r.get("away_q2_behinds", "")),
+                _int_or_none(r.get("away_q3_goals", "")),
+                _int_or_none(r.get("away_q3_behinds", "")),
+                _int_or_none(r.get("away_q4_goals", "")),
+                _int_or_none(r.get("away_q4_behinds", "")),
                 external_afl_id,
             ),
         )
@@ -1103,6 +1221,19 @@ _PMS_COLUMNS: list[tuple[str, str, _ParseFn]] = [
     ("rating_points", "rating_points", _float_or_none),
     ("afl_fantasy_score", "afl_fantasy_score", _int_or_none),
     ("supercoach_score", "supercoach_score", _int_or_none),
+    ("goal_accuracy", "goal_accuracy", _float_or_none),
+    ("goal_efficiency", "goal_efficiency", _float_or_none),
+    ("shot_efficiency", "shot_efficiency", _float_or_none),
+    ("kick_efficiency", "kick_efficiency", _float_or_none),
+    ("kick_to_handball_ratio", "kick_to_handball_ratio", _float_or_none),
+    ("contested_possession_rate", "contested_possession_rate", _float_or_none),
+    ("contest_def_loss_pct", "contest_def_loss_pct", _float_or_none),
+    ("contest_off_wins_pct", "contest_off_wins_pct", _float_or_none),
+    ("centre_bounce_attendances", "centre_bounce_attendances", _int_or_none),
+    ("kickins", "kickins", _int_or_none),
+    ("kickins_playon", "kickins_playon", _int_or_none),
+    ("interchange_counts", "interchange_counts", _int_or_none),
+    ("total_possessions", "total_possessions", _int_or_none),
 ]
 
 # Pre-build SQL from column list to keep it maintainable and aligned.
