@@ -44,6 +44,25 @@ if (is_current) {
   cat("Fetching match results (AFL API)...\n")
   afl_results <- tryCatch({
     res <- fetch_results(season = SEASONS, source = "AFL", comp = COMP)
+
+    # Flatten nested periodScore columns into per-quarter columns
+    for (i in seq_len(nrow(res))) {
+      for (side in c("home", "away")) {
+        ps_col <- paste0(side, "TeamScore.periodScore")
+        ps <- res[[ps_col]][[i]]
+        if (is.data.frame(ps)) {
+          for (q in 1:4) {
+            if (q <= nrow(ps)) {
+              res[[paste0(side, "_q", q, "_goals")]][i] <- ps$score.goals[q]
+              res[[paste0(side, "_q", q, "_behinds")]][i] <- ps$score.behinds[q]
+            }
+          }
+        }
+      }
+    }
+    # Drop nested list-columns that write_csv cannot serialise
+    res <- res[, !sapply(res, is.list)]
+
     results_path <- file.path(OUTPUT_DIR, "results_afl.csv")
     write_csv(res, results_path)
     cat(sprintf("  Written %d rows to %s\n\n", nrow(res), results_path))
