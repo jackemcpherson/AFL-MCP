@@ -317,9 +317,7 @@ class TestCheckFreshness:
     ) -> None:
         """CSV with a newer date signals new data available."""
         _write_results_csv(tmp_path / "results.csv", ["2026-03-15", "2026-03-22"])
-        mock_get_pool.return_value = _mock_pool_with_max_date(
-            "2026-03-15", {"2026": 1}
-        )
+        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15", {"2026": 1})
 
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is True
@@ -332,9 +330,7 @@ class TestCheckFreshness:
     ) -> None:
         """CSV with same latest date and match count as DB signals no new data."""
         _write_results_csv(tmp_path / "results.csv", ["2026-03-15"])
-        mock_get_pool.return_value = _mock_pool_with_max_date(
-            "2026-03-15", {"2026": 1}
-        )
+        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-15", {"2026": 1})
 
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is False
@@ -354,9 +350,7 @@ class TestCheckFreshness:
             ["2026-03-19", "2026-03-20", "2026-03-22"],
         )
         # DB has same latest date but only 2 of the 3 matches.
-        mock_get_pool.return_value = _mock_pool_with_max_date(
-            "2026-03-22", {"2026": 2}
-        )
+        mock_get_pool.return_value = _mock_pool_with_max_date("2026-03-22", {"2026": 2})
 
         result = check_freshness(tmp_path)
         assert result["has_new_data"] is True
