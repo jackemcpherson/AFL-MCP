@@ -2,7 +2,13 @@ name: Update AFL Data
 
 on:
   schedule:
-    - cron: "0 */2 * * *"
+    # Every 2 hours between Thu 6pm and Mon 6am AEST (UTC+10)
+    # Thursday 8:00–22:00 UTC (Thu 6pm – Fri 8am AEST)
+    - cron: "0 8,10,12,14,16,18,20,22 * * 4"
+    # Friday and Saturday all day UTC (Fri–Sun AEST)
+    - cron: "0 */2 * * 5,6"
+    # Sunday 0:00–20:00 UTC (Sun 10am – Mon 6am AEST)
+    - cron: "0 0,2,4,6,8,10,12,14,16,18,20 * * 0"
   workflow_dispatch:
     inputs:
       season:
