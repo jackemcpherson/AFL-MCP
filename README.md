@@ -2,12 +2,13 @@
 
 AFL statistics platform that extracts data from the [fitzRoy](https://jimmyday12.github.io/fitzRoy/) R package, stores it in PostgreSQL with pgvector, and exposes it through a CLI and MCP server for LLM-powered querying.
 
-Covers AFL Men's match results and player statistics from 1990 to the current season, updated automatically every 6 hours during the season.
+Covers AFL Men's match results and player statistics from 1990 to the current season, updated automatically every 2 hours during match rounds (Thursday evening to Monday morning AEST).
 
 ## Getting Started
 
 ### Prerequisites
 
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 - Python 3.11+
 - PostgreSQL 17+ with [pgvector](https://github.com/pgvector/pgvector) extension
 - R with the `fitzRoy` and `readr` packages (for data extraction only)
@@ -16,8 +17,7 @@ Covers AFL Men's match results and player statistics from 1990 to the current se
 
 ```bash
 git clone <repo-url> && cd AFL-MCP
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]"
+uv sync --extra test
 ```
 
 ### Configuration
@@ -40,7 +40,7 @@ afl-mcp db migrate
 afl-mcp db load
 
 # 4. Generate embeddings for semantic search (requires sentence-transformers)
-pip install -e ".[ml]"
+uv sync --extra ml
 afl-mcp db embed
 
 # 5. Calculate PAV ratings (1998 onwards)
