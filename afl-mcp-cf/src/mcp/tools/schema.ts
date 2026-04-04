@@ -154,13 +154,10 @@ export function getSchemaInfo() {
     query_api: {
       usage: "db.prepare(sql).bind(param1, param2, ...).all() returns { results: Row[] }. Use .first() for a single row.",
       methods: [
-        "db.prepare(sql).bind(...args).all() — returns { results: Row[], success, meta }",
+        "db.prepare(sql).bind(...args).all() — returns { results: Row[], success: boolean }",
         "db.prepare(sql).bind(...args).first() — returns first Row or null",
-        "db.prepare(sql).bind(...args).first(column) — returns single column value",
-        "db.prepare(sql).bind(...args).raw() — returns array of arrays",
-        "db.batch([stmt1, stmt2]) — run multiple statements in a transaction",
       ],
-      notes: "Read-only. 30-second timeout. Use ? for parameter binding.",
+      notes: "Read-only. 30-second timeout. Use ? for parameter binding. The db object is available in the sandbox via an RPC proxy that transparently handles D1 calls.",
     },
   }
 }

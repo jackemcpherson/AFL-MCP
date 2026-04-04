@@ -31,4 +31,5 @@ export default {
   },
 }
 
+export { DbProxy } from "./sandbox/executor"
 export type { Env }

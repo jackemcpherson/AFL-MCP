@@ -86,6 +86,7 @@ async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
   env: Env,
+  ctx: ExecutionContext,
 ) {
   switch (name) {
     case "schema":
@@ -99,7 +100,7 @@ async function handleToolCall(
       if (typeof code !== "string" || code.trim() === "") {
         return mcpError("code parameter is required and must be a non-empty string")
       }
-      const result = await handleCodeTool(code, env)
+      const result = await handleCodeTool(code, env, ctx)
       if (result.error) {
         return mcpError(`Execution error (${result.execution_time_ms}ms): ${result.error}`)
       }
@@ -114,6 +115,7 @@ async function handleToolCall(
 async function handleJsonRpc(
   request: JsonRpcRequest,
   env: Env,
+  ctx: ExecutionContext,
 ): Promise<JsonRpcResponse> {
   const { id, method, params } = request
 
@@ -137,7 +139,7 @@ async function handleJsonRpc(
       if (!name) {
         return jsonRpcError(id, -32602, "Missing tool name")
       }
-      const result = await handleToolCall(name, args, env)
+      const result = await handleToolCall(name, args, env, ctx)
       return jsonRpcResponse(id, result)
     }
 
@@ -152,7 +154,7 @@ async function handleJsonRpc(
 export async function handleMcpRequest(
   request: Request,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, {
@@ -198,7 +200,7 @@ export async function handleMcpRequest(
     )
   }
 
-  const response = await handleJsonRpc(rpcRequest, env)
+  const response = await handleJsonRpc(rpcRequest, env, ctx)
 
   return Response.json(response, {
     headers: {
