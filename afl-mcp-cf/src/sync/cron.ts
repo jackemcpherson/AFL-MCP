@@ -1,5 +1,38 @@
 import type { Env } from "../types"
+import { checkFreshness } from "./freshness"
+import { syncNewData } from "./sync-matches"
+import { recalculatePav } from "./pav"
 
-export async function handleCron(_event: ScheduledEvent, _env: Env): Promise<void> {
-  // Implemented by Unit 3
+export async function handleCron(event: ScheduledEvent, env: Env): Promise<void> {
+  const cron = event.cron
+
+  if (cron === "*/5 * * * *") {
+    if (isMatchWindow()) {
+      await checkFreshness(env)
+    }
+    return
+  }
+
+  if (cron === "0 * * * *") {
+    await syncNewData(env)
+    return
+  }
+
+  if (cron === "0 17 * * *") {
+    await recalculatePav(env)
+    return
+  }
+}
+
+function isMatchWindow(): boolean {
+  const now = new Date()
+  const aestHour = (now.getUTCHours() + 10) % 24
+  const day = now.getUTCDay()
+
+  // Thu 6pm -> Mon 1am AEST covers standard match times
+  if (day === 4 && aestHour >= 18) return true  // Thursday evening
+  if (day === 5 || day === 6) return true         // Friday, Saturday
+  if (day === 0) return true                       // Sunday
+  if (day === 1 && aestHour <= 1) return true      // Monday early morning
+  return false
 }
