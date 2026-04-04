@@ -1,9 +1,9 @@
-name = "afl-mcp-v2"
+name = "afl-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
 routes = [
-  { pattern = "afl.jackemcpherson.com/mcp/v2*", zone_name = "jackemcpherson.com" }
+  { pattern = "afl.jackemcpherson.com/mcp*", zone_name = "jackemcpherson.com" }
 ]
 
 [[d1_databases]]

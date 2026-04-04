@@ -5,7 +5,7 @@ import type { Env } from "./types"
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
-    const path = url.pathname.replace(/^\/mcp\/v2/, "/mcp")
+    const path = url.pathname
 
     if (path === "/health" || path === "/mcp/health") {
       const [freshness, lastSync] = await Promise.all([
@@ -23,7 +23,7 @@ export default {
       return handleMcpRequest(request, env, ctx)
     }
 
-    return new Response("AFL MCP v2 Server", { status: 200 })
+    return new Response("AFL MCP Server", { status: 200 })
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
