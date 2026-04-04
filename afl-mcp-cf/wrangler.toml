@@ -9,11 +9,10 @@ routes = [
 [[d1_databases]]
 binding = "DB"
 database_name = "afl-stats"
-database_id = "PLACEHOLDER_RUN_UNIT_0_SPIKE"
+database_id = "fe1c1a89-805f-481d-9ba0-b9f8dee04a36"
 
-[[unsafe.bindings]]
-name = "LOADER"
-type = "dynamic_worker_loader"
+[[worker_loaders]]
+binding = "LOADER"
 
 [triggers]
 crons = [
