@@ -1,0 +1,15 @@
+{
+  "name": "afl-mcp",
+  "private": true,
+  "scripts": {
+    "db:seed": "tsx scripts/seed-d1.ts",
+    "db:verify": "tsx scripts/verify-integrity.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0"
+  }
+}
