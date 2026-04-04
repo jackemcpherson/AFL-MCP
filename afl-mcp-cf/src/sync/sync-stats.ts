@@ -60,7 +60,7 @@ export async function syncStats(
           contest_off_one_on_ones, contest_off_wins, contest_off_wins_pct,
           contest_def_one_on_ones, contest_def_losses, contest_def_loss_pct,
           centre_bounce_attendances, kickins, kickins_playon,
-          ruck_contests, score_launches, supercoach_score
+          ruck_contests, score_launches, supercoach_score, brownlow_votes
         ) VALUES (
           ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?, ?, ?,
@@ -83,7 +83,8 @@ export async function syncStats(
           ?, ?, ?,
           ?, ?, ?,
           ?, ?, ?,
-          ?, ?, ?
+          ?, ?, ?,
+          ?
         )`
       ).bind(
         matchId,
@@ -156,6 +157,7 @@ export async function syncStats(
         s.ruckContests,
         s.scoreLaunches,
         s.supercoachScore,
+        (s as any).brownlowVotes ?? null,
       ))
     }
 

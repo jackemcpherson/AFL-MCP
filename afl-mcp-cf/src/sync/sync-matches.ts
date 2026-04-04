@@ -161,12 +161,14 @@ function buildMatchUpsert(
       away_q1_goals, away_q1_behinds,
       away_q2_goals, away_q2_behinds,
       away_q3_goals, away_q3_behinds,
-      away_q4_goals, away_q4_behinds
+      away_q4_goals, away_q4_behinds,
+      weather_temp_c, weather_type
     ) VALUES (
       ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
+      ?, ?,
       ?, ?,
       ?, ?,
       ?, ?,
@@ -184,7 +186,7 @@ function buildMatchUpsert(
     seasonId,
     m.roundNumber,
     mapRoundType(m.roundType),
-    m.roundName,
+    (m as any).roundCode ?? m.roundName,
     dateStr,
     venueId,
     homeTeamId,
@@ -217,5 +219,7 @@ function buildMatchUpsert(
     m.q3Away?.behinds ?? null,
     m.q4Away?.goals ?? null,
     m.q4Away?.behinds ?? null,
+    (m as any).weatherTempCelsius ?? null,
+    (m as any).weatherType ?? null,
   )
 }
