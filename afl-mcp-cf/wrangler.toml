@@ -10,6 +10,7 @@ routes = [
 binding = "DB"
 database_name = "afl-stats"
 database_id = "fe1c1a89-805f-481d-9ba0-b9f8dee04a36"
+migrations_dir = "src/db/migrations"
 
 [[worker_loaders]]
 binding = "LOADER"
