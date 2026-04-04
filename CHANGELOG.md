@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-04-04
+
+### Changed
+
+- **Platform migration:** Moved from Python/PostgreSQL/DigitalOcean to Cloudflare Workers/D1/TypeScript
+- **MCP tools:** Replaced 5 tools (execute_sql, get_schema, get_ladder, search_afl, get_last_updated) with 3 Code Mode tools (schema, tools, code) — LLM writes TypeScript that executes in sandboxed isolates against D1
+- **Data sync:** Replaced GitHub Actions ETL pipeline (R + Docker + cron) with native Cloudflare Workers cron triggers syncing via the fitzroy npm package
+- **MCP transport:** Switched from stdio (FastMCP) to streamable HTTP
+- **CI/CD:** Rewrote GitHub Actions for Node.js (vitest + tsc) and Cloudflare deployment (wrangler)
+- **Dependabot:** Updated ecosystems from pip/docker to npm/github-actions
+
+### Added
+
+- Sandboxed code execution via Cloudflare Dynamic Worker isolates with DbProxy RPC bridge
+- Freshness check during match windows (every 5 min Thu–Mon) to trigger sync only when new data is available
+- PAV recalculation on daily cron (3am AEST)
+- Team and venue name normalisation layer for consistent data from fitzroy
+- Test suite: 33 tests covering MCP protocol, cron scheduling, normalisation, and PAV guard logic
+- MIT license
+
+### Removed
+
+- Python codebase (src/afl_mcp/, CLI, FastMCP server)
+- PostgreSQL schema and migrations (db/)
+- R extraction scripts and Docker images (etl/)
+- Semantic search and vector embeddings (pgvector)
+- DigitalOcean deployment configuration (.do/)
+
 ## [1.2.0] - 2026-03-20
 
 ### Added

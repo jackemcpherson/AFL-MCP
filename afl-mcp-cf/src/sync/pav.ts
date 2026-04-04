@@ -1,6 +1,7 @@
 import type { Env } from "../types"
-
-export const MIN_PAV_YEAR = 1998
+import { MIN_PAV_YEAR } from "../lib/constants"
+export { MIN_PAV_YEAR }
+import { logSync } from "./log"
 
 const PAV_SQL = `
 WITH
@@ -209,22 +210,9 @@ export async function recalculatePav(env: Env): Promise<void> {
   const currentYear = new Date().getFullYear()
   try {
     const changes = await calculatePav(env, currentYear)
-    await env.DB.prepare(
-      "INSERT INTO sync_log (timestamp, type, rows_affected) VALUES (?, ?, ?)",
-    )
-      .bind(new Date().toISOString(), "pav_recalculation", changes)
-      .run()
+    await logSync(env, "pav_recalculation", changes)
   } catch (err) {
-    await env.DB.prepare(
-      "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, ?, ?, ?)",
-    )
-      .bind(
-        new Date().toISOString(),
-        "pav_recalculation",
-        0,
-        err instanceof Error ? err.message : String(err),
-      )
-      .run()
+    await logSync(env, "pav_recalculation", 0, err instanceof Error ? err.message : String(err))
   }
 }
 

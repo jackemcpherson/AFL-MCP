@@ -2,7 +2,7 @@ import type { Env } from "../types"
 import type { JsonRpcRequest, JsonRpcResponse, ToolDefinition } from "./types"
 import { getSchemaInfo } from "./tools/schema"
 import { getToolsInfo } from "./tools/tools"
-import { handleCodeTool } from "./tools/code"
+import { executeCode } from "../sandbox/executor"
 
 const SERVER_INFO = {
   name: "afl-mcp-v2",
@@ -10,6 +10,12 @@ const SERVER_INFO = {
 }
 
 const PROTOCOL_VERSION = "2025-03-26"
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+} as const
 
 const TOOLS: ToolDefinition[] = [
   {
@@ -100,7 +106,7 @@ async function handleToolCall(
       if (typeof code !== "string" || code.trim() === "") {
         return mcpError("code parameter is required and must be a non-empty string")
       }
-      const result = await handleCodeTool(code, env, ctx)
+      const result = await executeCode(code, env, ctx)
       if (result.error) {
         return mcpError(`Execution error (${result.execution_time_ms}ms): ${result.error}`)
       }
@@ -157,14 +163,7 @@ export async function handleMcpRequest(
   ctx: ExecutionContext,
 ): Promise<Response> {
   if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    })
+    return new Response(null, { status: 204, headers: CORS_HEADERS })
   }
 
   if (request.method !== "POST") {
@@ -205,7 +204,7 @@ export async function handleMcpRequest(
   return Response.json(response, {
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
+      ...CORS_HEADERS,
     },
   })
 }

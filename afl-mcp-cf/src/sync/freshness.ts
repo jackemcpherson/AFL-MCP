@@ -20,15 +20,12 @@ export async function checkFreshness(env: Env): Promise<void> {
 
     if (!apiResult.success) return
 
-    const completedMatches = apiResult.data.filter(
-      m => m.homePoints !== null && m.homePoints !== undefined
-    )
-    if (completedMatches.length === 0) return
+    const apiLatest = apiResult.data.reduce<Date | null>((max, m) => {
+      if (m.homePoints == null) return max
+      return !max || m.date > max ? m.date : max
+    }, null)
 
-    const apiLatest = completedMatches
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]
-
-    if (apiLatest && (!dbLatest?.latest || apiLatest.date.toISOString().slice(0, 10) > dbLatest.latest)) {
+    if (apiLatest && (!dbLatest?.latest || apiLatest.toISOString().slice(0, 10) > dbLatest.latest)) {
       await syncNewData(env)
     }
   } catch (err) {

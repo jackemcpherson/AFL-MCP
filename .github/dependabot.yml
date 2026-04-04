@@ -1,7 +1,7 @@
 version: 2
 updates:
-  - package-ecosystem: pip
-    directory: /
+  - package-ecosystem: npm
+    directory: /afl-mcp-cf
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -9,8 +9,6 @@ updates:
       - dependencies
     commit-message:
       prefix: "deps"
-    allow:
-      - dependency-type: direct
 
   - package-ecosystem: github-actions
     directory: /
@@ -21,13 +19,3 @@ updates:
       - dependencies
     commit-message:
       prefix: "ci"
-
-  - package-ecosystem: docker
-    directory: /etl
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    labels:
-      - dependencies
-    commit-message:
-      prefix: "docker"
