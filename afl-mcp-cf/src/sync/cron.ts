@@ -3,28 +3,32 @@ import { checkFreshness } from "./freshness"
 import { syncNewData } from "./sync-matches"
 import { recalculatePav } from "./pav"
 
+const CRON_FRESHNESS = "*/5 * * * *"
+const CRON_FULL_SYNC = "0 * * * *"
+const CRON_PAV = "0 17 * * *"
+
 export async function handleCron(event: ScheduledEvent, env: Env): Promise<void> {
   const cron = event.cron
 
-  if (cron === "*/5 * * * *") {
+  if (cron === CRON_FRESHNESS) {
     if (isMatchWindow()) {
       await checkFreshness(env)
     }
     return
   }
 
-  if (cron === "0 * * * *") {
+  if (cron === CRON_FULL_SYNC) {
     await syncNewData(env)
     return
   }
 
-  if (cron === "0 17 * * *") {
+  if (cron === CRON_PAV) {
     await recalculatePav(env)
     return
   }
 }
 
-function isMatchWindow(): boolean {
+export function isMatchWindow(): boolean {
   const now = new Date()
   const aestHour = (now.getUTCHours() + 10) % 24
   const day = now.getUTCDay()

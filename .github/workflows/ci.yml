@@ -1,16 +1,11 @@
-name: CI - Lint, Test, Build, Typecheck
+name: CI
 
 on:
   pull_request:
     branches: [main]
     paths:
-      - "src/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
+      - "afl-mcp-cf/**"
       - ".github/workflows/**"
-      - "Dockerfile"
-      - "etl/**"
   workflow_call:
 
 concurrency:
@@ -20,87 +15,49 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: afl-mcp-cf
+
 jobs:
-  lint:
-    name: Lint and format check
+  typecheck:
+    name: Type check
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          enable-cache: true
-      - name: Set up Python
-        run: uv python install 3.13
-      - name: Run ruff check
-        run: uv run ruff check src/ tests/
-      - name: Run ruff format check
-        run: uv run ruff format --check src/ tests/
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: afl-mcp-cf/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tsc
+        run: npx tsc --noEmit
 
   test:
-    name: Run unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v5
-        with:
-          enable-cache: true
-      - name: Set up Python
-        run: uv python install 3.13
-      - name: Run tests
-        run: uv run --extra test pytest tests/ -v --ignore=tests/test_integration.py
-
-  build:
-    name: Verify package builds
+    name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v5
-        with:
-          enable-cache: true
-      - name: Set up Python
-        run: uv python install 3.13
-      - name: Build package
-        run: uv build
 
-  typecheck:
-    name: Type check with pyright
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          enable-cache: true
-      - name: Set up Python
-        run: uv python install 3.13
-      - name: Run pyright
-        run: uv run --extra test --extra ml pyright src/
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: afl-mcp-cf/package-lock.json
 
-  docker:
-    name: Verify Docker build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-      - name: Build Docker image
-        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
-        with:
-          context: .
-          tags: afl-mcp:ci
-          load: true
-          cache-from: type=gha,scope=ci-docker
-          cache-to: type=gha,mode=max,scope=ci-docker
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run vitest
+        run: npx vitest run

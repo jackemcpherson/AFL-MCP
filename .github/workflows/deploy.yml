@@ -1,13 +1,11 @@
-name: Deploy to Digital Ocean
+name: Deploy to Cloudflare Workers
 
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '.github/workflows/**'
-      - '*.md'
-      - 'plans/**'
-      - 'scripts/**'
+    paths:
+      - "afl-mcp-cf/**"
+      - ".github/workflows/deploy.yml"
 
 concurrency:
   group: deploy-production
@@ -16,25 +14,37 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: afl-mcp-cf
+
 jobs:
   ci:
     name: CI checks
     uses: ./.github/workflows/ci.yml
 
   deploy:
-    name: Deploy to App Platform
+    name: Deploy Worker
     needs: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     environment: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@135ac0aa0eed4437d547c6f12c364d3006b42824 # v2.5.1
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: afl-mcp-cf/package-lock.json
 
-      - name: Deploy app
-        run: doctl apps create-deployment ${{ secrets.DIGITALOCEAN_APP_ID }} --wait
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
