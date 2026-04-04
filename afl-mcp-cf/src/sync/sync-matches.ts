@@ -24,7 +24,8 @@ export async function syncNewData(env: Env): Promise<void> {
     })
 
     if (!matchResult.success) {
-      await logSync(env, "sync_matches", 0, "fetchMatchResults failed")
+      const detail = matchResult.error instanceof Error ? matchResult.error.message : String(matchResult.error)
+      await logSync(env, "sync_matches", 0, `fetchMatchResults failed: ${detail}`)
       return
     }
 
@@ -99,7 +100,8 @@ export async function syncNewData(env: Env): Promise<void> {
     })
 
     if (!statsResult.success) {
-      await logSync(env, "sync_stats", 0, "fetchPlayerStats failed")
+      const detail = statsResult.error instanceof Error ? statsResult.error.message : String(statsResult.error)
+      await logSync(env, "sync_stats", 0, `fetchPlayerStats failed: ${detail}`)
       return
     }
 
