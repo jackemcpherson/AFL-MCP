@@ -7,11 +7,7 @@ export default {
     const url = new URL(request.url)
     const path = url.pathname.replace(/^\/mcp\/v2/, "/mcp")
 
-    if (path === "/mcp" || path.startsWith("/mcp/")) {
-      return handleMcpRequest(request, env, ctx)
-    }
-
-    if (path === "/health") {
+    if (path === "/health" || path === "/mcp/health") {
       const [freshness, lastSync] = await Promise.all([
         env.DB.prepare("SELECT MAX(date) as latest_match FROM matches").first(),
         env.DB.prepare("SELECT timestamp, type, rows_affected, error FROM sync_log ORDER BY id DESC LIMIT 1").first(),
@@ -21,6 +17,10 @@ export default {
         latest_match: freshness?.latest_match,
         last_sync: lastSync,
       })
+    }
+
+    if (path === "/mcp" || path.startsWith("/mcp/")) {
+      return handleMcpRequest(request, env, ctx)
     }
 
     return new Response("AFL MCP v2 Server", { status: 200 })
