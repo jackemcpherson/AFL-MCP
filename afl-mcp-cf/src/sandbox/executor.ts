@@ -35,16 +35,19 @@ export async function executeCode(
       export default {
         async fetch(request, env) {
           const db = {
-            async prepare(sql) {
+            prepare(sql) {
               const self = { _sql: sql, _params: [] }
               return {
                 bind(...args) { self._params = args; return this },
-                async all() { return env.__db.query(self._sql, ...self._params) },
-                async first() { return env.__db.queryFirst(self._sql, ...self._params) },
+                all() { return env.__db.query(self._sql, ...self._params) },
+                first() { return env.__db.queryFirst(self._sql, ...self._params) },
               }
             }
           }
-          ${code}
+          const __result = await (async () => { ${code} })()
+          return new Response(JSON.stringify(__result), {
+            headers: { "Content-Type": "application/json" },
+          })
         }
       }
     `
