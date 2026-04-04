@@ -1,0 +1,23 @@
+name = "afl-mcp-v2"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+
+routes = [
+  { pattern = "afl.jackemcpherson.com/mcp/v2*", zone_name = "jackemcpherson.com" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "afl-stats"
+database_id = "PLACEHOLDER_RUN_UNIT_0_SPIKE"
+
+[[unsafe.bindings]]
+name = "LOADER"
+type = "dynamic_worker_loader"
+
+[triggers]
+crons = [
+  "*/5 * * * *",
+  "0 * * * *",
+  "0 17 * * *",
+]
