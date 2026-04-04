@@ -68,7 +68,7 @@ export async function syncNewData(env: Env): Promise<void> {
 
     if (teamNames.size > 0) {
       const teamStmts = Array.from(teamNames).map(name =>
-        env.DB.prepare("INSERT OR IGNORE INTO teams (name) VALUES (?)").bind(name)
+        env.DB.prepare("INSERT OR IGNORE INTO teams (name, competition_id) VALUES (?, ?)").bind(name, competition.id)
       )
       await env.DB.batch(teamStmts)
     }
@@ -148,7 +148,7 @@ function buildMatchUpsert(
   const dateStr = m.date.toISOString().slice(0, 10)
 
   return env.DB.prepare(
-    `INSERT OR REPLACE INTO matches (
+    `INSERT INTO matches (
       external_afl_id, season_id, round_number, round_type, round,
       date, venue_id, home_team_id, away_team_id,
       home_goals, home_behinds, home_points,
@@ -182,7 +182,43 @@ function buildMatchUpsert(
       ?, ?,
       ?, ?,
       ?, ?
-    )`
+    )
+    ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE SET
+      external_afl_id = excluded.external_afl_id,
+      round_number = excluded.round_number,
+      round_type = excluded.round_type,
+      round = excluded.round,
+      venue_id = excluded.venue_id,
+      home_goals = excluded.home_goals,
+      home_behinds = excluded.home_behinds,
+      home_points = excluded.home_points,
+      away_goals = excluded.away_goals,
+      away_behinds = excluded.away_behinds,
+      away_points = excluded.away_points,
+      margin = excluded.margin,
+      attendance = excluded.attendance,
+      home_rushed_behinds = excluded.home_rushed_behinds,
+      away_rushed_behinds = excluded.away_rushed_behinds,
+      home_minutes_in_front = excluded.home_minutes_in_front,
+      away_minutes_in_front = excluded.away_minutes_in_front,
+      home_q1_goals = excluded.home_q1_goals,
+      home_q1_behinds = excluded.home_q1_behinds,
+      home_q2_goals = excluded.home_q2_goals,
+      home_q2_behinds = excluded.home_q2_behinds,
+      home_q3_goals = excluded.home_q3_goals,
+      home_q3_behinds = excluded.home_q3_behinds,
+      home_q4_goals = excluded.home_q4_goals,
+      home_q4_behinds = excluded.home_q4_behinds,
+      away_q1_goals = excluded.away_q1_goals,
+      away_q1_behinds = excluded.away_q1_behinds,
+      away_q2_goals = excluded.away_q2_goals,
+      away_q2_behinds = excluded.away_q2_behinds,
+      away_q3_goals = excluded.away_q3_goals,
+      away_q3_behinds = excluded.away_q3_behinds,
+      away_q4_goals = excluded.away_q4_goals,
+      away_q4_behinds = excluded.away_q4_behinds,
+      weather_temp_c = excluded.weather_temp_c,
+      weather_type = excluded.weather_type`
   ).bind(
     m.matchId,
     seasonId,

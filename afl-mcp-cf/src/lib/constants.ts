@@ -10,6 +10,7 @@ export const TEAM_NAME_MAP: Record<string, string> = {
   "Adelaide Crows": "Adelaide",
   "West Coast Eagles": "West Coast",
   "Gold Coast SUNS": "Gold Coast",
+  "Gold Coast Suns": "Gold Coast",
 }
 
 export const VENUE_NAME_MAP: Record<string, string> = {
