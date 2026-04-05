@@ -217,8 +217,8 @@ function buildMatchUpsert(
       away_q3_behinds = excluded.away_q3_behinds,
       away_q4_goals = excluded.away_q4_goals,
       away_q4_behinds = excluded.away_q4_behinds,
-      weather_temp_c = excluded.weather_temp_c,
-      weather_type = excluded.weather_type`
+      weather_temp_c = COALESCE(excluded.weather_temp_c, matches.weather_temp_c),
+      weather_type = COALESCE(excluded.weather_type, matches.weather_type)`
   ).bind(
     m.matchId,
     seasonId,
