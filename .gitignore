@@ -26,3 +26,15 @@ logs/
 
 # Review output
 plans/
+
+# Generated data
+data/
+afl-mcp-cf/data/sql-combined/
+
+# Legacy Python source
+src/
+tests/
+
+# Root-level npm (worker config is in afl-mcp-cf/)
+package.json
+package-lock.json
