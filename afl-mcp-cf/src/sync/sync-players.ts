@@ -14,14 +14,28 @@ export async function syncPlayers(env: Env, stats: PlayerStats[]): Promise<numbe
 
   for (let i = 0; i < players.length; i += 500) {
     const chunk = players.slice(i, i + 500)
-    const stmts = chunk.map(p =>
-      env.DB.prepare(
+    const stmts: D1PreparedStatement[] = []
+
+    for (const p of chunk) {
+      // Try to adopt an existing fryzigg record by name if no AFL API record exists yet.
+      // This prevents duplicates when a player has both fryzigg and AFL API data.
+      stmts.push(env.DB.prepare(
+        `UPDATE players SET external_afl_player_id = ?
+         WHERE first_name = ? AND surname = ?
+           AND external_afl_player_id IS NULL
+           AND external_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM players WHERE external_afl_player_id = ?)`
+      ).bind(p.playerId, p.givenName, p.surname, p.playerId))
+
+      // Fall back to the standard upsert for new players or if the above didn't match
+      stmts.push(env.DB.prepare(
         `INSERT INTO players (first_name, surname, external_afl_player_id)
          VALUES (?, ?, ?)
          ON CONFLICT (external_afl_player_id) WHERE external_afl_player_id IS NOT NULL
          DO UPDATE SET first_name = excluded.first_name, surname = excluded.surname`
-      ).bind(p.givenName, p.surname, p.playerId)
-    )
+      ).bind(p.givenName, p.surname, p.playerId))
+    }
+
     const results = await env.DB.batch(stmts)
     totalAffected += results.filter(r => r.success).length
   }

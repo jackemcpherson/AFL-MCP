@@ -194,6 +194,22 @@ CREATE TABLE player_season_pav (
 
 CREATE INDEX idx_pav_season_total ON player_season_pav(season_id, total_pav DESC);
 
+CREATE TABLE match_lineups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id INTEGER NOT NULL REFERENCES matches(id),
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  team_id INTEGER NOT NULL REFERENCES teams(id),
+  guernsey_number INTEGER,
+  position TEXT,
+  is_emergency INTEGER NOT NULL DEFAULT 0,
+  is_substitute INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (match_id, player_id)
+);
+
+CREATE INDEX idx_ml_match_id ON match_lineups(match_id);
+CREATE INDEX idx_ml_player_id ON match_lineups(player_id);
+CREATE INDEX idx_ml_team_match ON match_lineups(team_id, match_id);
+
 CREATE TABLE sync_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp TEXT NOT NULL,

@@ -119,7 +119,7 @@ export async function syncNewData(env: Env): Promise<void> {
   }
 }
 
-async function buildLookupMap(env: Env, table: string): Promise<Map<string, number>> {
+export async function buildLookupMap(env: Env, table: string): Promise<Map<string, number>> {
   const { results } = await env.DB.prepare(
     `SELECT id, name FROM ${table}`
   ).all<{ id: number; name: string }>()

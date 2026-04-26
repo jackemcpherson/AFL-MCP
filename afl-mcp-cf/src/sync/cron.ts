@@ -2,6 +2,7 @@ import type { Env } from "../types"
 import { checkFreshness } from "./freshness"
 import { syncNewData } from "./sync-matches"
 import { recalculatePav } from "./pav"
+import { syncLineups } from "./sync-lineups"
 
 const CRON_FRESHNESS = "*/5 * * * *"
 const CRON_FULL_SYNC = "0 * * * *"
@@ -19,6 +20,7 @@ export async function handleCron(event: ScheduledEvent, env: Env): Promise<void>
 
   if (cron === CRON_FULL_SYNC) {
     await syncNewData(env)
+    await syncLineups(env)
     return
   }
 
