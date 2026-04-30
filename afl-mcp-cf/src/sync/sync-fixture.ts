@@ -35,8 +35,8 @@ export async function syncFixture(env: Env): Promise<void> {
       return
     }
 
-    const upcoming = result.data.filter(f => f.status !== "Complete")
-    if (upcoming.length === 0) return
+    const fixtures = result.data
+    if (fixtures.length === 0) return
 
     const competition = await env.DB.prepare(
       "SELECT id FROM competitions WHERE code = ?"
@@ -52,7 +52,7 @@ export async function syncFixture(env: Env): Promise<void> {
 
     const teamNames = new Set<string>()
     const venueNames = new Set<string>()
-    for (const f of upcoming) {
+    for (const f of fixtures) {
       teamNames.add(normaliseTeam(f.homeTeam))
       teamNames.add(normaliseTeam(f.awayTeam))
       venueNames.add(normaliseVenue(f.venue))
@@ -76,8 +76,8 @@ export async function syncFixture(env: Env): Promise<void> {
     const venueIdMap = await buildLookupMap(env, "venues")
 
     let totalAffected = 0
-    for (let i = 0; i < upcoming.length; i += 500) {
-      const chunk = upcoming.slice(i, i + 500)
+    for (let i = 0; i < fixtures.length; i += 500) {
+      const chunk = fixtures.slice(i, i + 500)
       const stmts = chunk.map(f => buildFixtureUpsert(env, f, season.id, teamIdMap, venueIdMap))
       const results = await env.DB.batch(stmts)
       totalAffected += results.filter(r => r.success).length
