@@ -1,5 +1,6 @@
 import { handleMcpRequest } from "./mcp/protocol"
 import { handleCron } from "./sync/cron"
+import { recalculatePav } from "./sync/pav"
 import type { Env } from "./types"
 
 export default {
@@ -17,6 +18,11 @@ export default {
         latest_match: freshness?.latest_match,
         last_sync: lastSync,
       })
+    }
+
+    if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
+      await recalculatePav(env)
+      return Response.json({ status: "ok" })
     }
 
     if (path === "/mcp" || path.startsWith("/mcp/")) {

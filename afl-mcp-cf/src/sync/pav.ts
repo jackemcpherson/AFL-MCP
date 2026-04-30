@@ -3,7 +3,10 @@ import { MIN_PAV_YEAR } from "../lib/constants"
 export { MIN_PAV_YEAR }
 import { logSync } from "./log"
 
-const PAV_SQL = `
+// D1 does not support CTEs combined with INSERT...ON CONFLICT in a single
+// statement, so we split into a SELECT (with CTEs) and a parameterised UPSERT.
+
+const PAV_SELECT_SQL = `
 WITH
 -- Step 0: Identify the season
 target_season AS (
@@ -175,25 +178,38 @@ player_pavs AS (
     JOIN team_pavs tp ON ps.team_id = tp.team_id
 )
 
--- Upsert into storage table
-INSERT INTO player_season_pav
-    (player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav)
 SELECT
     pp.player_id,
     ts.season_id,
     pp.team_id,
-    ROUND(pp.off_pav, 2),
-    ROUND(pp.mid_pav, 2),
-    ROUND(pp.def_pav, 2),
-    ROUND(pp.off_pav + pp.mid_pav + pp.def_pav, 2)
+    ROUND(pp.off_pav, 2) AS off_pav,
+    ROUND(pp.mid_pav, 2) AS mid_pav,
+    ROUND(pp.def_pav, 2) AS def_pav,
+    ROUND(pp.off_pav + pp.mid_pav + pp.def_pav, 2) AS total_pav
 FROM player_pavs pp
 CROSS JOIN target_season ts
+`
+
+const PAV_UPSERT_SQL = `
+INSERT INTO player_season_pav
+    (player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (player_id, season_id, team_id) DO UPDATE SET
     off_pav   = EXCLUDED.off_pav,
     mid_pav   = EXCLUDED.mid_pav,
     def_pav   = EXCLUDED.def_pav,
     total_pav = EXCLUDED.total_pav
 `
+
+interface PavRow {
+  player_id: number
+  season_id: number
+  team_id: number
+  off_pav: number
+  mid_pav: number
+  def_pav: number
+  total_pav: number
+}
 
 export async function calculatePav(env: Env, year: number): Promise<number> {
   if (year < MIN_PAV_YEAR) {
@@ -202,8 +218,26 @@ export async function calculatePav(env: Env, year: number): Promise<number> {
     )
   }
 
-  const result = await env.DB.prepare(PAV_SQL).bind(year).run()
-  return result.meta.changes ?? 0
+  const { results } = await env.DB.prepare(PAV_SELECT_SQL)
+    .bind(year)
+    .all<PavRow>()
+
+  if (results.length === 0) return 0
+
+  let totalAffected = 0
+  for (let i = 0; i < results.length; i += 500) {
+    const chunk = results.slice(i, i + 500)
+    const stmts = chunk.map(row =>
+      env.DB.prepare(PAV_UPSERT_SQL).bind(
+        row.player_id, row.season_id, row.team_id,
+        row.off_pav, row.mid_pav, row.def_pav, row.total_pav,
+      )
+    )
+    const batchResults = await env.DB.batch(stmts)
+    totalAffected += batchResults.filter(r => r.success).length
+  }
+
+  return totalAffected
 }
 
 export async function recalculatePav(env: Env): Promise<void> {
