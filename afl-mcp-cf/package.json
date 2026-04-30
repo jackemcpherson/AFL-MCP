@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "fitzroy": "^1.7.1"
+    "fitzroy": "^1.7.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260418.1",
