@@ -1,6 +1,7 @@
 import { handleMcpRequest } from "./mcp/protocol"
 import { handleCron } from "./sync/cron"
 import { recalculatePav } from "./sync/pav"
+import { syncFixture } from "./sync/sync-fixture"
 import type { Env } from "./types"
 
 export default {
@@ -22,6 +23,11 @@ export default {
 
     if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
       await recalculatePav(env)
+      return Response.json({ status: "ok" })
+    }
+
+    if (path === "/mcp/admin/sync-fixture" && request.method === "POST") {
+      await syncFixture(env)
       return Response.json({ status: "ok" })
     }
 
