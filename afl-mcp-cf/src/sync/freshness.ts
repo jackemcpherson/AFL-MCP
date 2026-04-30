@@ -9,7 +9,7 @@ export async function checkFreshness(env: Env): Promise<void> {
     const currentYear = new Date().getFullYear()
 
     const dbLatest = await env.DB.prepare(
-      `SELECT MAX(date) as latest FROM matches m JOIN seasons s ON m.season_id = s.id WHERE s.year = ?`
+      `SELECT MAX(date) as latest FROM matches m JOIN seasons s ON m.season_id = s.id WHERE s.year = ? AND m.home_points IS NOT NULL`
     ).bind(currentYear).first<{ latest: string | null }>()
 
     const apiResult = await fetchMatchResults({
