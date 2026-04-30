@@ -1,5 +1,7 @@
 # AFL-MCP
 
+[![CI](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml)
+
 MCP server for AFL Men's statistics, powered by Cloudflare Workers and D1. Covers match results and player statistics from 1990 to the current season, updated automatically via cron-triggered sync from the AFL API.
 
 ## Architecture
@@ -26,45 +28,51 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 22+
+- [Bun](https://bun.sh/) 1.3+
 - [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (Cloudflare Workers CLI)
 - A Cloudflare account with D1 access
 
 ### Setup
 
 ```bash
-cd afl-mcp-cf
-npm install
+bun install
 ```
 
 ### Development
 
 ```bash
-npx wrangler dev
+bun run dev
 ```
 
 ### Running Tests
 
 ```bash
-npx vitest run
+bun run test
 ```
 
 ### Type Checking
 
 ```bash
-npx tsc --noEmit
+bun run typecheck
+```
+
+### Lint and Format
+
+```bash
+bun run check        # check for issues
+bun run format       # auto-fix formatting
 ```
 
 ### Deployment
 
 ```bash
-npx wrangler deploy
+bunx wrangler deploy
 ```
 
 D1 migrations:
 
 ```bash
-npx wrangler d1 migrations apply afl-stats --remote
+bunx wrangler d1 migrations apply afl-stats --remote
 ```
 
 ## Data Sync
@@ -83,6 +91,10 @@ The match window covers Thursday 6pm to Monday 1am AEST, matching the standard A
 
 1. Create a feature branch
 2. Make changes and add tests
-3. Run `npx tsc --noEmit` for type checking
-4. Run `npx vitest run` to verify tests pass
+3. Run `bun run typecheck` and `bun run check`
+4. Run `bun run test` to verify tests pass
 5. Submit a pull request
+
+## License
+
+MIT

@@ -1,0 +1,27 @@
+{
+  "name": "afl-mcp",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "wrangler d1 migrations apply afl-stats",
+    "db:seed": "tsx scripts/seed-d1.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "fitzroy": "^1.7.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
+    "@cloudflare/workers-types": "^4.20260418.1",
+    "tsx": "^4.0.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4",
+    "wrangler": "^4.0.0"
+  }
+}

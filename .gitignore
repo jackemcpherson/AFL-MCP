@@ -21,20 +21,9 @@ logs/
 # Claude
 .claude/
 
-# Playwright MCP
-.playwright-mcp/
-
-# Review output
+# Planning artifacts
 plans/
 
 # Generated data
-/data/
-afl-mcp-cf/data/
-
-# Legacy Python source (root-level only)
-/src/
-/tests/
-
-# Root-level npm (worker config is in afl-mcp-cf/)
-package.json
-package-lock.json
+data/export/
+data/sql/

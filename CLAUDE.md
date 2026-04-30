@@ -12,7 +12,18 @@ database.
 - **MCP transport:** Streamable HTTP at `https://afl.jackemcpherson.com/mcp`
 - **Data sync:** Cron-triggered via `fitzroy` npm package (AFL API source)
 - **Sandbox:** Dynamic Workers with `DbProxy` RPC bridge for D1 access
-- **Worker code:** `afl-mcp-cf/` subdirectory
+
+## Commands
+
+```bash
+bun install              # Install dependencies
+bun run dev              # Start local worker (wrangler dev)
+bun run deploy           # Deploy to Cloudflare Workers
+bun run typecheck        # Type-check without emitting (tsc --noEmit)
+bun run check            # Lint + format check (biome check .)
+bun run format           # Auto-format (biome format --write .)
+bun run test             # Run all tests (vitest)
+```
 
 ## AFL Season Structure
 
@@ -39,21 +50,37 @@ rounds.
 
 ## Key Files
 
-- `afl-mcp-cf/src/index.ts` — Worker entry point, routing
-- `afl-mcp-cf/src/mcp/protocol.ts` — MCP streamable-http implementation
-- `afl-mcp-cf/src/mcp/tools/schema.ts` — Hardcoded schema documentation
-- `afl-mcp-cf/src/sandbox/executor.ts` — Dynamic Worker + DbProxy RPC bridge
-- `afl-mcp-cf/src/sync/` — Cron sync pipeline (matches, stats, players, PAV)
-- `afl-mcp-cf/src/db/schema.sql` — D1 schema (8 tables)
+- `src/index.ts` — Worker entry point, routing
+- `src/mcp/protocol.ts` — MCP streamable-http implementation
+- `src/mcp/tools/schema.ts` — Hardcoded schema documentation
+- `src/sandbox/executor.ts` — Dynamic Worker + DbProxy RPC bridge
+- `src/sync/` — Cron sync pipeline (matches, stats, players, PAV)
+- `src/db/schema.sql` — D1 schema (8 tables)
+
+## Key Constraints
+
+- **Strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+  `noUnusedLocals`, `noUnusedParameters` are all enabled.
+- **No `any`** — Biome enforces `noExplicitAny: "error"`. Use `unknown` and narrow.
+- **No `enum`** — use union types instead.
+- **No default exports** — Biome enforces `noDefaultExport: "error"`, with overrides
+  only for `*.config.ts`.
+- **Bun** as package manager, **Biome** for lint+format, **Vitest** for tests.
+- Use Web Standard APIs only (no Bun-specific) — code runs on Cloudflare Workers V8.
+
+## Documentation (TSDoc)
+
+Follow Google-style TSDoc conventions. Document all public functions, exported
+interfaces/types, and module-level constants with `@param`, `@returns`, `@throws`,
+and `@example` tags. Skip docs for self-explanatory one-liners.
 
 ## Deployment
 
 ```bash
-cd afl-mcp-cf
-npx wrangler deploy
+bunx wrangler deploy
 ```
 
 D1 migrations:
 ```bash
-npx wrangler d1 migrations apply afl-stats --remote
+bunx wrangler d1 migrations apply afl-stats --remote
 ```
