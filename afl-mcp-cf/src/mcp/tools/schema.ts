@@ -110,7 +110,7 @@ export function getSchemaInfo() {
         "afl_fantasy_score: available from both sources. Populated for most matches 2007+.",
         "subbed: fryzigg source only. Available for historical matches (pre-2026). NULL for current 2026 season. Values: 'Not Subbed', 'Subbed'.",
         "weather_temp_c and weather_type: fryzigg source only. Available ~2012-2025. NULL for pre-2012 and current 2026 season.",
-        "local_time: fryzigg source only. Available for historical matches (pre-2026). NULL for current 2026 season.",
+        "local_time: Melbourne local time (AEST/AEDT) as HH:MM:SS. Available for all seasons.",
         "external_fryzigg_id: cross-reference ID from fryzigg source. Available for ~99% of historical matches.",
         "attendance: populated pre-2020 only (gap being addressed).",
         "Quarter scores (home_q1_goals through away_q4_behinds) are available for most matches 2000+ and enable quarter-by-quarter analysis.",

@@ -3,6 +3,7 @@ import type { Fixture } from "fitzroy"
 import type { Env } from "../types"
 import { COMPETITION_CODE } from "../lib/constants"
 import { normaliseTeam, normaliseVenue } from "../lib/normalise"
+import { toMelbourneTime } from "../lib/time"
 import { buildLookupMap } from "./sync-matches"
 import { logSync } from "./log"
 
@@ -103,17 +104,19 @@ function buildFixtureUpsert(
   const awayTeamId = teamIdMap.get(awayTeam) ?? null
   const venueId = venueIdMap.get(venue) ?? null
   const dateStr = f.date.toISOString().slice(0, 10)
+  const localTime = toMelbourneTime(f.date)
 
   return env.DB.prepare(
     `INSERT INTO matches (
       external_afl_id, season_id, round_number, round_type, round,
-      date, venue_id, home_team_id, away_team_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      date, local_time, venue_id, home_team_id, away_team_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE SET
       external_afl_id = COALESCE(excluded.external_afl_id, matches.external_afl_id),
       round_number = excluded.round_number,
       round_type = excluded.round_type,
       round = excluded.round,
+      local_time = excluded.local_time,
       venue_id = excluded.venue_id`
   ).bind(
     f.matchId,
@@ -122,6 +125,7 @@ function buildFixtureUpsert(
     fixtureRoundType(f),
     fixtureRoundCode(f),
     dateStr,
+    localTime,
     venueId,
     homeTeamId,
     awayTeamId,

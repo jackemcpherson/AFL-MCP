@@ -3,6 +3,7 @@ import type { MatchResult } from "fitzroy"
 import type { Env } from "../types"
 import { COMPETITION_CODE } from "../lib/constants"
 import { normaliseTeam, normaliseVenue } from "../lib/normalise"
+import { toMelbourneTime } from "../lib/time"
 import { logSync } from "./log"
 import { syncPlayers, getPlayerIdMap } from "./sync-players"
 import { syncStats } from "./sync-stats"
@@ -146,11 +147,12 @@ function buildMatchUpsert(
   const awayTeamId = teamIdMap.get(awayTeam) ?? null
   const venueId = venueIdMap.get(venue) ?? null
   const dateStr = m.date.toISOString().slice(0, 10)
+  const localTime = toMelbourneTime(m.date)
 
   return env.DB.prepare(
     `INSERT INTO matches (
       external_afl_id, season_id, round_number, round_type, round,
-      date, venue_id, home_team_id, away_team_id,
+      date, local_time, venue_id, home_team_id, away_team_id,
       home_goals, home_behinds, home_points,
       away_goals, away_behinds, away_points,
       margin, attendance,
@@ -167,7 +169,7 @@ function buildMatchUpsert(
       weather_temp_c, weather_type
     ) VALUES (
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
       ?, ?,
@@ -188,6 +190,7 @@ function buildMatchUpsert(
       round_number = excluded.round_number,
       round_type = excluded.round_type,
       round = excluded.round,
+      local_time = excluded.local_time,
       venue_id = excluded.venue_id,
       home_goals = excluded.home_goals,
       home_behinds = excluded.home_behinds,
@@ -226,6 +229,7 @@ function buildMatchUpsert(
     mapRoundType(m.roundType),
     (m as any).roundCode ?? m.roundName,
     dateStr,
+    localTime,
     venueId,
     homeTeamId,
     awayTeamId,
