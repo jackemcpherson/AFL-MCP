@@ -1,6 +1,6 @@
 import { handleMcpRequest } from "./mcp/protocol";
 import { handleCron } from "./sync/cron";
-import { recalculatePav } from "./sync/pav";
+import { calculateAllPav, recalculatePav } from "./sync/pav";
 import { syncFixture } from "./sync/sync-fixture";
 import { syncLineups } from "./sync/sync-lineups";
 import { syncNewData } from "./sync/sync-matches";
@@ -30,6 +30,11 @@ export default {
     if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
       await recalculatePav(env);
       return Response.json({ status: "ok" });
+    }
+
+    if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {
+      const results = await calculateAllPav(env);
+      return Response.json({ status: "ok", results });
     }
 
     if (path === "/mcp/admin/sync-fixture" && request.method === "POST") {

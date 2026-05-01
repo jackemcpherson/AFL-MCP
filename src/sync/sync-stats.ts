@@ -20,6 +20,9 @@ export async function syncStats(
       const playerId = playerIdMap.get(s.playerId);
       if (!playerId) continue;
 
+      // Skip phantom rows for emergencies / late withdrawals who never took the field
+      if (!s.timeOnGroundPercentage && !s.disposals) continue;
+
       const homeTeam = s.homeTeam ? normaliseTeam(s.homeTeam) : null;
       const awayTeam = s.awayTeam ? normaliseTeam(s.awayTeam) : null;
       const dateStr = s.date ? s.date.toISOString().slice(0, 10) : null;

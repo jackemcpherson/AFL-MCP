@@ -135,6 +135,7 @@ player_match AS (
     JOIN matches m ON pms.match_id = m.id
     JOIN target_season ts ON m.season_id = ts.season_id
     WHERE m.home_points IS NOT NULL
+      AND (pms.time_on_ground_pct > 0 OR pms.disposals > 0)
 ),
 
 -- Step 7: Aggregate player scores per season
