@@ -75,3 +75,77 @@ describe("isMatchWindow", () => {
     expect(isMatchWindow()).toBe(false);
   });
 });
+
+// These cases pin the *current* fixed-UTC+10 behaviour. The function ignores
+// AEDT (Melbourne summer time, UTC+11), so the window opens an hour late by
+// Melbourne local time during pre-season + early rounds. The shouldRunNow
+// rewrite that replaces this function should flip the marked expectations.
+describe("isMatchWindow during AEDT (current buggy behaviour, to be flipped)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setUtc(isoString: string) {
+    vi.setSystemTime(new Date(isoString));
+  }
+
+  it("treats Thu 6pm AEDT as outside the window — bug, should be true", () => {
+    // Thu 2026-03-26 07:00 UTC = Thu 18:00 AEDT (Melbourne local 6pm)
+    //                          = Thu 17:00 by UTC+10 (what the code computes)
+    // Window should open at Melbourne 6pm; current code says no.
+    setUtc("2026-03-26T07:00:00Z");
+    expect(isMatchWindow()).toBe(false);
+  });
+
+  it("treats Thu 7pm AEDT as inside the window — passes by accident", () => {
+    // Thu 2026-03-26 08:00 UTC = Thu 19:00 AEDT (Melbourne local 7pm)
+    //                          = Thu 18:00 by UTC+10
+    // Right answer for the wrong reason.
+    setUtc("2026-03-26T08:00:00Z");
+    expect(isMatchWindow()).toBe(true);
+  });
+
+  it("treats Mon 1am AEDT (Melbourne midnight) as inside the window — bug, should be false", () => {
+    // Mon 2026-03-30 14:00 UTC = Mon 01:00 AEDT (Melbourne local midnight)
+    //                          = Mon 00:00 by UTC+10
+    // Code's UTC+10 hour = 0, day === 1, branch allows hour <= 1 → true.
+    // Melbourne local is 1am Mon, which the AFL still treats as Sunday-night —
+    // the intended cutoff is 1am Melbourne, so this should be false.
+    setUtc("2026-03-30T14:00:00Z");
+    expect(isMatchWindow()).toBe(true);
+  });
+});
+
+describe("isMatchWindow during AEST (mid/late season, no DST)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setUtc(isoString: string) {
+    vi.setSystemTime(new Date(isoString));
+  }
+
+  it("returns true at Thu 6pm AEST in mid-season", () => {
+    // Thu 2026-06-25 08:00 UTC = Thu 18:00 AEST
+    setUtc("2026-06-25T08:00:00Z");
+    expect(isMatchWindow()).toBe(true);
+  });
+
+  it("returns false at Thu 5pm AEST in mid-season", () => {
+    // Thu 2026-06-25 07:00 UTC = Thu 17:00 AEST
+    setUtc("2026-06-25T07:00:00Z");
+    expect(isMatchWindow()).toBe(false);
+  });
+
+  it("returns true at Mon 0:30am AEST (still in the Sunday-night tail)", () => {
+    // Mon 2026-06-29 14:30 UTC = Mon 00:30 AEST
+    setUtc("2026-06-29T14:30:00Z");
+    expect(isMatchWindow()).toBe(true);
+  });
+});
