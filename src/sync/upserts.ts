@@ -165,14 +165,36 @@ export async function ensureVenues(
   return new Map(results.map((r) => [r.name, r.id]));
 }
 
-/** Latest "YYYY-MM-DD" of a completed match in the season, or null if none have completed. */
-export async function selectMaxCompletedDate(env: Env, seasonId: number): Promise<string | null> {
+/** Number of completed matches in the season. Counts rows with non-null `home_points`. */
+export async function selectCompletedCount(env: Env, seasonId: number): Promise<number> {
   const row = await env.DB.prepare(
-    "SELECT MAX(date) as latest FROM matches WHERE season_id = ? AND home_points IS NOT NULL",
+    "SELECT COUNT(*) as n FROM matches WHERE season_id = ? AND home_points IS NOT NULL",
   )
     .bind(seasonId)
-    .first<{ latest: string | null }>();
-  return row?.latest ?? null;
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * True when at least one completed match in the season has no `player_match_stats`
+ * rows. Used as a self-healing fallback so the stats fetch fires after a partial
+ * write failure or when a previous tick skipped the fetch (e.g., multiple
+ * matches completing on the same calendar date).
+ */
+export async function selectHasCompletedMatchWithoutStats(
+  env: Env,
+  seasonId: number,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT 1 FROM matches m
+     WHERE m.season_id = ?
+       AND m.home_points IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM player_match_stats ps WHERE ps.match_id = m.id)
+     LIMIT 1`,
+  )
+    .bind(seasonId)
+    .first();
+  return row !== null;
 }
 
 /**
