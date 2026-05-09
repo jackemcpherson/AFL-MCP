@@ -634,7 +634,7 @@ export async function upsertLineups(
             playerId,
             teamId,
             p.jumperNumber,
-            p.position,
+            p.matchPosition,
             p.isEmergency ? 1 : 0,
             p.isSubstitute ? 1 : 0,
           ),

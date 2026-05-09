@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "fitzroy": "^2.0.0"
+    "fitzroy": "^2.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.9",

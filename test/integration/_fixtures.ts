@@ -153,7 +153,7 @@ export function makeLineupPlayer(overrides: Partial<LineupPlayer> = {}): LineupP
     surname: "Cripps",
     displayName: "P. Cripps",
     jumperNumber: 9,
-    position: "MID",
+    matchPosition: "MID",
     isEmergency: false,
     isSubstitute: false,
     ...overrides,
