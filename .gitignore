@@ -27,3 +27,4 @@ plans/
 # Generated data
 data/export/
 data/sql/
+data/sql-*/
