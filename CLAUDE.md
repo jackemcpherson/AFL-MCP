@@ -1,17 +1,18 @@
 # AFL-MCP Development Guide
 
-## Architecture
+## Architecture (TL;DR)
 
-AFL-MCP is a Cloudflare Worker serving an MCP (Model Context Protocol) server
-with 3 Code Mode tools: `schema`, `tools`, `code`. The LLM writes TypeScript
-that executes in sandboxed Dynamic Worker isolates against a D1 (SQLite)
-database.
+AFL-MCP is a Cloudflare Worker serving an MCP server with 3 Code Mode tools
+(`schema`, `tools`, `code`). The `code` tool runs LLM-written TypeScript in
+sandboxed Dynamic Worker isolates against a D1 (SQLite) database
+(`afl-stats`).
 
-- **Runtime:** Cloudflare Workers
-- **Database:** Cloudflare D1 (`afl-stats`)
-- **MCP transport:** Streamable HTTP at `https://afl.jackemcpherson.com/mcp`
-- **Data sync:** Cron-triggered via `fitzroy` npm package (AFL API source)
-- **Sandbox:** Dynamic Workers with `DbProxy` RPC bridge for D1 access
+For deeper context, read the appropriate doc:
+- [`docs/architecture.md`](./docs/architecture.md) — Worker entry, MCP
+  transport, sandbox / `DbProxy` model.
+- [`docs/sync.md`](./docs/sync.md) — Single-cron orchestrator, `shouldRunNow`
+  gate, PAV recalc, AFL season structure.
+- [`docs/schema.md`](./docs/schema.md) — D1 table reference.
 
 ## Commands
 
@@ -25,37 +26,46 @@ bun run format           # Auto-format (biome format --write .)
 bun run test             # Run all tests (vitest)
 ```
 
-## AFL Season Structure
+Deploy:
+```bash
+bunx wrangler deploy
+bunx wrangler d1 migrations apply afl-stats --remote
+```
 
-The AFL season includes special rounds that don't follow the standard numeric
-round numbering. When working with match data, always account for:
+## AFL Season Structure (footgun)
 
-- **Opening Round**: Played before Round 1 (typically 4-5 games). In the
-  database this appears as `round = 'Opening Round'` with `round_number = 0`.
-  The 2026 season Opening Round had 5 games.
-- Numbered rounds use short codes: `R1`, `R2`, etc.
-- Finals: `QF`, `EF`, `SF`, `PF`, `GF`.
-- `round_type` is either `'Regular'` or `'Finals'`.
+Never filter or group match data by round name or `round_number` alone — use
+date-based or total match-count comparisons. The season includes special
+rounds outside standard numeric ordering:
 
-When implementing freshness checks, ETL logic, or match queries, never filter or
-group by round name/number alone — always use date-based or total match count
-comparisons to avoid accidentally excluding Opening Round or other non-standard
-rounds.
+- **Opening Round** before R1 (4–5 games), stored as
+  `round = 'Opening Round'`, `round_number = 0`. The 2026 Opening Round had 5
+  games.
+- Numbered rounds: `R1`, `R2`, …
+- Finals: `QF`, `EF`, `SF`, `PF`, `GF`. `round_type` is `'Regular'` or
+  `'Finals'`.
 
-## Cron Schedule
+This rule applies to freshness checks, ETL logic, and any match query.
 
-- `*/5 * * * *` — Freshness check during match windows (Thu 6pm – Mon 1am AEST)
-- `0 * * * *` — Full sync (current season matches + player stats)
-- `0 17 * * *` — PAV recalculation (3am AEST)
+## Sync Cadence
+
+Cron is `*/5 * * * *` (single trigger). The `shouldRunNow` gate in
+`src/sync/sync.ts` runs always at the top of the hour and otherwise only when
+a match exists within ±3 days. PAV is recalculated from within the pipeline
+whenever stats actually change. See [`docs/sync.md`](./docs/sync.md) for the
+full pipeline.
 
 ## Key Files
 
-- `src/index.ts` — Worker entry point, routing
-- `src/mcp/protocol.ts` — MCP streamable-http implementation
-- `src/mcp/tools/schema.ts` — Hardcoded schema documentation
-- `src/sandbox/executor.ts` — Dynamic Worker + DbProxy RPC bridge
-- `src/sync/` — Cron sync pipeline (matches, stats, players, PAV)
-- `src/db/schema.sql` — D1 schema (8 tables)
+- `src/index.ts` — Worker entry point, routing.
+- `src/mcp/protocol.ts` — MCP streamable-http implementation.
+- `src/mcp/tools/schema.ts` — Hardcoded schema documentation (keep in sync
+  with `src/db/schema.sql`).
+- `src/sandbox/executor.ts` — Dynamic Worker + `DbProxy` RPC bridge.
+- `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
+- `src/sync/upserts.ts` — All DB writes for the sync pipeline.
+- `src/sync/pav.ts` — PAV recalculation.
+- `src/db/schema.sql` — D1 schema (10 tables).
 
 ## Key Constraints
 
@@ -73,14 +83,3 @@ rounds.
 Follow Google-style TSDoc conventions. Document all public functions, exported
 interfaces/types, and module-level constants with `@param`, `@returns`, `@throws`,
 and `@example` tags. Skip docs for self-explanatory one-liners.
-
-## Deployment
-
-```bash
-bunx wrangler deploy
-```
-
-D1 migrations:
-```bash
-bunx wrangler d1 migrations apply afl-stats --remote
-```

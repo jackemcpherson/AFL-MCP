@@ -77,15 +77,22 @@ bunx wrangler d1 migrations apply afl-stats --remote
 
 ## Data Sync
 
-Data is synced automatically via Cloudflare Workers cron triggers:
+A single cron (`*/5 * * * *`) drives all data updates. The orchestrator in
+`src/sync/sync.ts` decides whether to fetch on each tick: it always runs at
+the top of the hour, and otherwise runs only when a match exists in the
+database within roughly ±3 days of now. PAV is recalculated from inside the
+same pipeline whenever new player stats land.
 
-| Schedule | Task |
-|----------|------|
-| Every 5 min (match window) | Freshness check — sync if new results available |
-| Hourly | Full sync — current season matches + player stats |
-| Daily 3am AEST | PAV recalculation |
+See [`docs/sync.md`](./docs/sync.md) for the full pipeline, the `shouldRunNow`
+gate, and the AFL season-structure considerations (Opening Round, finals
+codes) that any query touching match data needs to handle.
 
-The match window covers Thursday 6pm to Monday 1am AEST, matching the standard AFL round schedule.
+## Further Documentation
+
+- [`docs/architecture.md`](./docs/architecture.md) — Worker entry, MCP transport,
+  sandbox model.
+- [`docs/sync.md`](./docs/sync.md) — Cron, gating, sync pipeline, PAV.
+- [`docs/schema.md`](./docs/schema.md) — D1 table reference.
 
 ## Contributing
 
