@@ -286,7 +286,7 @@ async function main() {
 
         lineupStmts.push(
           `INSERT INTO match_lineups (match_id, player_id, team_id, guernsey_number, position, is_emergency, is_substitute)
-           VALUES (${matchId}, ${playerId}, ${teamId}, ${p.jumperNumber ?? "NULL"}, ${escapeSQL(p.position)}, ${p.isEmergency ? 1 : 0}, ${p.isSubstitute ? 1 : 0})
+           VALUES (${matchId}, ${playerId}, ${teamId}, ${p.jumperNumber ?? "NULL"}, ${escapeSQL(p.matchPosition)}, ${p.isEmergency ? 1 : 0}, ${p.isSubstitute ? 1 : 0})
            ON CONFLICT (match_id, player_id) DO UPDATE SET
              team_id = excluded.team_id,
              guernsey_number = excluded.guernsey_number,

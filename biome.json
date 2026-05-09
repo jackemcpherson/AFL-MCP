@@ -32,7 +32,7 @@
   },
   "overrides": [
     {
-      "includes": ["*.config.ts", "src/index.ts"],
+      "includes": ["*.config.ts", "*.config.mts", "src/index.ts"],
       "linter": {
         "rules": {
           "style": {
