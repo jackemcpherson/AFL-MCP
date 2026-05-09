@@ -38,11 +38,17 @@ For each competition (default: `["AFLM"]`):
 
 1. **Fetch matches** for the current season from the `afl-api` source.
 2. **Ensure** competition + season rows exist; resolve `seasonId`.
-3. **Detect new completed matches** by comparing the API's max completed date
-   against `selectMaxCompletedDate(seasonId)`. In parallel, ask
-   `selectNextRound(seasonId)` for the next round needing lineups.
+3. **Detect new completed matches** by comparing the API's count of completed
+   matches against `selectCompletedCount(seasonId)`, and asking
+   `selectHasCompletedMatchWithoutStats(seasonId)` whether any previously
+   completed match still lacks stats. In parallel, ask
+   `selectNextRound(seasonId)` for the next round needing lineups. The backlog
+   check makes the pipeline self-healing: it recovers from same-day multi-match
+   completions and from any partial write failure that leaves a completed match
+   without `player_match_stats` rows.
 4. **Conditionally fetch** lineups (if a next round exists) and player stats
-   (if new completed matches exist) — both in parallel.
+   (if the API has more completed matches than the database, OR a stats
+   backlog exists) — both in parallel.
 5. **Upsert** teams, venues, players, matches, stats, lineups (in dependency
    order — `upserts.ts` handles the foreign-key wiring).
 6. **Recalculate PAV** when `statsAffected > 0`. Important: this is gated on

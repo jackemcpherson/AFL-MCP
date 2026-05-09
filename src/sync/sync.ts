@@ -10,7 +10,8 @@ import {
   ensureSeason,
   ensureTeams,
   ensureVenues,
-  selectMaxCompletedDate,
+  selectCompletedCount,
+  selectHasCompletedMatchWithoutStats,
   selectNextRound,
   unionPlayers,
   upsertLineups,
@@ -74,17 +75,20 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
     const competitionId = await ensureCompetition(env, competition);
     const seasonId = await ensureSeason(env, competitionId, season);
 
-    const apiMaxCompleted = maxCompletedDate(allMatches);
-    const [dbMax, nextRound] = await Promise.all([
-      selectMaxCompletedDate(env, seasonId),
+    const apiCompletedCount = countCompleted(allMatches);
+    const [dbCompletedCount, hasStatsBacklog, nextRound] = await Promise.all([
+      selectCompletedCount(env, seasonId),
+      selectHasCompletedMatchWithoutStats(env, seasonId),
       selectNextRound(env, seasonId),
     ]);
-    const newCompletedMatches =
-      apiMaxCompleted !== null && (dbMax === null || apiMaxCompleted > dbMax);
+    // Fetch stats when the API has more completed matches than we've recorded,
+    // OR when any previously-completed match still lacks stats (self-heals same-day
+    // multi-match completions and recovers from partial write failures).
+    const shouldFetchStats = apiCompletedCount > dbCompletedCount || hasStatsBacklog;
 
     const [lineups, stats] = await Promise.all([
       nextRound !== null ? fetchLineupsSafe(env, competition, season, nextRound) : [],
-      newCompletedMatches ? fetchPlayerStatsSafe(env, competition, season) : [],
+      shouldFetchStats ? fetchPlayerStatsSafe(env, competition, season) : [],
     ]);
 
     if (allMatches.length === 0 && lineups.length === 0) return;
@@ -121,14 +125,10 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
   }
 }
 
-function maxCompletedDate(matches: readonly Match[]): string | null {
-  let max: string | null = null;
-  for (const m of matches) {
-    if (m.homePoints === null) continue;
-    const d = toIsoDate(m.date);
-    if (max === null || d > max) max = d;
-  }
-  return max;
+function countCompleted(matches: readonly Match[]): number {
+  let n = 0;
+  for (const m of matches) if (m.homePoints !== null) n++;
+  return n;
 }
 
 async function fetchLineupsSafe(
