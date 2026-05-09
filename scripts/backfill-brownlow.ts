@@ -223,7 +223,7 @@ async function runSeason(year: number): Promise<SeasonResult | null> {
     }
 
     statements.push(
-      `UPDATE player_match_stats SET brownlow_votes = ${s.brownlowVotes} WHERE match_id = ${dbMatchId} AND player_id = ${dbPlayerId} AND brownlow_votes IS NULL`,
+      `UPDATE player_match_stats SET brownlow_votes = ${s.brownlowVotes} WHERE match_id = ${dbMatchId} AND player_id = ${dbPlayerId} AND (brownlow_votes IS NULL OR brownlow_votes = 0)`,
     );
   }
 
