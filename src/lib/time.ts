@@ -13,3 +13,8 @@ export function toMelbourneTime(date: Date): string {
     parts.find((p) => p.type === type)?.value ?? "00";
   return `${get("hour")}:${get("minute")}:${get("second")}`;
 }
+
+/** Format a Date as an ISO calendar date "YYYY-MM-DD" in UTC. */
+export function toIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}

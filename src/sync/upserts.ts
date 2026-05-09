@@ -1,6 +1,6 @@
 import type { CompetitionCode, Lineup, LineupPlayer, Match, PlayerStats } from "fitzroy";
 import { normaliseTeam, normaliseVenue } from "../lib/normalise";
-import { toMelbourneTime } from "../lib/time";
+import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 
 const COMPETITION_NAME: Record<CompetitionCode, string> = {
@@ -67,6 +67,10 @@ export function unionPlayers(
   return Array.from(seen.values());
 }
 
+/**
+ * Ensure a competition row exists for the given code and return its id.
+ * @throws if the row cannot be located after the insert (database error).
+ */
 export async function ensureCompetition(env: Env, code: CompetitionCode): Promise<number> {
   await env.DB.prepare("INSERT OR IGNORE INTO competitions (code, name) VALUES (?, ?)")
     .bind(code, COMPETITION_NAME[code])
@@ -78,6 +82,10 @@ export async function ensureCompetition(env: Env, code: CompetitionCode): Promis
   return row.id;
 }
 
+/**
+ * Ensure a season row exists for the given (competition, year) pair and return its id.
+ * @throws if the row cannot be located after the insert (database error).
+ */
 export async function ensureSeason(env: Env, competitionId: number, year: number): Promise<number> {
   await env.DB.prepare("INSERT OR IGNORE INTO seasons (competition_id, year) VALUES (?, ?)")
     .bind(competitionId, year)
@@ -89,6 +97,7 @@ export async function ensureSeason(env: Env, competitionId: number, year: number
   return row.id;
 }
 
+/** Ensure rows exist for every team referenced by `matches`, and return a name → id map. */
 export async function ensureTeams(
   env: Env,
   competitionId: number,
@@ -114,6 +123,7 @@ export async function ensureTeams(
   return new Map(results.map((r) => [r.name, r.id]));
 }
 
+/** Ensure rows exist for every venue referenced by `matches`, and return a name → id map. */
 export async function ensureVenues(
   env: Env,
   matches: readonly Match[],
@@ -133,6 +143,7 @@ export async function ensureVenues(
   return new Map(results.map((r) => [r.name, r.id]));
 }
 
+/** Latest "YYYY-MM-DD" of a completed match in the season, or null if none have completed. */
 export async function selectMaxCompletedDate(env: Env, seasonId: number): Promise<string | null> {
   const row = await env.DB.prepare(
     "SELECT MAX(date) as latest FROM matches WHERE season_id = ? AND home_points IS NOT NULL",
@@ -142,6 +153,11 @@ export async function selectMaxCompletedDate(env: Env, seasonId: number): Promis
   return row?.latest ?? null;
 }
 
+/**
+ * Smallest `round_number` with at least one not-yet-played match. Opening Round
+ * is `round_number = 0` and is correctly returned ahead of R1 when unfinished.
+ * Returns null when every match in the season is completed.
+ */
 export async function selectNextRound(env: Env, seasonId: number): Promise<number | null> {
   const row = await env.DB.prepare(
     "SELECT MIN(round_number) as next FROM matches WHERE season_id = ? AND home_points IS NULL AND round_number IS NOT NULL",
@@ -151,6 +167,7 @@ export async function selectNextRound(env: Env, seasonId: number): Promise<numbe
   return row?.next ?? null;
 }
 
+/** Map fitzroy `external_afl_id` → internal `matches.id` for the given season. */
 export async function buildMatchAflIdMap(env: Env, seasonId: number): Promise<Map<string, number>> {
   const { results } = await env.DB.prepare(
     "SELECT id, external_afl_id FROM matches WHERE season_id = ? AND external_afl_id IS NOT NULL",
@@ -227,7 +244,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
   const homeTeamId = ctx.teamMap.get(homeTeam) ?? null;
   const awayTeamId = ctx.teamMap.get(awayTeam) ?? null;
   const venueId = ctx.venueMap.get(venue) ?? null;
-  const dateStr = m.date.toISOString().slice(0, 10);
+  const dateStr = toIsoDate(m.date);
   const localTime = toMelbourneTime(m.date);
 
   return env.DB.prepare(

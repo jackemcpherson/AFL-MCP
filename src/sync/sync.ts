@@ -1,5 +1,6 @@
 import type { CompetitionCode, Match } from "fitzroy";
 import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
+import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { logSync } from "./log";
 import { recalculatePav } from "./pav";
@@ -46,8 +47,8 @@ export async function sync(env: Env, competitions: CompetitionCode[] = ["AFLM"])
 export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
   if (now.getUTCMinutes() === 0) return true;
   const dayMs = 24 * 60 * 60 * 1000;
-  const from = new Date(now.getTime() - BACKWARD_DAYS * dayMs).toISOString().slice(0, 10);
-  const to = new Date(now.getTime() + FORWARD_DAYS * dayMs).toISOString().slice(0, 10);
+  const from = toIsoDate(new Date(now.getTime() - BACKWARD_DAYS * dayMs));
+  const to = toIsoDate(new Date(now.getTime() + FORWARD_DAYS * dayMs));
   const row = await env.DB.prepare("SELECT 1 FROM matches WHERE date BETWEEN ?1 AND ?2 LIMIT 1")
     .bind(from, to)
     .first();
@@ -74,15 +75,17 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
     const seasonId = await ensureSeason(env, competitionId, season);
 
     const apiMaxCompleted = maxCompletedDate(allMatches);
-    const dbMax = await selectMaxCompletedDate(env, seasonId);
+    const [dbMax, nextRound] = await Promise.all([
+      selectMaxCompletedDate(env, seasonId),
+      selectNextRound(env, seasonId),
+    ]);
     const newCompletedMatches =
       apiMaxCompleted !== null && (dbMax === null || apiMaxCompleted > dbMax);
 
-    const nextRound = await selectNextRound(env, seasonId);
-    const lineups =
-      nextRound !== null ? await fetchLineupsSafe(env, competition, season, nextRound) : [];
-
-    const stats = newCompletedMatches ? await fetchPlayerStatsSafe(env, competition, season) : [];
+    const [lineups, stats] = await Promise.all([
+      nextRound !== null ? fetchLineupsSafe(env, competition, season, nextRound) : [],
+      newCompletedMatches ? fetchPlayerStatsSafe(env, competition, season) : [],
+    ]);
 
     if (allMatches.length === 0 && lineups.length === 0) return;
 
@@ -105,7 +108,7 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
     if (lineups.length > 0) {
       lineupsAffected = await upsertLineups(env, lineups, matchMap, playerMap, teamMap);
     }
-    if (stats.length > 0) {
+    if (statsAffected > 0) {
       await recalculatePav(env);
     }
 
@@ -122,7 +125,7 @@ function maxCompletedDate(matches: readonly Match[]): string | null {
   let max: string | null = null;
   for (const m of matches) {
     if (m.homePoints === null) continue;
-    const d = m.date.toISOString().slice(0, 10);
+    const d = toIsoDate(m.date);
     if (max === null || d > max) max = d;
   }
   return max;
