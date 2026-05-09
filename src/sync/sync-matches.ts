@@ -1,5 +1,5 @@
-import type { MatchResult } from "fitzroy";
-import { fetchMatchResults, fetchPlayerStats } from "fitzroy";
+import type { Match } from "fitzroy";
+import { fetchMatches, fetchPlayerStats } from "fitzroy";
 import { COMPETITION_CODE } from "../lib/constants";
 import { normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toMelbourneTime } from "../lib/time";
@@ -18,16 +18,17 @@ export async function syncNewData(env: Env): Promise<void> {
   const currentYear = new Date().getFullYear();
 
   try {
-    const matchResult = await fetchMatchResults({
+    const matchResult = await fetchMatches({
       source: "afl-api",
       season: currentYear,
       competition: COMPETITION_CODE,
+      status: "Complete",
     });
 
     if (!matchResult.success) {
       const detail =
         matchResult.error instanceof Error ? matchResult.error.message : String(matchResult.error);
-      await logSync(env, "sync_matches", 0, `fetchMatchResults failed: ${detail}`);
+      await logSync(env, "sync_matches", 0, `fetchMatches failed: ${detail}`);
       return;
     }
 
@@ -142,7 +143,7 @@ export async function buildLookupMap(env: Env, table: string): Promise<Map<strin
 
 function buildMatchUpsert(
   env: Env,
-  m: MatchResult,
+  m: Match,
   seasonId: number,
   teamIdMap: Map<string, number>,
   venueIdMap: Map<string, number>,

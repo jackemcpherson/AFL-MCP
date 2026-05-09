@@ -6,7 +6,7 @@
       "name": "afl-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
-        "fitzroy": "^1.7.2",
+        "fitzroy": "^2.0.0",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.4.9",
@@ -361,7 +361,7 @@
 
     "finalhandler": ["finalhandler@2.1.1", "", { "dependencies": { "debug": "^4.4.0", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "on-finished": "^2.4.1", "parseurl": "^1.3.3", "statuses": "^2.0.1" } }, "sha512-S8KoZgRZN+a5rNwqTxlZZePjT/4cnm0ROV70LedRHZ0p8u9fRID0hJUZQpkKLzro8LfmC8sx23bY6tVNxv8pQA=="],
 
-    "fitzroy": ["fitzroy@1.7.2", "", { "dependencies": { "@clack/prompts": "^1.1.0", "@jackemcpherson/rds-js": "0.2.0", "cheerio": "^1.0.0", "citty": "^0.2.1", "fitzroy": "^1.4.1", "picocolors": "^1.1.1", "zod": "^4.3.6" }, "bin": { "fitzroy": "dist/cli.js" } }, "sha512-+DwHJxGAG2OT1yU3mIiZny9ecn+5MLjyTPqGveQ5v+wzoX8GTkItT9D1MuXmhA6dLzKOgvhQNCgxwlULKbCpRQ=="],
+    "fitzroy": ["fitzroy@2.0.0", "", { "dependencies": { "@clack/prompts": "^1.1.0", "@jackemcpherson/rds-js": "0.2.0", "cheerio": "^1.0.0", "citty": "^0.2.1", "picocolors": "^1.1.1", "zod": "^4.3.6" }, "bin": { "fitzroy": "dist/cli.js" } }, "sha512-8sa2oZNBMRTjyPAL58LbmfoKUSUNtvflYmvXHYoMOpbALytYgiI6FcbyStZnEaEOCt1hM/QYA6Ob3SaqHIi8TA=="],
 
     "forwarded": ["forwarded@0.2.0", "", {}, "sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow=="],
 

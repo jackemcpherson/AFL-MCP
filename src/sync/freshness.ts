@@ -1,4 +1,4 @@
-import { fetchMatchResults } from "fitzroy";
+import { fetchMatches } from "fitzroy";
 import { COMPETITION_CODE } from "../lib/constants";
 import type { Env } from "../types";
 import { logSync } from "./log";
@@ -14,18 +14,19 @@ export async function checkFreshness(env: Env): Promise<void> {
       .bind(currentYear)
       .first<{ latest: string | null }>();
 
-    const apiResult = await fetchMatchResults({
+    const apiResult = await fetchMatches({
       source: "afl-api",
       season: currentYear,
       competition: COMPETITION_CODE,
+      status: "Complete",
     });
 
     if (!apiResult.success) return;
 
-    const apiLatest = apiResult.data.reduce<Date | null>((max, m) => {
-      if (m.homePoints == null) return max;
-      return !max || m.date > max ? m.date : max;
-    }, null);
+    const apiLatest = apiResult.data.reduce<Date | null>(
+      (max, m) => (!max || m.date > max ? m.date : max),
+      null,
+    );
 
     if (
       apiLatest &&

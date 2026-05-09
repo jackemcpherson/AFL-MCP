@@ -1,5 +1,5 @@
-import type { Fixture } from "fitzroy";
-import { fetchFixture } from "fitzroy";
+import type { Match } from "fitzroy";
+import { fetchMatches } from "fitzroy";
 import { COMPETITION_CODE } from "../lib/constants";
 import { normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toMelbourneTime } from "../lib/time";
@@ -7,13 +7,13 @@ import type { Env } from "../types";
 import { logSync } from "./log";
 import { buildLookupMap } from "./sync-matches";
 
-function fixtureRoundCode(f: Fixture): string {
+function fixtureRoundCode(f: Match): string {
   if (f.roundNumber === 0) return "Opening Round";
   if (f.roundType === "Finals") return `F${f.roundNumber}`;
   return `R${f.roundNumber}`;
 }
 
-function fixtureRoundType(f: Fixture): string {
+function fixtureRoundType(f: Match): string {
   if (f.roundType === "HomeAndAway") return "Regular";
   if (f.roundType === "Finals") return "Finals";
   return f.roundType;
@@ -23,15 +23,16 @@ export async function syncFixture(env: Env): Promise<void> {
   const currentYear = new Date().getFullYear();
 
   try {
-    const result = await fetchFixture({
+    const result = await fetchMatches({
       source: "afl-api",
       season: currentYear,
       competition: COMPETITION_CODE,
+      status: "Upcoming",
     });
 
     if (!result.success) {
       const detail = result.error instanceof Error ? result.error.message : String(result.error);
-      await logSync(env, "sync_fixture", 0, `fetchFixture failed: ${detail}`);
+      await logSync(env, "sync_fixture", 0, `fetchMatches failed: ${detail}`);
       return;
     }
 
@@ -96,7 +97,7 @@ export async function syncFixture(env: Env): Promise<void> {
 
 function buildFixtureUpsert(
   env: Env,
-  f: Fixture,
+  f: Match,
   seasonId: number,
   teamIdMap: Map<string, number>,
   venueIdMap: Map<string, number>,
