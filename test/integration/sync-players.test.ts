@@ -1,12 +1,11 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { syncPlayers } from "../../src/sync/sync-players";
-import { makePlayerStats } from "./_fixtures";
+import { upsertPlayers } from "../../src/sync/upserts";
 
-describe("syncPlayers (current pipeline)", () => {
+describe("upsertPlayers", () => {
   it("inserts a brand-new player keyed by external_afl_player_id", async () => {
-    await syncPlayers(env, [
-      makePlayerStats({ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }),
+    const map = await upsertPlayers(env, [
+      { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
     ]);
 
     const rows = await env.DB.prepare(
@@ -18,36 +17,35 @@ describe("syncPlayers (current pipeline)", () => {
       surname: "Cripps",
       external_afl_player_id: "P-1",
     });
+    expect(map.get("P-1")).toBeDefined();
   });
 
-  it("dedupes by playerId within the same batch (same player twice → one row)", async () => {
-    await syncPlayers(env, [
-      makePlayerStats({ playerId: "P-1", matchId: "M-1" }),
-      makePlayerStats({ playerId: "P-1", matchId: "M-2" }),
+  it("returns a map of every player keyed by external_afl_player_id", async () => {
+    const map = await upsertPlayers(env, [
+      { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
+      { playerId: "P-2", givenName: "Sam", surname: "Walsh" },
     ]);
 
-    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM players").first<{ n: number }>();
-    expect(count?.n).toBe(1);
+    expect(map.size).toBe(2);
+    expect(map.has("P-1")).toBe(true);
+    expect(map.has("P-2")).toBe(true);
   });
 
   it("is idempotent on re-run with the same player", async () => {
-    const stats = [makePlayerStats({ playerId: "P-1" })];
-    await syncPlayers(env, stats);
-    await syncPlayers(env, stats);
+    const player = { playerId: "P-1", givenName: "Patrick", surname: "Cripps" };
+    await upsertPlayers(env, [player]);
+    await upsertPlayers(env, [player]);
 
     const count = await env.DB.prepare("SELECT COUNT(*) as n FROM players").first<{ n: number }>();
     expect(count?.n).toBe(1);
   });
 
   it("adopts a legacy fryzigg-only row by name match instead of inserting a duplicate", async () => {
-    // Pre-seed a player as if imported from fryzigg (external_id set, no AFL id).
     await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
       .bind("Patrick", "Cripps", "fryzigg-123")
       .run();
 
-    await syncPlayers(env, [
-      makePlayerStats({ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }),
-    ]);
+    await upsertPlayers(env, [{ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }]);
 
     const rows = await env.DB.prepare(
       "SELECT first_name, surname, external_id, external_afl_player_id FROM players",
@@ -57,8 +55,6 @@ describe("syncPlayers (current pipeline)", () => {
       external_id: string | null;
       external_afl_player_id: string | null;
     }>();
-
-    // One row — the fryzigg row was adopted, not duplicated.
     expect(rows.results).toHaveLength(1);
     expect(rows.results[0]).toEqual({
       first_name: "Patrick",
@@ -73,9 +69,7 @@ describe("syncPlayers (current pipeline)", () => {
       .bind("Tom", "Cripps", "fryzigg-999")
       .run();
 
-    await syncPlayers(env, [
-      makePlayerStats({ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }),
-    ]);
+    await upsertPlayers(env, [{ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }]);
 
     const rows = await env.DB.prepare(
       "SELECT first_name, external_id, external_afl_player_id FROM players ORDER BY first_name",

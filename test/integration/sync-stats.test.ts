@@ -1,114 +1,48 @@
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { syncStats } from "../../src/sync/sync-stats";
-import { makePlayerStats } from "./_fixtures";
+import { describe, expect, it } from "vitest";
+import {
+  buildMatchAflIdMap,
+  ensureCompetition,
+  ensureSeason,
+  ensureTeams,
+  ensureVenues,
+  upsertMatches,
+  upsertPlayers,
+  upsertStats,
+} from "../../src/sync/upserts";
+import { makeMatch, makePlayerStats } from "./_fixtures";
 
 interface SeedResult {
-  teamIdMap: Map<string, number>;
-  playerIdMap: Map<string, number>;
+  matchMap: Map<string, number>;
+  playerMap: Map<string, number>;
+  teamMap: Map<string, number>;
 }
 
-async function seedMatchContext(): Promise<SeedResult> {
-  const competition = await env.DB.prepare(
-    "SELECT id FROM competitions WHERE code = 'AFLM'",
-  ).first<{
-    id: number;
-  }>();
-  const competitionId = competition?.id;
-  if (!competitionId) throw new Error("AFLM competition seed missing");
-
-  await env.DB.prepare("INSERT INTO seasons (competition_id, year) VALUES (?, ?)")
-    .bind(competitionId, 2026)
-    .run();
-  const season = await env.DB.prepare(
-    "SELECT id FROM seasons WHERE competition_id = ? AND year = ?",
-  )
-    .bind(competitionId, 2026)
-    .first<{ id: number }>();
-  const seasonId = season?.id;
-  if (!seasonId) throw new Error("season insert failed");
-
-  for (const name of ["Carlton", "Richmond"]) {
-    await env.DB.prepare("INSERT INTO teams (name, competition_id) VALUES (?, ?)")
-      .bind(name, competitionId)
-      .run();
-  }
-  const teamRows = await env.DB.prepare("SELECT id, name FROM teams WHERE competition_id = ?")
-    .bind(competitionId)
-    .all<{ id: number; name: string }>();
-  const teamIdMap = new Map(teamRows.results.map((r) => [r.name, r.id] as const));
-
-  await env.DB.prepare("INSERT INTO venues (name) VALUES (?)").bind("MCG").run();
-  const venue = await env.DB.prepare("SELECT id FROM venues WHERE name = ?")
-    .bind("MCG")
-    .first<{ id: number }>();
-
-  await env.DB.prepare(
-    "INSERT INTO matches (season_id, round, round_number, date, venue_id, home_team_id, away_team_id, home_points, away_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  )
-    .bind(
-      seasonId,
-      "Round 1",
-      1,
-      "2026-03-19",
-      venue?.id ?? null,
-      teamIdMap.get("Carlton"),
-      teamIdMap.get("Richmond"),
-      80,
-      69,
-    )
-    .run();
-
-  await env.DB.prepare(
-    "INSERT INTO players (first_name, surname, external_afl_player_id) VALUES (?, ?, ?)",
-  )
-    .bind("Patrick", "Cripps", "P-1")
-    .run();
-  await env.DB.prepare(
-    "INSERT INTO players (first_name, surname, external_afl_player_id) VALUES (?, ?, ?)",
-  )
-    .bind("Phantom", "Player", "P-2")
-    .run();
-
-  const playerRows = await env.DB.prepare("SELECT id, external_afl_player_id FROM players").all<{
-    id: number;
-    external_afl_player_id: string;
-  }>();
-  const playerIdMap = new Map(
-    playerRows.results.map((r) => [r.external_afl_player_id, r.id] as const),
-  );
-
-  return { teamIdMap, playerIdMap };
+async function seedMatchAndPlayers(): Promise<SeedResult> {
+  const competitionId = await ensureCompetition(env, "AFLM");
+  const seasonId = await ensureSeason(env, competitionId, 2026);
+  const match = makeMatch();
+  const teamMap = await ensureTeams(env, competitionId, [match]);
+  const venueMap = await ensureVenues(env, [match]);
+  await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+  const matchMap = await buildMatchAflIdMap(env, seasonId);
+  const playerMap = await upsertPlayers(env, [
+    { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
+    { playerId: "P-2", givenName: "Phantom", surname: "Player" },
+  ]);
+  return { matchMap, playerMap, teamMap };
 }
 
-describe("syncStats (current pipeline)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-09T00:00:00Z"));
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
+describe("upsertStats", () => {
   it("inserts a stat row for a player who took the field", async () => {
-    const { teamIdMap, playerIdMap } = await seedMatchContext();
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
 
-    await syncStats(
+    await upsertStats(
       env,
-      [
-        makePlayerStats({
-          playerId: "P-1",
-          team: "Carlton",
-          homeTeam: "Carlton",
-          awayTeam: "Richmond",
-          date: new Date("2026-03-19T08:30:00Z"),
-          disposals: 25,
-          kicks: 15,
-          timeOnGroundPercentage: 90,
-        }),
-      ],
-      teamIdMap,
-      playerIdMap,
+      [makePlayerStats({ playerId: "P-1", disposals: 25, kicks: 15, timeOnGroundPercentage: 90 })],
+      matchMap,
+      playerMap,
+      teamMap,
     );
 
     const rows = await env.DB.prepare(
@@ -119,32 +53,17 @@ describe("syncStats (current pipeline)", () => {
   });
 
   it("filters phantom rows where timeOnGroundPercentage and disposals are both falsy", async () => {
-    const { teamIdMap, playerIdMap } = await seedMatchContext();
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
 
-    await syncStats(
+    await upsertStats(
       env,
       [
-        makePlayerStats({
-          playerId: "P-2",
-          team: "Carlton",
-          homeTeam: "Carlton",
-          awayTeam: "Richmond",
-          date: new Date("2026-03-19T08:30:00Z"),
-          timeOnGroundPercentage: 0,
-          disposals: 0,
-        }),
-        makePlayerStats({
-          playerId: "P-1",
-          team: "Carlton",
-          homeTeam: "Carlton",
-          awayTeam: "Richmond",
-          date: new Date("2026-03-19T08:30:00Z"),
-          timeOnGroundPercentage: 85,
-          disposals: 18,
-        }),
+        makePlayerStats({ playerId: "P-2", timeOnGroundPercentage: 0, disposals: 0 }),
+        makePlayerStats({ playerId: "P-1", timeOnGroundPercentage: 85, disposals: 18 }),
       ],
-      teamIdMap,
-      playerIdMap,
+      matchMap,
+      playerMap,
+      teamMap,
     );
 
     const rows = await env.DB.prepare(
@@ -153,25 +72,22 @@ describe("syncStats (current pipeline)", () => {
     expect(rows.results.map((r) => r.external_afl_player_id)).toEqual(["P-1"]);
   });
 
-  it("skips a stat row whose match has no row in matches (silently)", async () => {
-    const { teamIdMap, playerIdMap } = await seedMatchContext();
+  it("skips silently when the stat row's matchId is unknown to the match map", async () => {
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
 
-    await syncStats(
+    await upsertStats(
       env,
       [
         makePlayerStats({
           playerId: "P-1",
-          team: "Carlton",
-          homeTeam: "Carlton",
-          awayTeam: "Richmond",
-          // Date that does NOT match the seeded match (which is 2026-03-19)
-          date: new Date("2099-01-01T00:00:00Z"),
+          matchId: "M-DOES-NOT-EXIST",
           disposals: 25,
           timeOnGroundPercentage: 90,
         }),
       ],
-      teamIdMap,
-      playerIdMap,
+      matchMap,
+      playerMap,
+      teamMap,
     );
 
     const count = await env.DB.prepare("SELECT COUNT(*) as n FROM player_match_stats").first<{
@@ -181,23 +97,62 @@ describe("syncStats (current pipeline)", () => {
   });
 
   it("is idempotent on a second run with the same stat row", async () => {
-    const { teamIdMap, playerIdMap } = await seedMatchContext();
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
     const stat = makePlayerStats({
       playerId: "P-1",
-      team: "Carlton",
-      homeTeam: "Carlton",
-      awayTeam: "Richmond",
-      date: new Date("2026-03-19T08:30:00Z"),
       disposals: 25,
       timeOnGroundPercentage: 90,
     });
 
-    await syncStats(env, [stat], teamIdMap, playerIdMap);
-    await syncStats(env, [stat], teamIdMap, playerIdMap);
+    await upsertStats(env, [stat], matchMap, playerMap, teamMap);
+    await upsertStats(env, [stat], matchMap, playerMap, teamMap);
 
     const count = await env.DB.prepare("SELECT COUNT(*) as n FROM player_match_stats").first<{
       n: number;
     }>();
     expect(count?.n).toBe(1);
+  });
+
+  it("preserves supercoach_score and brownlow_votes when re-fetching with nulls", async () => {
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
+
+    await upsertStats(
+      env,
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          disposals: 25,
+          timeOnGroundPercentage: 90,
+          supercoachScore: 105,
+          brownlowVotes: 3,
+        }),
+      ],
+      matchMap,
+      playerMap,
+      teamMap,
+    );
+
+    // Re-run with null supercoach/brownlow (e.g. a mid-week refresh before
+    // those columns are populated upstream).
+    await upsertStats(
+      env,
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          disposals: 25,
+          timeOnGroundPercentage: 90,
+          supercoachScore: null,
+          brownlowVotes: null,
+        }),
+      ],
+      matchMap,
+      playerMap,
+      teamMap,
+    );
+
+    const row = await env.DB.prepare(
+      "SELECT supercoach_score, brownlow_votes FROM player_match_stats",
+    ).first<{ supercoach_score: number | null; brownlow_votes: number | null }>();
+    expect(row).toEqual({ supercoach_score: 105, brownlow_votes: 3 });
   });
 });

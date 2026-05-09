@@ -16,8 +16,4 @@ migrations_dir = "src/db/migrations"
 binding = "LOADER"
 
 [triggers]
-crons = [
-  "*/5 * * * *",
-  "0 * * * *",
-  "0 17 * * *",
-]
+crons = ["*/5 * * * *"]

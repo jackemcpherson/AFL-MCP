@@ -1,9 +1,6 @@
 import { handleMcpRequest } from "./mcp/protocol";
-import { handleCron } from "./sync/cron";
 import { calculateAllPav, recalculatePav } from "./sync/pav";
-import { syncFixture } from "./sync/sync-fixture";
-import { syncLineups } from "./sync/sync-lineups";
-import { syncNewData } from "./sync/sync-matches";
+import { sync } from "./sync/sync";
 import type { Env } from "./types";
 
 export default {
@@ -37,15 +34,8 @@ export default {
       return Response.json({ status: "ok", results });
     }
 
-    if (path === "/mcp/admin/sync-fixture" && request.method === "POST") {
-      await syncFixture(env);
-      return Response.json({ status: "ok" });
-    }
-
     if (path === "/mcp/admin/sync" && request.method === "POST") {
-      await syncNewData(env);
-      await syncFixture(env);
-      await syncLineups(env);
+      await sync(env);
       return Response.json({ status: "ok" });
     }
 
@@ -56,8 +46,8 @@ export default {
     return new Response("AFL MCP Server", { status: 200 });
   },
 
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(handleCron(event, env));
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(sync(env));
   },
 };
 
