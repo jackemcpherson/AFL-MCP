@@ -126,6 +126,41 @@ describe("upsertMatches", () => {
     expect(row).toEqual({ home_points: 84, away_points: 70 });
   });
 
+  it("returns the change count: real inserts, then 0 on identical re-upsert, then >0 on a real diff", async () => {
+    const { competitionId, seasonId } = await setup();
+    const match = makeMatch();
+    const teamMap = await ensureTeams(env, competitionId, [match]);
+    const venueMap = await ensureVenues(env, [match]);
+
+    const firstChanges = await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+    expect(firstChanges).toBe(1);
+
+    const idempotentChanges = await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+    expect(idempotentChanges).toBe(0);
+
+    const corrected = makeMatch({ homePoints: 84, awayPoints: 70 });
+    const diffChanges = await upsertMatches(env, [corrected], { seasonId, teamMap, venueMap });
+    expect(diffChanges).toBe(1);
+
+    // A subsequent re-fetch with all-null scores leaves the row unchanged via
+    // COALESCE — the WHERE predicate must respect that and report 0 changes.
+    const noopRefetch = makeMatch({
+      homePoints: null,
+      awayPoints: null,
+      homeGoals: null,
+      homeBehinds: null,
+      awayGoals: null,
+      awayBehinds: null,
+      margin: null,
+    });
+    const coalesceNoopChanges = await upsertMatches(env, [noopRefetch], {
+      seasonId,
+      teamMap,
+      venueMap,
+    });
+    expect(coalesceNoopChanges).toBe(0);
+  });
+
   it("derives 'Opening Round' from roundNumber=0 (no roundCode required)", async () => {
     const { competitionId, seasonId } = await setup();
     const opening = makeMatch({

@@ -96,7 +96,7 @@ describe("upsertStats", () => {
     expect(count?.n).toBe(0);
   });
 
-  it("is idempotent on a second run with the same stat row", async () => {
+  it("is idempotent on a second run and reports zero changes; reports >0 on a real diff", async () => {
     const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
     const stat = makePlayerStats({
       playerId: "P-1",
@@ -104,8 +104,19 @@ describe("upsertStats", () => {
       timeOnGroundPercentage: 90,
     });
 
-    await upsertStats(env, [stat], matchMap, playerMap, teamMap);
-    await upsertStats(env, [stat], matchMap, playerMap, teamMap);
+    const firstChanges = await upsertStats(env, [stat], matchMap, playerMap, teamMap);
+    expect(firstChanges).toBe(1);
+
+    const idempotentChanges = await upsertStats(env, [stat], matchMap, playerMap, teamMap);
+    expect(idempotentChanges).toBe(0);
+
+    const updated = makePlayerStats({
+      playerId: "P-1",
+      disposals: 26,
+      timeOnGroundPercentage: 90,
+    });
+    const diffChanges = await upsertStats(env, [updated], matchMap, playerMap, teamMap);
+    expect(diffChanges).toBe(1);
 
     const count = await env.DB.prepare("SELECT COUNT(*) as n FROM player_match_stats").first<{
       n: number;

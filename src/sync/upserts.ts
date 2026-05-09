@@ -12,6 +12,28 @@ const COMPETITION_NAME: Record<CompetitionCode, string> = {
 
 const BATCH_SIZE = 500;
 
+/**
+ * Run prepared statements in batches and return the total number of rows that
+ * were actually inserted or updated (`meta.changes`). Combined with WHERE
+ * predicates on `ON CONFLICT DO UPDATE`, this distinguishes real writes from
+ * UPSERT no-ops where every column already matches.
+ */
+async function batchAndCountChanges(
+  env: Env,
+  stmts: readonly D1PreparedStatement[],
+): Promise<number> {
+  let affected = 0;
+  for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
+    const chunk = stmts.slice(i, i + BATCH_SIZE);
+    if (chunk.length === 0) continue;
+    const results = await env.DB.batch(chunk);
+    for (const r of results) {
+      if (r.success) affected += r.meta.changes;
+    }
+  }
+  return affected;
+}
+
 /** Minimal shape needed to upsert a player record. */
 export interface PlayerInput {
   readonly playerId: string;
@@ -227,14 +249,8 @@ export async function upsertMatches(
   matches: readonly Match[],
   ctx: MatchUpsertContext,
 ): Promise<number> {
-  let affected = 0;
-  for (let i = 0; i < matches.length; i += BATCH_SIZE) {
-    const chunk = matches.slice(i, i + BATCH_SIZE);
-    const stmts = chunk.map((m) => buildMatchUpsert(env, m, ctx));
-    const results = await env.DB.batch(stmts);
-    affected += results.filter((r) => r.success).length;
-  }
-  return affected;
+  const stmts = matches.map((m) => buildMatchUpsert(env, m, ctx));
+  return await batchAndCountChanges(env, stmts);
 }
 
 function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1PreparedStatement {
@@ -319,7 +335,44 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       away_q4_goals = COALESCE(excluded.away_q4_goals, matches.away_q4_goals),
       away_q4_behinds = COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds),
       weather_temp_c = COALESCE(excluded.weather_temp_c, matches.weather_temp_c),
-      weather_type = COALESCE(excluded.weather_type, matches.weather_type)`,
+      weather_type = COALESCE(excluded.weather_type, matches.weather_type)
+    WHERE
+      matches.external_afl_id IS NOT COALESCE(excluded.external_afl_id, matches.external_afl_id) OR
+      matches.round_number IS NOT excluded.round_number OR
+      matches.round_type IS NOT excluded.round_type OR
+      matches.round IS NOT excluded.round OR
+      matches.local_time IS NOT excluded.local_time OR
+      matches.venue_id IS NOT COALESCE(excluded.venue_id, matches.venue_id) OR
+      matches.home_goals IS NOT COALESCE(excluded.home_goals, matches.home_goals) OR
+      matches.home_behinds IS NOT COALESCE(excluded.home_behinds, matches.home_behinds) OR
+      matches.home_points IS NOT COALESCE(excluded.home_points, matches.home_points) OR
+      matches.away_goals IS NOT COALESCE(excluded.away_goals, matches.away_goals) OR
+      matches.away_behinds IS NOT COALESCE(excluded.away_behinds, matches.away_behinds) OR
+      matches.away_points IS NOT COALESCE(excluded.away_points, matches.away_points) OR
+      matches.margin IS NOT COALESCE(excluded.margin, matches.margin) OR
+      matches.attendance IS NOT COALESCE(excluded.attendance, matches.attendance) OR
+      matches.home_rushed_behinds IS NOT COALESCE(excluded.home_rushed_behinds, matches.home_rushed_behinds) OR
+      matches.away_rushed_behinds IS NOT COALESCE(excluded.away_rushed_behinds, matches.away_rushed_behinds) OR
+      matches.home_minutes_in_front IS NOT COALESCE(excluded.home_minutes_in_front, matches.home_minutes_in_front) OR
+      matches.away_minutes_in_front IS NOT COALESCE(excluded.away_minutes_in_front, matches.away_minutes_in_front) OR
+      matches.home_q1_goals IS NOT COALESCE(excluded.home_q1_goals, matches.home_q1_goals) OR
+      matches.home_q1_behinds IS NOT COALESCE(excluded.home_q1_behinds, matches.home_q1_behinds) OR
+      matches.home_q2_goals IS NOT COALESCE(excluded.home_q2_goals, matches.home_q2_goals) OR
+      matches.home_q2_behinds IS NOT COALESCE(excluded.home_q2_behinds, matches.home_q2_behinds) OR
+      matches.home_q3_goals IS NOT COALESCE(excluded.home_q3_goals, matches.home_q3_goals) OR
+      matches.home_q3_behinds IS NOT COALESCE(excluded.home_q3_behinds, matches.home_q3_behinds) OR
+      matches.home_q4_goals IS NOT COALESCE(excluded.home_q4_goals, matches.home_q4_goals) OR
+      matches.home_q4_behinds IS NOT COALESCE(excluded.home_q4_behinds, matches.home_q4_behinds) OR
+      matches.away_q1_goals IS NOT COALESCE(excluded.away_q1_goals, matches.away_q1_goals) OR
+      matches.away_q1_behinds IS NOT COALESCE(excluded.away_q1_behinds, matches.away_q1_behinds) OR
+      matches.away_q2_goals IS NOT COALESCE(excluded.away_q2_goals, matches.away_q2_goals) OR
+      matches.away_q2_behinds IS NOT COALESCE(excluded.away_q2_behinds, matches.away_q2_behinds) OR
+      matches.away_q3_goals IS NOT COALESCE(excluded.away_q3_goals, matches.away_q3_goals) OR
+      matches.away_q3_behinds IS NOT COALESCE(excluded.away_q3_behinds, matches.away_q3_behinds) OR
+      matches.away_q4_goals IS NOT COALESCE(excluded.away_q4_goals, matches.away_q4_goals) OR
+      matches.away_q4_behinds IS NOT COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds) OR
+      matches.weather_temp_c IS NOT COALESCE(excluded.weather_temp_c, matches.weather_temp_c) OR
+      matches.weather_type IS NOT COALESCE(excluded.weather_type, matches.weather_type)`,
   ).bind(
     m.matchId,
     ctx.seasonId,
@@ -376,25 +429,17 @@ export async function upsertStats(
   playerMap: Map<string, number>,
   teamMap: Map<string, number>,
 ): Promise<number> {
-  let affected = 0;
-  for (let i = 0; i < stats.length; i += BATCH_SIZE) {
-    const chunk = stats.slice(i, i + BATCH_SIZE);
-    const stmts: D1PreparedStatement[] = [];
-    for (const s of chunk) {
-      const playerId = playerMap.get(s.playerId);
-      if (!playerId) continue;
-      if (!s.timeOnGroundPercentage && !s.disposals) continue;
-      const matchId = matchMap.get(s.matchId);
-      if (!matchId) continue;
-      const teamId = teamMap.get(normaliseTeam(s.team)) ?? null;
-      stmts.push(buildStatUpsert(env, s, matchId, playerId, teamId));
-    }
-    if (stmts.length > 0) {
-      const results = await env.DB.batch(stmts);
-      affected += results.filter((r) => r.success).length;
-    }
+  const stmts: D1PreparedStatement[] = [];
+  for (const s of stats) {
+    const playerId = playerMap.get(s.playerId);
+    if (!playerId) continue;
+    if (!s.timeOnGroundPercentage && !s.disposals) continue;
+    const matchId = matchMap.get(s.matchId);
+    if (!matchId) continue;
+    const teamId = teamMap.get(normaliseTeam(s.team)) ?? null;
+    stmts.push(buildStatUpsert(env, s, matchId, playerId, teamId));
   }
-  return affected;
+  return await batchAndCountChanges(env, stmts);
 }
 
 function buildStatUpsert(
@@ -521,7 +566,76 @@ function buildStatUpsert(
       ruck_contests = excluded.ruck_contests,
       score_launches = excluded.score_launches,
       supercoach_score = COALESCE(excluded.supercoach_score, player_match_stats.supercoach_score),
-      brownlow_votes = COALESCE(excluded.brownlow_votes, player_match_stats.brownlow_votes)`,
+      brownlow_votes = COALESCE(excluded.brownlow_votes, player_match_stats.brownlow_votes)
+    WHERE
+      player_match_stats.team_id IS NOT excluded.team_id OR
+      player_match_stats.guernsey_number IS NOT excluded.guernsey_number OR
+      player_match_stats.player_position IS NOT excluded.player_position OR
+      player_match_stats.kicks IS NOT excluded.kicks OR
+      player_match_stats.handballs IS NOT excluded.handballs OR
+      player_match_stats.disposals IS NOT excluded.disposals OR
+      player_match_stats.marks IS NOT excluded.marks OR
+      player_match_stats.goals IS NOT excluded.goals OR
+      player_match_stats.behinds IS NOT excluded.behinds OR
+      player_match_stats.tackles IS NOT excluded.tackles OR
+      player_match_stats.hitouts IS NOT excluded.hitouts OR
+      player_match_stats.free_kicks_for IS NOT excluded.free_kicks_for OR
+      player_match_stats.free_kicks_against IS NOT excluded.free_kicks_against OR
+      player_match_stats.contested_possessions IS NOT excluded.contested_possessions OR
+      player_match_stats.uncontested_possessions IS NOT excluded.uncontested_possessions OR
+      player_match_stats.contested_marks IS NOT excluded.contested_marks OR
+      player_match_stats.intercepts IS NOT excluded.intercepts OR
+      player_match_stats.centre_clearances IS NOT excluded.centre_clearances OR
+      player_match_stats.stoppage_clearances IS NOT excluded.stoppage_clearances OR
+      player_match_stats.clearances IS NOT excluded.clearances OR
+      player_match_stats.inside_fifties IS NOT excluded.inside_fifties OR
+      player_match_stats.rebounds IS NOT excluded.rebounds OR
+      player_match_stats.clangers IS NOT excluded.clangers OR
+      player_match_stats.turnovers IS NOT excluded.turnovers OR
+      player_match_stats.one_percenters IS NOT excluded.one_percenters OR
+      player_match_stats.bounces IS NOT excluded.bounces OR
+      player_match_stats.goal_assists IS NOT excluded.goal_assists OR
+      player_match_stats.disposal_efficiency_pct IS NOT excluded.disposal_efficiency_pct OR
+      player_match_stats.metres_gained IS NOT excluded.metres_gained OR
+      player_match_stats.goal_accuracy IS NOT excluded.goal_accuracy OR
+      player_match_stats.marks_inside_fifty IS NOT excluded.marks_inside_fifty OR
+      player_match_stats.tackles_inside_fifty IS NOT excluded.tackles_inside_fifty OR
+      player_match_stats.shots_at_goal IS NOT excluded.shots_at_goal OR
+      player_match_stats.score_involvements IS NOT excluded.score_involvements OR
+      player_match_stats.total_possessions IS NOT excluded.total_possessions OR
+      player_match_stats.time_on_ground_pct IS NOT excluded.time_on_ground_pct OR
+      player_match_stats.afl_fantasy_score IS NOT excluded.afl_fantasy_score OR
+      player_match_stats.rating_points IS NOT excluded.rating_points OR
+      player_match_stats.goal_efficiency IS NOT excluded.goal_efficiency OR
+      player_match_stats.shot_efficiency IS NOT excluded.shot_efficiency OR
+      player_match_stats.interchange_counts IS NOT excluded.interchange_counts OR
+      player_match_stats.effective_disposals IS NOT excluded.effective_disposals OR
+      player_match_stats.effective_kicks IS NOT excluded.effective_kicks OR
+      player_match_stats.kick_efficiency IS NOT excluded.kick_efficiency OR
+      player_match_stats.kick_to_handball_ratio IS NOT excluded.kick_to_handball_ratio OR
+      player_match_stats.pressure_acts IS NOT excluded.pressure_acts OR
+      player_match_stats.def_half_pressure_acts IS NOT excluded.def_half_pressure_acts OR
+      player_match_stats.spoils IS NOT excluded.spoils OR
+      player_match_stats.hitouts_to_advantage IS NOT excluded.hitouts_to_advantage OR
+      player_match_stats.hitout_win_pct IS NOT excluded.hitout_win_pct OR
+      player_match_stats.ground_ball_gets IS NOT excluded.ground_ball_gets OR
+      player_match_stats.f50_ground_ball_gets IS NOT excluded.f50_ground_ball_gets OR
+      player_match_stats.intercept_marks IS NOT excluded.intercept_marks OR
+      player_match_stats.marks_on_lead IS NOT excluded.marks_on_lead OR
+      player_match_stats.contested_possession_rate IS NOT excluded.contested_possession_rate OR
+      player_match_stats.contest_off_one_on_ones IS NOT excluded.contest_off_one_on_ones OR
+      player_match_stats.contest_off_wins IS NOT excluded.contest_off_wins OR
+      player_match_stats.contest_off_wins_pct IS NOT excluded.contest_off_wins_pct OR
+      player_match_stats.contest_def_one_on_ones IS NOT excluded.contest_def_one_on_ones OR
+      player_match_stats.contest_def_losses IS NOT excluded.contest_def_losses OR
+      player_match_stats.contest_def_loss_pct IS NOT excluded.contest_def_loss_pct OR
+      player_match_stats.centre_bounce_attendances IS NOT excluded.centre_bounce_attendances OR
+      player_match_stats.kickins IS NOT excluded.kickins OR
+      player_match_stats.kickins_playon IS NOT excluded.kickins_playon OR
+      player_match_stats.ruck_contests IS NOT excluded.ruck_contests OR
+      player_match_stats.score_launches IS NOT excluded.score_launches OR
+      player_match_stats.supercoach_score IS NOT COALESCE(excluded.supercoach_score, player_match_stats.supercoach_score) OR
+      player_match_stats.brownlow_votes IS NOT COALESCE(excluded.brownlow_votes, player_match_stats.brownlow_votes)`,
   ).bind(
     matchId,
     playerId,
@@ -628,7 +742,13 @@ export async function upsertLineups(
                guernsey_number = excluded.guernsey_number,
                position = excluded.position,
                is_emergency = excluded.is_emergency,
-               is_substitute = excluded.is_substitute`,
+               is_substitute = excluded.is_substitute
+             WHERE
+               match_lineups.team_id IS NOT excluded.team_id OR
+               match_lineups.guernsey_number IS NOT excluded.guernsey_number OR
+               match_lineups.position IS NOT excluded.position OR
+               match_lineups.is_emergency IS NOT excluded.is_emergency OR
+               match_lineups.is_substitute IS NOT excluded.is_substitute`,
           ).bind(
             matchId,
             playerId,
@@ -642,11 +762,5 @@ export async function upsertLineups(
       }
     }
   }
-  let affected = 0;
-  for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
-    const chunk = stmts.slice(i, i + BATCH_SIZE);
-    const results = await env.DB.batch(chunk);
-    affected += results.filter((r) => r.success).length;
-  }
-  return affected;
+  return await batchAndCountChanges(env, stmts);
 }
