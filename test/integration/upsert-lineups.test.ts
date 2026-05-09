@@ -88,6 +88,32 @@ describe("upsertLineups", () => {
     expect(row).toEqual({ is_emergency: 0, is_substitute: 1 });
   });
 
+  it("returns the change count: real inserts, then 0 on identical re-upsert, then >0 when a flag flips", async () => {
+    const { matchMap, teamMap } = await setup();
+    const lineup = makeLineup({
+      homePlayers: [
+        makeLineupPlayer({ playerId: "P-1" }),
+        makeLineupPlayer({ playerId: "P-2", isEmergency: true }),
+      ],
+    });
+    const playerMap = await upsertPlayers(env, unionPlayers([], [lineup]));
+
+    const firstChanges = await upsertLineups(env, [lineup], matchMap, playerMap, teamMap);
+    expect(firstChanges).toBe(2);
+
+    const idempotentChanges = await upsertLineups(env, [lineup], matchMap, playerMap, teamMap);
+    expect(idempotentChanges).toBe(0);
+
+    const flipped = makeLineup({
+      homePlayers: [
+        makeLineupPlayer({ playerId: "P-1" }),
+        makeLineupPlayer({ playerId: "P-2", isEmergency: false, isSubstitute: true }),
+      ],
+    });
+    const flipChanges = await upsertLineups(env, [flipped], matchMap, playerMap, teamMap);
+    expect(flipChanges).toBe(1);
+  });
+
   it("skips silently when matchId is unknown to the match map", async () => {
     const { matchMap, teamMap } = await setup();
     const orphaned = makeLineup({
