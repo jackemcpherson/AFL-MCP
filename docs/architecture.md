@@ -1,21 +1,24 @@
 # Architecture
 
 AFL-MCP is a Cloudflare Worker that exposes an MCP (Model Context Protocol)
-server backed by a Cloudflare D1 database. Clients connect over Streamable HTTP
-to `https://afl.jackemcpherson.com/mcp` and call three Code Mode tools:
-`schema`, `tools`, and `code`. The `code` tool accepts arbitrary TypeScript
-which the Worker executes inside a sandboxed Dynamic Worker isolate with
-read-only access to the database.
+server backed by a Cloudflare D1 database covering four Australian football
+competitions: AFL Men's, AFL Women's, VFL, and VFLW. Clients connect over
+Streamable HTTP to `https://afl.jackemcpherson.com/mcp` and call three Code
+Mode tools: `schema`, `tools`, and `code`. The `code` tool accepts arbitrary
+TypeScript which the Worker executes inside a sandboxed Dynamic Worker
+isolate with read-only access to the database; an optional `competition`
+parameter on the tool surfaces the dimension to the LLM as a hint (the SQL
+must still filter explicitly).
 
 ## Components
 
 | Layer | Where | What |
 |-------|-------|------|
-| Entry / routing | `src/index.ts` | Worker `fetch` and `scheduled` handlers. |
+| Entry / routing | `src/index.ts` | Worker `fetch` and `scheduled` handlers; admin endpoints (`sync`, `backfill`, `recalculate-pav`). |
 | MCP protocol | `src/mcp/protocol.ts` | Streamable-HTTP transport. |
 | MCP tools | `src/mcp/tools/` | `schema`, `tools`, `code` definitions. |
 | Sandbox | `src/sandbox/executor.ts` | Dynamic Worker isolate + `DbProxy` RPC bridge. |
-| Sync | `src/sync/` | Cron-driven data pipeline (orchestrator, upserts, PAV). |
+| Sync | `src/sync/` | Cron-driven data pipeline (orchestrator, upserts, PAV) — multi-competition. |
 | Schema | `src/db/schema.sql` | D1 schema (10 tables — see [`schema.md`](./schema.md)). |
 
 ## Code execution model
