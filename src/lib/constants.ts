@@ -32,6 +32,7 @@ export const VENUE_NAME_MAP: Record<string, string> = {
   "TIO Stadium": "TIO Stadium",
   "Marrara Oval": "TIO Stadium",
   "TIO Traeger Park": "Traeger Park",
+  "Ikon Park": "Princes Park",
   "Mars Stadium": "Mars Stadium",
   "Eureka Stadium": "Mars Stadium",
   "People First Stadium": "Carrara",
