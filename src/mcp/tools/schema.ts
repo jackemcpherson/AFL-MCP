@@ -107,7 +107,7 @@ export function getSchemaInfo() {
         "external_afl_player_id is the AFL API player ID (CD_I format), populated for ~1,535 players.",
         "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
         "matches.margin is signed from the home team's perspective: positive = home team won by that many points, negative = away team won. Use ABS(margin) for absolute margin. ~2,869 matches have negative margins (every away win in the dataset).",
-        "abbreviation on teams is not populated.",
+        "teams.abbreviation: AFL standard 2–4 letter codes (ADE, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB).",
         "brownlow_votes: complete from 1990-2025 except for 22 regular-season matches across 2022-2025 with partial vote totals (3, 4, or 5 instead of 6); NULL for the current 2026 season. Only 3 non-zero values per match (3-2-1 to the umpires' best three).",
         "supercoach_score: fryzigg source only. Fully populated 2007-2019. NULL pre-2007 and from 2020 onward (fryzigg stopped providing this data).",
         "afl_fantasy_score: populated for all played matches from 2007 onward (6 NULLs in 2020). NULL pre-2007.",
