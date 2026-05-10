@@ -96,26 +96,27 @@ export function getSchemaInfo() {
       notes: [
         "Players have no team_id column — a player's team is determined per-game via player_match_stats.team_id.",
         "player_season_pav is available 1998 onwards only. Use LEFT JOIN when combining with player_match_stats — pre-1998 seasons have stats but no PAV rows.",
-        "total_pav = off_pav + mid_pav + def_pav.",
+        "total_pav ≈ off_pav + mid_pav + def_pav. ~12-15% of rows differ by exactly ±0.01 because each component is rounded independently. Treat the relationship as approximate, not exact.",
         "PAV zone meanings: off_pav = offensive (goals, score involvements, forward craft); mid_pav = midfield (disposals, clearances, tackles, contested ball); def_pav = defensive (intercepts, spoils, one-percenters, rebounds).",
         "PAV interpretation: 25+ exceptional (Brownlow contention), 20-25 great (All-Australian), 15-20 very good (team best-22), 10-15 solid contributor, 5-10 below average or limited games, <5 minimal contribution. Zone PAV of 10+ = All-Australian contention in that role.",
-        "Opening Round has round_number = 0. It is played before Round 1 and must not be excluded from queries.",
+        "Opening Round has round_number = 0. It is played before Round 1 and must not be excluded from queries. Currently stored for the 2026 season; the 2024 and 2025 Opening Rounds are not yet labelled this way in the data.",
         "round_type is either 'Regular' or 'Finals'. Use the round column for granular finals identification: QF, EF, SF, PF, GF.",
         "match date format is ISO 8601 (YYYY-MM-DD).",
         "Data covers AFL Men's competition from 1990 to the current season.",
-        "Data comes from two sources: AFL API (current season, real-time) and fryzigg (historical, static). Some columns are only populated by one source.",
+        "Data comes from two sources: AFL API (current season, real-time) and fryzigg (historical, static). Some columns are only populated by one source. See column_coverage for per-column year ranges.",
         "external_afl_player_id is the AFL API player ID (CD_I format), populated for ~1,535 players.",
         "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
+        "matches.margin is signed from the home team's perspective: positive = home team won by that many points, negative = away team won. Use ABS(margin) for absolute margin. ~2,869 matches have negative margins (every away win in the dataset).",
         "abbreviation on teams is not populated.",
-        "brownlow_votes: fryzigg source only. Available for historical matches (pre-2026). NULL for current 2026 season. Only ~3 non-zero values per match (votes go to best 3 players).",
-        "supercoach_score: fryzigg source only. Available 2010-2019 only. NULL from 2020 onward (fryzigg stopped providing this data).",
-        "afl_fantasy_score: available from both sources. Populated for most matches 2007+.",
-        "subbed: fryzigg source only. Available for historical matches (pre-2026). NULL for current 2026 season. Values: 'Not Subbed', 'Subbed'.",
-        "weather_temp_c and weather_type: fryzigg source only. Available ~2012-2025. NULL for pre-2012 and current 2026 season.",
+        "brownlow_votes: complete from 1990-2025 except for 22 regular-season matches across 2022-2025 with partial vote totals (3, 4, or 5 instead of 6); NULL for the current 2026 season. Only 3 non-zero values per match (3-2-1 to the umpires' best three).",
+        "supercoach_score: fryzigg source only. Fully populated 2007-2019. NULL pre-2007 and from 2020 onward (fryzigg stopped providing this data).",
+        "afl_fantasy_score: populated for all played matches from 2007 onward (6 NULLs in 2020). NULL pre-2007.",
+        "subbed: fryzigg source only. Populated 1990-2019. NULL from 2020 onward. Values: 'Not Subbed', 'Subbed'.",
+        "weather_temp_c and weather_type: fryzigg source only. Populated 2010-2025 (one missing match in 2011). NULL pre-2010 and for the current 2026 season.",
         "local_time: Melbourne local time (AEST/AEDT) as HH:MM:SS. Available for all seasons.",
         "external_fryzigg_id: cross-reference ID from fryzigg source. Available for ~99% of historical matches.",
         "attendance: populated pre-2020 only (gap being addressed).",
-        "Quarter scores (home_q1_goals through away_q4_behinds) are available for most matches 2000+ and enable quarter-by-quarter analysis.",
+        "Quarter scores (home_q1_goals through away_q4_behinds) are populated for all matches from 2020 onward (excluding 2026 matches not yet played). NULL for all matches 1990-2019.",
         "match_lineups contains announced team selections (before match day). Distinct from player_match_stats which records who actually played and their stats. A player can appear in lineups but not stats (emergency, late withdrawal).",
         "match_lineups is_emergency=1 means the player is named as an emergency and may not play. Only populated from 2024 onward — pre-2024 lineups have is_emergency=0 for all players.",
         "match_lineups is_substitute=1 marks all interchange/bench players (INT + SUB positions), not just the medical sub. To find just the medical substitute, filter on position = 'SUB'.",
@@ -125,6 +126,80 @@ export function getSchemaInfo() {
         "round_type is either 'Regular' or 'Finals'. For granular finals identification use the round column: QF, EF, SF, PF, GF.",
         "Most players with both fryzigg and AFL API data are unified under a single player_id. A small number of common-name players (e.g., Mitch Brown, Andrew Phillips) may still have separate records for genuinely different people who share a name.",
       ],
+      column_coverage: {
+        description:
+          "First/last fully populated season for columns whose coverage doesn't span the whole dataset. Columns not listed here are populated for all seasons 1990–current.",
+        columns: {
+          "matches.attendance": { from: 1990, to: 2019, notes: "NULL from 2020 onward." },
+          "matches.weather_temp_c": {
+            from: 2010,
+            to: 2025,
+            notes: "One missing match in 2011. NULL pre-2010 and for 2026.",
+          },
+          "matches.weather_type": {
+            from: 2010,
+            to: 2025,
+            notes: "Same coverage as weather_temp_c.",
+          },
+          "matches.home_q1_goals_through_away_q4_behinds": {
+            from: 2020,
+            to: "current",
+            notes: "100% NULL for all matches 1990–2019.",
+          },
+          "player_match_stats.brownlow_votes": {
+            from: 1990,
+            to: 2025,
+            notes:
+              "22 partial-vote matches across 2022–2025 (totals of 3/4/5 instead of 6). NULL for 2026.",
+          },
+          "player_match_stats.supercoach_score": {
+            from: 2007,
+            to: 2019,
+            notes: "NULL pre-2007 and from 2020 onward.",
+          },
+          "player_match_stats.afl_fantasy_score": {
+            from: 2007,
+            to: "current",
+            notes: "6 NULLs in 2020. NULL pre-2007.",
+          },
+          "player_match_stats.subbed": {
+            from: 1990,
+            to: 2019,
+            notes: "NULL from 2020 onward.",
+          },
+          "player_match_stats.disposal_efficiency_pct": {
+            from: 2012,
+            to: "current",
+            notes: "NULL pre-2012.",
+          },
+          "player_match_stats.score_involvements": {
+            from: 2015,
+            to: "current",
+            notes: "88 NULLs per year in 2012–2014. NULL pre-2012.",
+          },
+          "player_match_stats.metres_gained": {
+            from: 2015,
+            to: "current",
+            notes: "Same coverage as score_involvements.",
+          },
+          "player_match_stats.intercepts": {
+            from: 2015,
+            to: "current",
+            notes: "Same coverage as score_involvements.",
+          },
+          "player_match_stats.pressure_acts": {
+            from: 2017,
+            to: "current",
+            notes:
+              "88 NULLs per year in 2012–2015. 132 NULLs in 2016 (anomalous — under investigation). NULL pre-2012.",
+          },
+          "player_season_pav.*": {
+            from: 1998,
+            to: "current",
+            notes: "No PAV rows pre-1998. Use LEFT JOIN when combining with player_match_stats.",
+          },
+        },
+      },
       common_joins: {
         team_roster_pav: [
           "SELECT p.first_name, p.surname, psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
