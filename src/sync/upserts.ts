@@ -13,6 +13,16 @@ const COMPETITION_NAME: Record<CompetitionCode, string> = {
 const BATCH_SIZE = 500;
 
 /**
+ * Lineups for seasons before this year were derived from `player_match_stats`
+ * by migration 0007 (one-time historical backfill). The AFL API publishes only
+ * the Thursday-night announced team for those years, so a sync against them
+ * would replace the stats-derived rows with players who didn't actually take
+ * the field. `upsertLineups` filters by this constant to make that regression
+ * impossible from any caller (cron, manual scripts, future backfills).
+ */
+const MIN_LINEUP_SYNC_YEAR = 2023;
+
+/**
  * Run prepared statements in batches and return the total number of rows that
  * were actually inserted or updated (`meta.changes`). Combined with WHERE
  * predicates on `ON CONFLICT DO UPDATE`, this distinguishes real writes from
@@ -759,6 +769,7 @@ export async function upsertLineups(
 ): Promise<number> {
   const stmts: D1PreparedStatement[] = [];
   for (const lineup of lineups) {
+    if (lineup.season < MIN_LINEUP_SYNC_YEAR) continue;
     const matchId = matchMap.get(lineup.matchId);
     if (!matchId) continue;
     const homeTeamId = teamMap.get(normaliseTeam(lineup.homeTeam));
