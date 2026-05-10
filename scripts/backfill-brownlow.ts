@@ -52,6 +52,11 @@ function playerKey(matchId: number, team: string, first: string, surname: string
   return `${matchId}|${normaliseTeam(team)}|${first.trim()}|${surname.trim()}`;
 }
 
+/** Lowercase and strip non-alphanumerics — collapses apostrophes, hyphens, dots, spaces. */
+function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 /**
  * Stats matchIds from fitzroy's afl-tables source are 15-char fixed-width:
  * `AT_<4-digit-team-pair-code><YYYYMMDD>`. The trailing 8 chars are the local
@@ -174,14 +179,24 @@ async function runSeason(year: number): Promise<SeasonResult | null> {
      WHERE s.year = ${year}`,
   );
   const rosterMap = new Map<string, number>();
+  const rosterMapNorm = new Map<string, number>();
+  const teamSurnameRoster = new Map<string, Array<{ playerId: number; normFirst: string }>>();
   const seasonFallback = new Map<string, number[]>();
   for (const r of dbRosterRows) {
     const first = (r.first_name ?? "").trim();
     rosterMap.set(playerKey(r.match_id, r.team, first, r.surname), r.player_id);
+    const normFirst = normalizeName(first);
+    const normSurname = normalizeName(r.surname);
+    const teamNorm = normaliseTeam(r.team);
+    rosterMapNorm.set(`${r.match_id}|${teamNorm}|${normFirst}|${normSurname}`, r.player_id);
+    const teamSurnameKey = `${r.match_id}|${teamNorm}|${normSurname}`;
+    const list = teamSurnameRoster.get(teamSurnameKey) ?? [];
+    list.push({ playerId: r.player_id, normFirst });
+    teamSurnameRoster.set(teamSurnameKey, list);
     const fallbackKey = `${r.surname.trim()}|${first}`;
-    const list = seasonFallback.get(fallbackKey) ?? [];
-    if (!list.includes(r.player_id)) list.push(r.player_id);
-    seasonFallback.set(fallbackKey, list);
+    const list2 = seasonFallback.get(fallbackKey) ?? [];
+    if (!list2.includes(r.player_id)) list2.push(r.player_id);
+    seasonFallback.set(fallbackKey, list2);
   }
 
   const statsResult = await fetchPlayerStats({
@@ -213,6 +228,33 @@ async function runSeason(year: number): Promise<SeasonResult | null> {
     }
 
     let dbPlayerId = rosterMap.get(playerKey(dbMatchId, s.team, s.givenName, s.surname));
+    if (!dbPlayerId) {
+      // Normalised exact match — handles apostrophes (O'Brien/OBrien) and case (de Goey/De Goey).
+      const normFirst = normalizeName(s.givenName);
+      const normSurname = normalizeName(s.surname);
+      const teamNorm = normaliseTeam(s.team);
+      dbPlayerId = rosterMapNorm.get(`${dbMatchId}|${teamNorm}|${normFirst}|${normSurname}`);
+      if (!dbPlayerId) {
+        // Surname-on-team match — disambiguate by first-name prefix or 3-char stem.
+        // Handles nickname differences (Matt/Matthew, Josh/Joshua, Harry/Harrison)
+        // and ambiguous surnames within a team (Bailey Williams vs Jack Williams).
+        const candidates = teamSurnameRoster.get(`${dbMatchId}|${teamNorm}|${normSurname}`) ?? [];
+        if (candidates.length === 1) {
+          dbPlayerId = candidates[0]?.playerId;
+        } else if (candidates.length > 1) {
+          const prefixMatch = candidates.find(
+            (c) => c.normFirst.startsWith(normFirst) || normFirst.startsWith(c.normFirst),
+          );
+          if (prefixMatch) {
+            dbPlayerId = prefixMatch.playerId;
+          } else {
+            const stem = normFirst.slice(0, 3);
+            const stemMatches = candidates.filter((c) => c.normFirst.startsWith(stem));
+            if (stemMatches.length === 1) dbPlayerId = stemMatches[0]?.playerId;
+          }
+        }
+      }
+    }
     if (!dbPlayerId) {
       const fallback = seasonFallback.get(`${s.surname.trim()}|${s.givenName.trim()}`);
       if (fallback && fallback.length === 1) dbPlayerId = fallback[0];
