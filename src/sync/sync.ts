@@ -3,7 +3,7 @@ import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { logSync } from "./log";
-import { recalculatePav } from "./pav";
+import { type PavCompetition, recalculatePav } from "./pav";
 import {
   buildMatchAflIdMap,
   ensureCompetition,
@@ -25,18 +25,62 @@ const FORWARD_DAYS = 3;
 const BACKWARD_DAYS = 1;
 const SOURCE = "afl-api" as const;
 
-/**
- * The single sync entry point. Called from the scheduled() cron handler.
- * Defaults to AFLM only; pass additional competitions to extend coverage
- * (AFLW, VFL, VFLW) without changing any other code.
- */
-export async function sync(env: Env, competitions: CompetitionCode[] = ["AFLM"]): Promise<void> {
-  const now = new Date();
-  if (!(await shouldRunNow(now, env))) return;
+const PAV_COMPETITIONS: ReadonlySet<CompetitionCode> = new Set<CompetitionCode>(["AFLM", "AFLW"]);
 
+/** Per-(competition, year) outcome from a single sync tick. */
+export interface BackfillResult {
+  readonly competition: CompetitionCode;
+  readonly year: number;
+  readonly matches: number;
+  readonly stats: number;
+  readonly lineups: number;
+  readonly error?: string;
+}
+
+/** Optional knobs for the backfill / admin entry points. */
+export interface SyncOptions {
+  /** When provided alongside `toYear`, iterates seasons inclusively. */
+  readonly fromYear?: number;
+  /** Inclusive upper bound for the iteration. */
+  readonly toYear?: number;
+  /** Skip the cadence gate; for backfills triggered manually. */
+  readonly skipShouldRunNow?: boolean;
+  /** Skip PAV recalc after stats writes; for label-only relabels. */
+  readonly skipPav?: boolean;
+}
+
+/**
+ * The single sync entry point. Called from the scheduled() cron handler in
+ * steady state and from `/mcp/admin/backfill` for one-shot historical loads.
+ *
+ * - Steady-state: pass `competitions` only; current calendar year is synced
+ *   subject to the `shouldRunNow` cadence gate.
+ * - Backfill: pass `fromYear`/`toYear` (inclusive) and `skipShouldRunNow:
+ *   true` to iterate per-year per-competition.
+ *
+ * @returns Per-(competition, year) results for backfill observability. The
+ * cron handler ignores the return value.
+ */
+export async function sync(
+  env: Env,
+  competitions: readonly CompetitionCode[],
+  options?: SyncOptions,
+): Promise<BackfillResult[]> {
+  const now = new Date();
+  if (!options?.skipShouldRunNow && !(await shouldRunNow(now, env))) return [];
+
+  const seasons: number[] =
+    options?.fromYear !== undefined && options.toYear !== undefined
+      ? rangeInclusive(options.fromYear, options.toYear)
+      : [now.getUTCFullYear()];
+
+  const results: BackfillResult[] = [];
   for (const competition of competitions) {
-    await syncCompetition(env, competition, now);
+    for (const season of seasons) {
+      results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
+    }
   }
+  return results;
 }
 
 /**
@@ -57,19 +101,18 @@ export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
   return row !== null;
 }
 
-async function syncCompetition(env: Env, competition: CompetitionCode, now: Date): Promise<void> {
-  const season = now.getUTCFullYear();
-
+async function syncCompetition(
+  env: Env,
+  competition: CompetitionCode,
+  season: number,
+  skipPav: boolean,
+): Promise<BackfillResult> {
   try {
     const matchResult = await fetchMatches({ source: SOURCE, season, competition });
     if (!matchResult.success) {
-      await logSync(
-        env,
-        `sync:${competition}`,
-        0,
-        `fetchMatches failed: ${describeError(matchResult.error)}`,
-      );
-      return;
+      const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
+      await logSync(env, `sync:${competition}`, 0, error);
+      return { competition, year: season, matches: 0, stats: 0, lineups: 0, error };
     }
     const allMatches = matchResult.data;
 
@@ -92,7 +135,9 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
       shouldFetchStats ? fetchPlayerStatsSafe(env, competition, season) : [],
     ]);
 
-    if (allMatches.length === 0 && lineups.length === 0) return;
+    if (allMatches.length === 0 && lineups.length === 0) {
+      return { competition, year: season, matches: 0, stats: 0, lineups: 0 };
+    }
 
     const teamMap = await ensureTeams(env, competitionId, allMatches);
     const venueMap = await ensureVenues(env, allMatches);
@@ -116,16 +161,26 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
     if (lineups.length > 0) {
       lineupsAffected = await upsertLineups(env, lineups, matchMap, playerMap, teamMap);
     }
-    if (statsAffected > 0) {
-      await recalculatePav(env);
+    if (statsAffected > 0 && !skipPav && PAV_COMPETITIONS.has(competition)) {
+      await recalculatePav(env, competition as PavCompetition, season);
     }
 
     const didWork = statsAffected > 0 || lineupsAffected > 0;
     if (didWork) {
       await logSync(env, `sync:${competition}`, matchesAffected + statsAffected + lineupsAffected);
     }
+
+    return {
+      competition,
+      year: season,
+      matches: matchesAffected,
+      stats: statsAffected,
+      lineups: lineupsAffected,
+    };
   } catch (err) {
-    await logSync(env, `sync:${competition}`, 0, describeError(err));
+    const error = describeError(err);
+    await logSync(env, `sync:${competition}`, 0, error);
+    return { competition, year: season, matches: 0, stats: 0, lineups: 0, error };
   }
 }
 
@@ -133,6 +188,14 @@ function countCompleted(matches: readonly Match[]): number {
   let n = 0;
   for (const m of matches) if (m.homePoints !== null) n++;
   return n;
+}
+
+function rangeInclusive(from: number, to: number): number[] {
+  const out: number[] = [];
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  for (let y = lo; y <= hi; y++) out.push(y);
+  return out;
 }
 
 async function fetchLineupsSafe(

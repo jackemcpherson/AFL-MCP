@@ -97,7 +97,7 @@ describe("handleMcpRequest", () => {
     const json = await parseJson(res);
     expect(json.jsonrpc).toBe("2.0");
     expect(json.id).toBe(1);
-    expect(json.result?.serverInfo?.name).toBe("afl-mcp-v2");
+    expect(json.result?.serverInfo?.name).toBe("afl-mcp");
     expect(json.result?.capabilities?.tools).toBeDefined();
   });
 

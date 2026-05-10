@@ -31,19 +31,21 @@ describe("upsertMatches", () => {
     await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
 
     const row = await env.DB.prepare(
-      "SELECT external_afl_id, home_points, away_points, round, round_type FROM matches",
+      "SELECT external_afl_id, home_points, away_points, round, round_abbreviation, round_type FROM matches",
     ).first<{
       external_afl_id: string;
       home_points: number;
       away_points: number;
       round: string;
+      round_abbreviation: string;
       round_type: string;
     }>();
     expect(row).toEqual({
       external_afl_id: "M-1",
       home_points: 80,
       away_points: 69,
-      round: "R1",
+      round: "Round 1",
+      round_abbreviation: "Rd 1",
       round_type: "Regular",
     });
   });
@@ -165,7 +167,7 @@ describe("upsertMatches", () => {
     expect(coalesceNoopChanges).toBe(0);
   });
 
-  it("derives 'Opening Round' from roundNumber=0 (no roundCode required)", async () => {
+  it("derives 'Opening Round' from roundNumber=0 (no roundName/roundCode required)", async () => {
     const { competitionId, seasonId } = await setup();
     const opening = makeMatch({
       matchId: "M-OR",
@@ -178,11 +180,14 @@ describe("upsertMatches", () => {
     const venueMap = await ensureVenues(env, [opening]);
     await upsertMatches(env, [opening], { seasonId, teamMap, venueMap });
 
-    const row = await env.DB.prepare("SELECT round, round_number FROM matches").first<{
+    const row = await env.DB.prepare(
+      "SELECT round, round_abbreviation, round_number FROM matches",
+    ).first<{
       round: string;
+      round_abbreviation: string;
       round_number: number;
     }>();
-    expect(row).toEqual({ round: "Opening Round", round_number: 0 });
+    expect(row).toEqual({ round: "Opening Round", round_abbreviation: "OR", round_number: 0 });
   });
 });
 
