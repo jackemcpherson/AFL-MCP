@@ -2,7 +2,18 @@
 
 [![CI](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml)
 
-MCP server for AFL Men's statistics, powered by Cloudflare Workers and D1. Covers match results and player statistics from 1990 to the current season, updated automatically via cron-triggered sync from the AFL API.
+MCP server for Australian football statistics covering AFL Men's, AFL Women's, VFL, and VFLW. Powered by Cloudflare Workers and D1, with cron-triggered sync from the AFL API via [fitzroy](https://www.npmjs.com/package/fitzroy).
+
+## Coverage
+
+| Competition | Years | Matches | Stats | Lineups | PAV |
+|---|---|:-:|:-:|:-:|:-:|
+| AFL Men's (`AFLM`) | 1990 to current | ✓ | ✓ | 2015+ | 1998+ |
+| AFL Women's (`AFLW`) | 2017 to current | ✓ | ✓ | 2017+ | 2017+ |
+| VFL | 2021 to current | ✓ | ✓ | best-effort | – |
+| VFLW | 2021 to current | ✓ | ✓ | best-effort | – |
+
+PAV (Player Approximate Value) is computed for AFLM and AFLW only — VFL/VFLW are excluded because the AFL API doesn't populate the formula's required inputs (`goal_assists`, `marks_inside_50`, `one_percenters`) for those competitions.
 
 ## Architecture
 
@@ -18,11 +29,39 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 
 | Tool | Purpose |
 |------|---------|
-| `schema` | Database structure, column details, join patterns, query API reference |
+| `schema` | Database structure, per-competition coverage, column details, join patterns, query API reference |
 | `tools` | Sandbox capabilities, constraints, and guidance |
-| `code` | Execute TypeScript against the D1 database in an isolated sandbox |
+| `code` | Execute TypeScript against the D1 database in an isolated sandbox. Optional `competition` arg hints which competition the query is about (you must still filter via `JOIN competitions c WHERE c.code = ?` — the param does not auto-inject SQL) |
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
+
+### Filtering by competition
+
+Always join through `seasons → competitions` and filter by `c.code` in your SQL. Without the filter, results mix competitions silently because team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) are distinct `team_id`s.
+
+```sql
+SELECT m.date, ht.name AS home, m.home_points, at.name AS away, m.away_points
+FROM matches m
+JOIN seasons s ON m.season_id = s.id
+JOIN competitions c ON s.competition_id = c.id
+JOIN teams ht ON m.home_team_id = ht.id
+JOIN teams at ON m.away_team_id = at.id
+WHERE c.code = 'AFLW' AND s.year = 2025;
+```
+
+The `round_abbreviation` column carries the AFL's standard short codes (`Rd N`, `OR`, `WC`, `FW1`, `SF`, `PF`, `GF`) and is consistent across all four competitions — useful for cross-competition queries:
+
+```sql
+-- All grand finals across all competitions
+SELECT c.code, s.year, ht.name, m.home_points, at.name, m.away_points
+FROM matches m
+JOIN seasons s ON m.season_id = s.id
+JOIN competitions c ON s.competition_id = c.id
+JOIN teams ht ON m.home_team_id = ht.id
+JOIN teams at ON m.away_team_id = at.id
+WHERE m.round_abbreviation = 'GF'
+ORDER BY s.year DESC, c.code;
+```
 
 ## Getting Started
 
@@ -77,21 +116,28 @@ bunx wrangler d1 migrations apply afl-stats --remote
 
 ## Data Sync
 
-A single cron (`*/5 * * * *`) drives all data updates. The orchestrator in
-`src/sync/sync.ts` decides whether to fetch on each tick: it always runs at
-the top of the hour, and otherwise runs only when a match exists in the
-database within roughly ±3 days of now. PAV is recalculated from inside the
-same pipeline whenever new player stats land.
+A single cron (`*/5 * * * *`) drives all data updates for all four competitions. The orchestrator in `src/sync/sync.ts` decides whether to fetch on each tick: it always runs at the top of the hour, and otherwise runs only when a match exists in the database within roughly ±3 days of now. PAV is recalculated from inside the same pipeline whenever new player stats land for AFLM or AFLW.
 
-See [`docs/sync.md`](./docs/sync.md) for the full pipeline, the `shouldRunNow`
-gate, and the AFL season-structure considerations (Opening Round, finals
-codes) that any query touching match data needs to handle.
+For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
+
+```json
+{
+  "competitions": ["AFLW"],
+  "fromYear": 2017,
+  "toYear": 2025,
+  "skipShouldRunNow": true,
+  "skipPav": false
+}
+```
+
+It iterates `(competition, year)` pairs and returns per-tick row counts. Caller is responsible for chunking year ranges to stay under the Worker walltime cap (typically a single year per request for AFLM, a few for the smaller competitions).
+
+See [`docs/sync.md`](./docs/sync.md) for the full pipeline, the `shouldRunNow` gate, and the AFL season-structure considerations (Opening Round, finals codes, VFL Wildcard) that any query touching match data needs to handle.
 
 ## Further Documentation
 
-- [`docs/architecture.md`](./docs/architecture.md) — Worker entry, MCP transport,
-  sandbox model.
-- [`docs/sync.md`](./docs/sync.md) — Cron, gating, sync pipeline, PAV.
+- [`docs/architecture.md`](./docs/architecture.md) — Worker entry, MCP transport, sandbox model.
+- [`docs/sync.md`](./docs/sync.md) — Cron, gating, sync pipeline, PAV scope, backfill endpoint.
 - [`docs/schema.md`](./docs/schema.md) — D1 table reference.
 
 ## Contributing
