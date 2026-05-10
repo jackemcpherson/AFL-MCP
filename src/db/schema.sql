@@ -14,6 +14,7 @@ CREATE TABLE seasons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   competition_id INTEGER NOT NULL REFERENCES competitions(id),
   year INTEGER NOT NULL,
+  is_complete INTEGER NOT NULL DEFAULT 0,
   UNIQUE (competition_id, year)
 );
 
