@@ -125,6 +125,7 @@ export function getSchemaInfo() {
         "match_lineups represent the post-change team — if an emergency replaces a late withdrawal, they appear as a starter, not as an emergency-who-played.",
         "round_type is either 'Regular' or 'Finals'. For granular finals identification use the round column: QF, EF, SF, PF, GF.",
         "Most players with both fryzigg and AFL API data are unified under a single player_id. A small number of common-name players (e.g., Mitch Brown, Andrew Phillips) may still have separate records for genuinely different people who share a name.",
+        "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds. Useful for detecting drift after ingestion or schema changes.",
       ],
       column_coverage: {
         description:
