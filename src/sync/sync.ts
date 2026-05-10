@@ -14,6 +14,7 @@ import {
   selectHasCompletedMatchWithoutStats,
   selectNextRound,
   unionPlayers,
+  updateSeasonCompleteness,
   upsertLineups,
   upsertMatches,
   upsertPlayers,
@@ -102,6 +103,9 @@ async function syncCompetition(env: Env, competition: CompetitionCode, now: Date
       teamMap,
       venueMap,
     });
+    if (matchesAffected > 0) {
+      await updateSeasonCompleteness(env, seasonId);
+    }
     const matchMap = await buildMatchAflIdMap(env, seasonId);
 
     let statsAffected = 0;

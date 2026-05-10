@@ -211,6 +211,23 @@ export async function selectNextRound(env: Env, seasonId: number): Promise<numbe
   return row?.next ?? null;
 }
 
+/**
+ * Recompute and persist `seasons.is_complete` for the given season. A season
+ * is complete iff it has at least one match AND every match has a non-null
+ * `home_points`. Idempotent; safe to call after every sync.
+ */
+export async function updateSeasonCompleteness(env: Env, seasonId: number): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE seasons SET is_complete = (
+       CASE WHEN EXISTS (SELECT 1 FROM matches WHERE season_id = ?1)
+              AND NOT EXISTS (SELECT 1 FROM matches WHERE season_id = ?1 AND home_points IS NULL)
+            THEN 1 ELSE 0 END
+     ) WHERE id = ?1`,
+  )
+    .bind(seasonId)
+    .run();
+}
+
 /** Map fitzroy `external_afl_id` → internal `matches.id` for the given season. */
 export async function buildMatchAflIdMap(env: Env, seasonId: number): Promise<Map<string, number>> {
   const { results } = await env.DB.prepare(

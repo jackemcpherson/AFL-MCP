@@ -5,7 +5,7 @@ export function getSchemaInfo() {
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT, name TEXT",
         seasons:
-          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER",
+          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, is_complete INTEGER (0=in-progress, 1=all matches played)",
         teams:
           "id INTEGER PRIMARY KEY, name TEXT, abbreviation TEXT, competition_id INTEGER REFERENCES competitions(id)",
         venues: "id INTEGER PRIMARY KEY, name TEXT",
@@ -126,6 +126,7 @@ export function getSchemaInfo() {
         "round_type is either 'Regular' or 'Finals'. For granular finals identification use the round column: QF, EF, SF, PF, GF.",
         "Most players with both fryzigg and AFL API data are unified under a single player_id. A small number of common-name players (e.g., Mitch Brown, Andrew Phillips) may still have separate records for genuinely different people who share a name.",
         "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds. Useful for detecting drift after ingestion or schema changes.",
+        "seasons.is_complete: 1 when every match in the season has been played (home_points NOT NULL for all rows). 0 for in-progress and not-started seasons. Maintained by the sync pipeline after each match upsert.",
       ],
       column_coverage: {
         description:
