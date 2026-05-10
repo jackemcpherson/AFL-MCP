@@ -1,9 +1,9 @@
-import { MIN_PAV_YEAR } from "../lib/constants";
+import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import type { Env } from "../types";
-
-export { MIN_PAV_YEAR };
-
 import { logSync } from "./log";
+
+/** Competitions for which the canonical HPN PAV formula can be computed. */
+export type PavCompetition = keyof typeof MIN_PAV_YEAR_BY_COMPETITION;
 
 // D1 does not support CTEs combined with INSERT...ON CONFLICT in a single
 // statement, so we split into a SELECT (with CTEs) and a parameterised UPSERT.
@@ -15,7 +15,7 @@ target_season AS (
     SELECT s.id AS season_id
     FROM seasons s
     JOIN competitions c ON s.competition_id = c.id
-    WHERE s.year = ? AND c.code = 'AFLM'
+    WHERE s.year = ? AND c.code = ?
 ),
 
 -- Step 1a: Aggregate inside 50s per team per match
@@ -214,14 +214,29 @@ interface PavRow {
   total_pav: number;
 }
 
-export async function calculatePav(env: Env, year: number): Promise<number> {
-  if (year < MIN_PAV_YEAR) {
+/**
+ * Calculate PAV for a single (competition, year) and upsert results into
+ * `player_season_pav`.
+ *
+ * @param env - Worker env with the D1 binding.
+ * @param year - Season year.
+ * @param competition - PAV-supported competition (AFLM or AFLW).
+ * @returns Number of upsert rows that succeeded.
+ * @throws if `year` is below the competition's `MIN_PAV_YEAR_BY_COMPETITION` floor.
+ */
+export async function calculatePav(
+  env: Env,
+  year: number,
+  competition: PavCompetition,
+): Promise<number> {
+  const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
+  if (year < minYear) {
     throw new Error(
-      `PAV requires inside 50s data (available from ${MIN_PAV_YEAR}). Year ${year} is not supported.`,
+      `PAV for ${competition} is supported from ${minYear} onwards. Year ${year} is not supported.`,
     );
   }
 
-  const { results } = await env.DB.prepare(PAV_SELECT_SQL).bind(year).all<PavRow>();
+  const { results } = await env.DB.prepare(PAV_SELECT_SQL).bind(year, competition).all<PavRow>();
 
   if (results.length === 0) return 0;
 
@@ -246,29 +261,57 @@ export async function calculatePav(env: Env, year: number): Promise<number> {
   return totalAffected;
 }
 
-export async function recalculatePav(env: Env): Promise<void> {
-  const currentYear = new Date().getFullYear();
+/**
+ * Recalculate PAV for a single (competition, year), defaulting to the
+ * current calendar year. Logs success or failure to `sync_log`; does not
+ * throw on calculation errors.
+ */
+export async function recalculatePav(
+  env: Env,
+  competition: PavCompetition,
+  year: number = new Date().getFullYear(),
+): Promise<void> {
   try {
-    const changes = await calculatePav(env, currentYear);
-    await logSync(env, "pav_recalculation", changes);
+    const changes = await calculatePav(env, year, competition);
+    await logSync(env, `pav_recalculation:${competition}`, changes);
   } catch (err) {
-    await logSync(env, "pav_recalculation", 0, err instanceof Error ? err.message : String(err));
+    await logSync(
+      env,
+      `pav_recalculation:${competition}`,
+      0,
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
 
-export async function calculateAllPav(env: Env): Promise<Record<number, number>> {
-  const { results } = await env.DB.prepare(
-    `SELECT DISTINCT s.year FROM seasons s
-     JOIN competitions c ON s.competition_id = c.id
-     WHERE c.code = 'AFLM' AND s.year >= ?
-     ORDER BY s.year`,
-  )
-    .bind(MIN_PAV_YEAR)
-    .all<{ year: number }>();
+/**
+ * Recalculate PAV for every (competition, year) pair available, returning a
+ * nested map of upsert counts. Used by the
+ * `/mcp/admin/recalculate-all-pav` endpoint.
+ *
+ * @param competitions - Defaults to all PAV-supported competitions.
+ */
+export async function calculateAllPav(
+  env: Env,
+  competitions: readonly PavCompetition[] = ["AFLM", "AFLW"] as const,
+): Promise<Record<PavCompetition, Record<number, number>>> {
+  const out: Record<PavCompetition, Record<number, number>> = { AFLM: {}, AFLW: {} };
 
-  const resultMap: Record<number, number> = {};
-  for (const row of results) {
-    resultMap[row.year] = await calculatePav(env, row.year);
+  for (const competition of competitions) {
+    const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
+    const { results } = await env.DB.prepare(
+      `SELECT DISTINCT s.year FROM seasons s
+       JOIN competitions c ON s.competition_id = c.id
+       WHERE c.code = ? AND s.year >= ?
+       ORDER BY s.year`,
+    )
+      .bind(competition, minYear)
+      .all<{ year: number }>();
+
+    for (const row of results) {
+      out[competition][row.year] = await calculatePav(env, row.year, competition);
+    }
   }
-  return resultMap;
+
+  return out;
 }

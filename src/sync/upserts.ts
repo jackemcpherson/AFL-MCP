@@ -58,11 +58,40 @@ export interface MatchUpsertContext {
   readonly venueMap: Map<string, number>;
 }
 
+/**
+ * Long-form round label, mirroring R fitzRoy's `round.name` from the AFL API
+ * (e.g. "Round 1", "Opening Round", "Wildcard", "Finals Week 1",
+ * "Grand Final"). Falls back to a synthesised label when fitzroy's
+ * `roundName` is null (non-AFL-API sources).
+ */
 function deriveRound(m: Match): string {
-  if (m.roundCode) return m.roundCode;
+  if (m.roundName) return m.roundName;
   if (m.roundNumber === 0) return "Opening Round";
   if (m.roundType === "Finals") return `F${m.roundNumber}`;
-  return `R${m.roundNumber}`;
+  return `Round ${m.roundNumber}`;
+}
+
+/**
+ * Short-form round code, mirroring R fitzRoy's `round.abbreviation` from the
+ * AFL API. Returns the AFL's standard short codes ("OR", "Rd N", "WC",
+ * "FW1", "SF", "PF", "GF"); falls back to synthesised codes when
+ * `roundName` is null.
+ */
+function deriveRoundAbbreviation(m: Match): string {
+  const name = m.roundName;
+  if (name) {
+    if (name === "Opening Round") return "OR";
+    if (name === "Wildcard") return "WC";
+    if (name === "Finals Week 1") return "FW1";
+    if (name === "Semi Finals") return "SF";
+    if (name === "Preliminary Finals") return "PF";
+    if (name === "Grand Final") return "GF";
+    const m1 = /^Round (\d+)$/.exec(name);
+    if (m1) return `Rd ${m1[1]}`;
+  }
+  if (m.roundNumber === 0) return "OR";
+  if (m.roundType === "Finals") return `F${m.roundNumber}`;
+  return `Rd ${m.roundNumber}`;
 }
 
 function deriveRoundType(roundType: string): string {
@@ -314,7 +343,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
 
   return env.DB.prepare(
     `INSERT INTO matches (
-      external_afl_id, season_id, round_number, round_type, round,
+      external_afl_id, season_id, round_number, round_type, round, round_abbreviation,
       date, local_time, venue_id, home_team_id, away_team_id,
       home_goals, home_behinds, home_points,
       away_goals, away_behinds, away_points,
@@ -331,7 +360,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       away_q4_goals, away_q4_behinds,
       weather_temp_c, weather_type
     ) VALUES (
-      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
@@ -353,6 +382,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       round_number = excluded.round_number,
       round_type = excluded.round_type,
       round = excluded.round,
+      round_abbreviation = excluded.round_abbreviation,
       local_time = excluded.local_time,
       venue_id = COALESCE(excluded.venue_id, matches.venue_id),
       home_goals = COALESCE(excluded.home_goals, matches.home_goals),
@@ -390,6 +420,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       matches.round_number IS NOT excluded.round_number OR
       matches.round_type IS NOT excluded.round_type OR
       matches.round IS NOT excluded.round OR
+      matches.round_abbreviation IS NOT excluded.round_abbreviation OR
       matches.local_time IS NOT excluded.local_time OR
       matches.venue_id IS NOT COALESCE(excluded.venue_id, matches.venue_id) OR
       matches.home_goals IS NOT COALESCE(excluded.home_goals, matches.home_goals) OR
@@ -428,6 +459,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
     m.roundNumber,
     deriveRoundType(m.roundType),
     deriveRound(m),
+    deriveRoundAbbreviation(m),
     dateStr,
     localTime,
     venueId,

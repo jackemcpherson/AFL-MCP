@@ -1,12 +1,12 @@
 export function getToolsInfo() {
   return {
     description:
-      "Write TypeScript code that executes in an isolated sandbox with access to the AFL statistics database.",
+      "Write TypeScript code that executes in an isolated sandbox with access to the Australian football statistics database (AFLM, AFLW, VFL, VFLW).",
     environment: {
       db: {
         type: "D1Database",
         description:
-          "Cloudflare D1 database containing AFL Men's match results and player statistics from 1990 to the current season.",
+          "Cloudflare D1 database covering AFL Men's (1990+), AFL Women's (2017+), VFL (2021+), and VFLW (2021+) match results, player statistics, and lineups. PAV is computed for AFLM (1998+) and AFLW (2017+) only.",
         access: "Read-only. Use db.prepare(sql).bind(...).all() or .first() to query.",
       },
     },
@@ -23,6 +23,7 @@ export function getToolsInfo() {
     ],
     guidance: [
       "Call schema first if you need to inspect table structure",
+      "ALWAYS filter queries by competition: JOIN seasons → competitions, then WHERE c.code = ? (AFLM/AFLW/VFL/VFLW). Without it, results mix competitions silently.",
       "Use parameterised queries with .bind() to avoid SQL injection",
       "For complex analysis, run multiple queries and process results in code",
       "Return your final result as a JSON-serialisable value",

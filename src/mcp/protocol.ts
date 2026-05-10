@@ -5,9 +5,11 @@ import { getToolsInfo } from "./tools/tools";
 import type { JsonRpcRequest, JsonRpcResponse, ToolDefinition } from "./types";
 
 const SERVER_INFO = {
-  name: "afl-mcp-v2",
-  version: "2.0.0",
+  name: "afl-mcp",
+  version: "3.0.0",
 };
+
+const COMPETITION_CODES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
 const PROTOCOL_VERSION = "2025-03-26";
 
@@ -21,7 +23,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "schema",
     description:
-      "Get the database schema, table definitions, column details, join patterns, and query API reference. Call this first to understand what data is available before writing code.",
+      "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -31,7 +33,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "tools",
     description:
-      "Get sandbox capabilities, constraints, and guidance for writing code that runs against the AFL statistics database.",
+      "Get sandbox capabilities, constraints, and guidance for writing code that runs against the Australian football statistics database (AFLM, AFLW, VFL, VFLW).",
     inputSchema: {
       type: "object",
       properties: {},
@@ -41,7 +43,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "code",
     description:
-      "Execute TypeScript code in an isolated sandbox with read-only access to the AFL statistics D1 database via the `db` variable. The code must return a JSON-serialisable value. Call schema first to understand the database structure.",
+      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure.",
     inputSchema: {
       type: "object",
       properties: {
@@ -49,6 +51,12 @@ const TOOLS: ToolDefinition[] = [
           type: "string",
           description:
             "TypeScript code to execute. Has access to `db` (D1Database). Must return a value.",
+        },
+        competition: {
+          type: "string",
+          enum: [...COMPETITION_CODES],
+          description:
+            "Optional. Hint indicating which competition the query is about (AFLM, AFLW, VFL, VFLW). Does NOT auto-inject SQL — you are still responsible for filtering via JOIN competitions c WHERE c.code = ?.",
         },
       },
       required: ["code"],
