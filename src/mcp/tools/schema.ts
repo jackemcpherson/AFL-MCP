@@ -99,7 +99,7 @@ export function getSchemaInfo() {
         "total_pav ≈ off_pav + mid_pav + def_pav. ~12-15% of rows differ by exactly ±0.01 because each component is rounded independently. Treat the relationship as approximate, not exact.",
         "PAV zone meanings: off_pav = offensive (goals, score involvements, forward craft); mid_pav = midfield (disposals, clearances, tackles, contested ball); def_pav = defensive (intercepts, spoils, one-percenters, rebounds).",
         "PAV interpretation: 25+ exceptional (Brownlow contention), 20-25 great (All-Australian), 15-20 very good (team best-22), 10-15 solid contributor, 5-10 below average or limited games, <5 minimal contribution. Zone PAV of 10+ = All-Australian contention in that role.",
-        "Opening Round has round_number = 0. It is played before Round 1 and must not be excluded from queries. Currently stored for the 2026 season; the 2024 and 2025 Opening Rounds are not yet labelled this way in the data.",
+        "Opening Round has round_number = 0. It is played before Round 1 and must not be excluded from queries. Stored for the 2024, 2025, and 2026 seasons (the AFL only introduced Opening Round in 2024).",
         "round_type is either 'Regular' or 'Finals'. Use the round column for granular finals identification: QF, EF, SF, PF, GF.",
         "match date format is ISO 8601 (YYYY-MM-DD).",
         "Data covers AFL Men's competition from 1990 to the current season.",
