@@ -114,6 +114,23 @@ describe("upsertLineups", () => {
     expect(flipChanges).toBe(1);
   });
 
+  it("skips lineups for seasons before MIN_LINEUP_SYNC_YEAR (historically derived)", async () => {
+    const { matchMap, teamMap } = await setup();
+    const lineup2022 = makeLineup({
+      season: 2022,
+      homePlayers: [makeLineupPlayer({ playerId: "P-1" })],
+    });
+    const playerMap = await upsertPlayers(env, unionPlayers([], [lineup2022]));
+
+    const changes = await upsertLineups(env, [lineup2022], matchMap, playerMap, teamMap);
+    expect(changes).toBe(0);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM match_lineups").first<{
+      n: number;
+    }>();
+    expect(count?.n).toBe(0);
+  });
+
   it("skips silently when matchId is unknown to the match map", async () => {
     const { matchMap, teamMap } = await setup();
     const orphaned = makeLineup({
