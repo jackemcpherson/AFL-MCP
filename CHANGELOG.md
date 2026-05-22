@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2] - 2026-05-22
+
+### Fixed
+
+- **AFLM 2026 R16–R22 fixture realign.** The AFL revised the AFLM 2026
+  fixture for rounds 16–22 (61 games moved to different dates after the
+  initial fixture was ingested). The match-upsert's `ON CONFLICT (date,
+  home_team_id, away_team_id)` key didn't match the new dates, so every
+  cron tick fell through to a fallback INSERT, hit the `external_afl_id`
+  UNIQUE index, and rolled back the whole sync batch. Migration 0010
+  deletes the 61 stale rows so fitzroy can re-insert them with the
+  corrected dates. A permanent fix for the underlying conflict-key bug
+  is tracked in issue #80.
+- **R10 lineups never backfilled.** Sync only ever fetched lineups for
+  the *next* unplayed round, so any past round whose Thursday-night
+  lineup release window the sync missed (e.g. it was failing during
+  R10's release window because of the SDNR bug in v3.0.1) had no
+  recovery path.
+
+### Added
+
+- **Self-healing lineup backfill** (`selectCompletedRoundsWithoutLineups`).
+  Each sync tick now also fetches lineups for up to 3 recent completed
+  rounds where any match has no `match_lineups` row, in addition to the
+  next-round fetch. Mirrors the existing `selectHasCompletedMatchWithoutStats`
+  pattern for stats. Capped at 3 to avoid refetching historical seasons
+  that legitimately have no lineups (pre-2023 AFLM lineups are derived
+  from `player_match_stats` via migration 0007, not the AFL API).
+
 ## [3.0.1] - 2026-05-22
 
 ### Fixed

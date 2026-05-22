@@ -11,6 +11,7 @@ import {
   ensureTeams,
   ensureVenues,
   selectCompletedCount,
+  selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
   selectNextRound,
   unionPlayers,
@@ -120,20 +121,30 @@ async function syncCompetition(
     const seasonId = await ensureSeason(env, competitionId, season);
 
     const apiCompletedCount = countCompleted(allMatches);
-    const [dbCompletedCount, hasStatsBacklog, nextRound] = await Promise.all([
+    const [dbCompletedCount, hasStatsBacklog, nextRound, lineupBacklogRounds] = await Promise.all([
       selectCompletedCount(env, seasonId),
       selectHasCompletedMatchWithoutStats(env, seasonId),
       selectNextRound(env, seasonId),
+      // Look back up to 3 completed rounds for any that have no lineups yet,
+      // so the lineup fetch self-heals after a missed release window.
+      selectCompletedRoundsWithoutLineups(env, seasonId, 3),
     ]);
     // Fetch stats when the API has more completed matches than we've recorded,
     // OR when any previously-completed match still lacks stats (self-heals same-day
     // multi-match completions and recovers from partial write failures).
     const shouldFetchStats = apiCompletedCount > dbCompletedCount || hasStatsBacklog;
 
-    const [lineups, stats] = await Promise.all([
-      nextRound !== null ? fetchLineupsSafe(env, competition, season, nextRound) : [],
+    const lineupRounds = new Set<number>();
+    if (nextRound !== null) lineupRounds.add(nextRound);
+    for (const r of lineupBacklogRounds) lineupRounds.add(r);
+
+    const [lineupBatches, stats] = await Promise.all([
+      Promise.all(
+        Array.from(lineupRounds).map((r) => fetchLineupsSafe(env, competition, season, r)),
+      ),
       shouldFetchStats ? fetchPlayerStatsSafe(env, competition, season) : [],
     ]);
+    const lineups = lineupBatches.flat();
 
     if (allMatches.length === 0 && lineups.length === 0) {
       return { competition, year: season, matches: 0, stats: 0, lineups: 0 };
