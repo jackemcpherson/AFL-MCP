@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-05-22
+
+### Changed
+
+- **`buildMatchUpsert` now uses dual `ON CONFLICT` clauses** so the match
+  upsert is robust to fixture revisions. Primary path:
+  `ON CONFLICT (external_afl_id) WHERE external_afl_id IS NOT NULL DO
+  UPDATE` — when the AFL moves a game to a different date (or swaps
+  home/away), the stable `external_afl_id` still matches the existing
+  row and the UPDATE rewrites `date`, `home_team_id`, `away_team_id` in
+  place rather than failing the unique index. Fallback path:
+  `ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE` — preserves
+  the original behaviour for rows that don't have an `external_afl_id`
+  (historical / scraped sources) and COALESCEs in the new
+  `external_afl_id` when fitzroy starts providing one. Closes #80.
+
+### Added
+
+- Two regression tests in `test/integration/upsert-matches.test.ts`
+  covering the new behaviour: (i) a fixture-revision update that
+  changes the stored date in place via the external-id branch, and
+  (ii) backfill of a NULL `external_afl_id` on a historical row via
+  the tuple branch.
+
 ## [3.0.2] - 2026-05-22
 
 ### Fixed
