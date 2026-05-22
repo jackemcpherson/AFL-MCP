@@ -54,8 +54,8 @@ describe("multi-competition isolation", () => {
       date: new Date("2026-03-19T08:30:00Z"),
     });
 
-    const aflmTeams = await ensureTeams(env, aflmId, [aflmMatch]);
-    const vflTeams = await ensureTeams(env, vflId, [vflMatch]);
+    const aflmTeams = await ensureTeams(env, aflmId, "AFLM", [aflmMatch]);
+    const vflTeams = await ensureTeams(env, vflId, "VFL", [vflMatch]);
 
     expect(aflmTeams.get("Carlton")).toBeDefined();
     expect(vflTeams.get("Carlton")).toBeDefined();
@@ -103,8 +103,8 @@ describe("multi-competition isolation", () => {
       date: new Date("2025-08-22T08:30:00Z"),
     });
 
-    await ensureTeams(env, aflmId, [aflmMatch]);
-    await ensureTeams(env, aflwId, [aflwMatch]);
+    await ensureTeams(env, aflmId, "AFLM", [aflmMatch]);
+    await ensureTeams(env, aflwId, "AFLW", [aflwMatch]);
     const aflmVenues = await ensureVenues(env, [aflmMatch]);
     const aflwVenues = await ensureVenues(env, [aflwMatch]);
 

@@ -21,6 +21,15 @@ describe("normaliseTeam", () => {
     expect(normaliseTeam("  GWS  ")).toBe("GWS Giants");
     expect(normaliseTeam(" Melbourne ")).toBe("Melbourne");
   });
+
+  it("maps Sir Doug Nicholls Round indigenous names to canonical clubs", () => {
+    expect(normaliseTeam("Kuwarna")).toBe("Adelaide");
+    expect(normaliseTeam("Walyalup")).toBe("Fremantle");
+    expect(normaliseTeam("Narrm")).toBe("Melbourne");
+    expect(normaliseTeam("Yartapuulti")).toBe("Port Adelaide");
+    expect(normaliseTeam("Euro-Yroke")).toBe("St Kilda");
+    expect(normaliseTeam("Waalitj Marawar")).toBe("West Coast");
+  });
 });
 
 describe("normaliseVenue", () => {

@@ -1,14 +1,22 @@
 /**
  * Canonical team-name aliases applied during ingest by `normaliseTeam`.
  *
- * Kept global (not per-competition) on purpose: the entries here are AFL
- * Men's historical renames (Brisbane Bears → Brisbane Lions, Footscray →
- * Western Bulldogs, etc.) plus a few capitalisation/punctuation variants.
- * Fitzroy v2.1 returns canonical names for AFLW/VFL/VFLW (verified at the
- * AFL API level for 2017+ AFLW and 2021+ VFL/VFLW), so applying this map
- * to those competitions is a no-op for fitzroy-sourced data.
+ * Kept global (not per-competition) on purpose. Two distinct blocks:
+ *
+ * 1. AFL Men's historical renames and casing/punctuation variants
+ *    (Brisbane Bears → Brisbane Lions, Footscray → Western Bulldogs, etc.).
+ *    Fitzroy v2.1 returns canonical names for AFLW/VFL/VFLW (verified at
+ *    the AFL API level for 2017+ AFLW and 2021+ VFL/VFLW), so applying
+ *    this map to those competitions is a no-op for fitzroy-sourced data.
+ *
+ * 2. Sir Doug Nicholls Round indigenous club names. From fitzroy 2.2.0
+ *    onward these are canonicalised upstream, so the entries here are
+ *    belt-and-braces against fitzroy regressions or new SDNR aliases the
+ *    AFL API starts returning before fitzroy ships support. Without them,
+ *    a novel SDNR name silently breaks the sync (see issue #78 / 0009 mig).
  */
 export const TEAM_NAME_MAP: Record<string, string> = {
+  // AFLM historical renames + capitalisation/punctuation variants
   "Greater Western Sydney": "GWS Giants",
   GWS: "GWS Giants",
   "GWS GIANTS": "GWS Giants",
@@ -21,6 +29,15 @@ export const TEAM_NAME_MAP: Record<string, string> = {
   "West Coast Eagles": "West Coast",
   "Gold Coast SUNS": "Gold Coast",
   "Gold Coast Suns": "Gold Coast",
+  // Sir Doug Nicholls Round indigenous names (belt-and-braces; fitzroy
+  // 2.2.0+ canonicalises upstream). Add new SDNR aliases here if they
+  // emerge before fitzroy ships support.
+  Kuwarna: "Adelaide",
+  Walyalup: "Fremantle",
+  Narrm: "Melbourne",
+  Yartapuulti: "Port Adelaide",
+  "Euro-Yroke": "St Kilda",
+  "Waalitj Marawar": "West Coast",
 };
 
 export const VENUE_NAME_MAP: Record<string, string> = {

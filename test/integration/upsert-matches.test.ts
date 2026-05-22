@@ -25,7 +25,7 @@ describe("upsertMatches", () => {
   it("inserts a completed match with scores", async () => {
     const { competitionId, seasonId } = await setup();
     const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [match]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
     const venueMap = await ensureVenues(env, [match]);
 
     await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
@@ -65,7 +65,7 @@ describe("upsertMatches", () => {
       attendance: null,
       status: "Upcoming",
     });
-    const teamMap = await ensureTeams(env, competitionId, [upcoming]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [upcoming]);
     const venueMap = await ensureVenues(env, [upcoming]);
 
     await upsertMatches(env, [upcoming], { seasonId, teamMap, venueMap });
@@ -83,7 +83,7 @@ describe("upsertMatches", () => {
   it("does not clobber a completed match's scores when re-fetched as upcoming (COALESCE)", async () => {
     const { competitionId, seasonId } = await setup();
     const completed = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [completed]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [completed]);
     const venueMap = await ensureVenues(env, [completed]);
     await upsertMatches(env, [completed], { seasonId, teamMap, venueMap });
 
@@ -115,7 +115,7 @@ describe("upsertMatches", () => {
   it("upserts corrected scores when re-fetched with non-null values (e.g. AFL adjustment)", async () => {
     const { competitionId, seasonId } = await setup();
     const original = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [original]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [original]);
     const venueMap = await ensureVenues(env, [original]);
     await upsertMatches(env, [original], { seasonId, teamMap, venueMap });
 
@@ -135,7 +135,7 @@ describe("upsertMatches", () => {
   it("returns the change count: real inserts, then 0 on identical re-upsert, then >0 on a real diff", async () => {
     const { competitionId, seasonId } = await setup();
     const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [match]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
     const venueMap = await ensureVenues(env, [match]);
 
     const firstChanges = await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
@@ -176,7 +176,7 @@ describe("upsertMatches", () => {
       roundCode: null,
       date: new Date("2026-03-06T08:30:00Z"),
     });
-    const teamMap = await ensureTeams(env, competitionId, [opening]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [opening]);
     const venueMap = await ensureVenues(env, [opening]);
     await upsertMatches(env, [opening], { seasonId, teamMap, venueMap });
 
@@ -219,7 +219,11 @@ describe("selectCompletedCount", () => {
       awayBehinds: null,
       margin: null,
     });
-    const teamMap = await ensureTeams(env, competitionId, [completed, alsoCompleted, upcoming]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [
+      completed,
+      alsoCompleted,
+      upcoming,
+    ]);
     const venueMap = await ensureVenues(env, [completed, alsoCompleted, upcoming]);
     await upsertMatches(env, [completed, alsoCompleted, upcoming], { seasonId, teamMap, venueMap });
 
@@ -236,7 +240,7 @@ describe("selectHasCompletedMatchWithoutStats", () => {
   it("returns true when a completed match has no player_match_stats rows", async () => {
     const { competitionId, seasonId } = await setup();
     const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [match]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
     const venueMap = await ensureVenues(env, [match]);
     await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
 
@@ -246,7 +250,7 @@ describe("selectHasCompletedMatchWithoutStats", () => {
   it("returns false once a completed match has at least one stat row", async () => {
     const { competitionId, seasonId } = await setup();
     const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, [match]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
     const venueMap = await ensureVenues(env, [match]);
     await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
     const matchMap = await buildMatchAflIdMap(env, seasonId);
@@ -276,7 +280,7 @@ describe("selectHasCompletedMatchWithoutStats", () => {
       awayBehinds: null,
       margin: null,
     });
-    const teamMap = await ensureTeams(env, competitionId, [upcoming]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [upcoming]);
     const venueMap = await ensureVenues(env, [upcoming]);
     await upsertMatches(env, [upcoming], { seasonId, teamMap, venueMap });
 
@@ -312,7 +316,7 @@ describe("selectNextRound", () => {
       awayPoints: null,
     });
     const matches = [completed, upcoming1, upcoming2];
-    const teamMap = await ensureTeams(env, competitionId, matches);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", matches);
     const venueMap = await ensureVenues(env, matches);
     await upsertMatches(env, matches, { seasonId, teamMap, venueMap });
 
@@ -330,7 +334,7 @@ describe("selectNextRound", () => {
       homePoints: null,
       awayPoints: null,
     });
-    const teamMap = await ensureTeams(env, competitionId, [opening]);
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [opening]);
     const venueMap = await ensureVenues(env, [opening]);
     await upsertMatches(env, [opening], { seasonId, teamMap, venueMap });
 

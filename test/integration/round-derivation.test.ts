@@ -36,7 +36,7 @@ async function upsertOne(
     awayTeam: `Away${competition}`,
     ...overrides,
   });
-  const teamMap = await ensureTeams(env, competitionId, [match]);
+  const teamMap = await ensureTeams(env, competitionId, competition, [match]);
   const venueMap = await ensureVenues(env, [match]);
   await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
 
