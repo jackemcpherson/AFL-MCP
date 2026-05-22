@@ -139,7 +139,7 @@ async function syncCompetition(
       return { competition, year: season, matches: 0, stats: 0, lineups: 0 };
     }
 
-    const teamMap = await ensureTeams(env, competitionId, allMatches);
+    const teamMap = await ensureTeams(env, competitionId, competition, allMatches);
     const venueMap = await ensureVenues(env, allMatches);
     const playerMap = await upsertPlayers(env, unionPlayers(stats, lineups));
 

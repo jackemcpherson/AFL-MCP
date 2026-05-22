@@ -22,7 +22,7 @@ async function seedMatchAndPlayers(): Promise<SeedResult> {
   const competitionId = await ensureCompetition(env, "AFLM");
   const seasonId = await ensureSeason(env, competitionId, 2026);
   const match = makeMatch();
-  const teamMap = await ensureTeams(env, competitionId, [match]);
+  const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
   const venueMap = await ensureVenues(env, [match]);
   await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
   const matchMap = await buildMatchAflIdMap(env, seasonId);

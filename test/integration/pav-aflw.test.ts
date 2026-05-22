@@ -45,7 +45,7 @@ async function seedAflwMatch(year: number): Promise<void> {
     awayPoints: 29,
     margin: 5,
   });
-  const teamMap = await ensureTeams(env, competitionId, [match]);
+  const teamMap = await ensureTeams(env, competitionId, "AFLW", [match]);
   const venueMap = await ensureVenues(env, [match]);
   await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
   const matchMap = await buildMatchAflIdMap(env, seasonId);

@@ -2,6 +2,7 @@ import type { CompetitionCode, Lineup, LineupPlayer, Match, PlayerStats } from "
 import { normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
+import { logSync } from "./log";
 
 const COMPETITION_NAME: Record<CompetitionCode, string> = {
   AFLM: "AFL Men's",
@@ -158,10 +159,22 @@ export async function ensureSeason(env: Env, competitionId: number, year: number
   return row.id;
 }
 
-/** Ensure rows exist for every team referenced by `matches`, and return a name → id map. */
+/**
+ * Ensure rows exist for every team referenced by `matches`, and return a
+ * name → id map.
+ *
+ * Writes a `sync:novel-team:<competition>` row to `sync_log` whenever a
+ * team name not previously seen for this competition appears in the
+ * incoming matches. The novel insert is still performed (the guardrail is
+ * observational, not blocking), but the log row gives a queryable signal
+ * to investigate — a brand-new team name in production is almost always
+ * either a real AFL change worth confirming or an alias the AFL API
+ * returned that fitzroy hasn't canonicalised yet (see issue #78).
+ */
 export async function ensureTeams(
   env: Env,
   competitionId: number,
+  competitionCode: CompetitionCode,
   matches: readonly Match[],
 ): Promise<Map<string, number>> {
   const names = new Set<string>();
@@ -169,19 +182,34 @@ export async function ensureTeams(
     names.add(normaliseTeam(m.homeTeam));
     names.add(normaliseTeam(m.awayTeam));
   }
-  if (names.size > 0) {
-    const stmts = Array.from(names).map((name) =>
+
+  const existing = await env.DB.prepare("SELECT id, name FROM teams WHERE competition_id = ?")
+    .bind(competitionId)
+    .all<{ id: number; name: string }>();
+  const existingNames = new Set(existing.results.map((r) => r.name));
+
+  const novelNames = Array.from(names).filter((n) => !existingNames.has(n));
+  if (novelNames.length > 0) {
+    const stmts = novelNames.map((name) =>
       env.DB.prepare("INSERT OR IGNORE INTO teams (name, competition_id) VALUES (?, ?)").bind(
         name,
         competitionId,
       ),
     );
     await env.DB.batch(stmts);
+    await logSync(
+      env,
+      `sync:novel-team:${competitionCode}`,
+      novelNames.length,
+      novelNames.join(", "),
+    );
+    const refreshed = await env.DB.prepare("SELECT id, name FROM teams WHERE competition_id = ?")
+      .bind(competitionId)
+      .all<{ id: number; name: string }>();
+    return new Map(refreshed.results.map((r) => [r.name, r.id]));
   }
-  const { results } = await env.DB.prepare("SELECT id, name FROM teams WHERE competition_id = ?")
-    .bind(competitionId)
-    .all<{ id: number; name: string }>();
-  return new Map(results.map((r) => [r.name, r.id]));
+
+  return new Map(existing.results.map((r) => [r.name, r.id]));
 }
 
 /** Ensure rows exist for every venue referenced by `matches`, and return a name → id map. */

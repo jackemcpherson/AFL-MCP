@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-05-22
+
+### Fixed
+
+- **AFLM 2026 R10/R11 sync integrity (issue #78).** The AFL API began
+  returning Sir Doug Nicholls Round indigenous club names (`Walyalup`,
+  `Kuwarna`, `Narrm`, `Yartapuulti`, `Euro-Yroke`, `Waalitj Marawar`)
+  during AFLM R10/R11. fitzroy 2.1.0 surfaced them verbatim and our
+  `TEAM_NAME_MAP` did not canonicalise them, so `ensureTeams` created
+  ghost team rows and `buildMatchUpsert` then failed the
+  `external_afl_id` UNIQUE constraint when re-upserting completed
+  matches. The downstream effect was that R10 matches never had
+  `home_points` populated, which kept `selectHasCompletedMatchWithoutStats`
+  from triggering stats and lineups fetches for those matches.
+- Bumped `fitzroy` to `^2.2.0` (canonicalises SDNR names upstream).
+- Added the six SDNR indigenous names to `TEAM_NAME_MAP` as
+  belt-and-braces in a distinct comment block.
+- Shipped migration `0009_remove_sdnr_ghost_teams.sql` to delete the six
+  AFLM ghost team rows produced by the failure.
+
+### Added
+
+- Novel-team guardrail in `ensureTeams`: writes a `sync_log` row of type
+  `sync:novel-team:<competition>` (with the novel name(s) in the `error`
+  payload field) whenever sync encounters a team name not already in
+  the database for that competition. Observational only — does not
+  block the insert. Designed to make the next occurrence of this class
+  of silent failure visible without changing sync semantics.
+
 ## [2.0.0] - 2026-04-04
 
 ### Changed
