@@ -265,6 +265,32 @@ export async function selectHasCompletedMatchWithoutStats(
 }
 
 /**
+ * Distinct `round_number`s in the season where every match is completed
+ * (`home_points IS NOT NULL`) but at least one match has no `match_lineups`
+ * row. Used as a self-healing fallback so lineups backfill for past rounds
+ * whose Thursday-night release window the sync missed (e.g. an upstream
+ * error blocked the lineup fetch). Capped via `limit` so historical
+ * seasons that legitimately have no lineups don't refetch on every tick.
+ */
+export async function selectCompletedRoundsWithoutLineups(
+  env: Env,
+  seasonId: number,
+  limit: number,
+): Promise<number[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT m.round_number FROM matches m
+     WHERE m.season_id = ?
+       AND m.home_points IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
+     ORDER BY m.round_number DESC
+     LIMIT ?`,
+  )
+    .bind(seasonId, limit)
+    .all<{ round_number: number }>();
+  return results.map((r) => r.round_number);
+}
+
+/**
  * Smallest `round_number` with at least one not-yet-played match. Opening Round
  * is `round_number = 0` and is correctly returned ahead of R1 when unfinished.
  * Returns null when every match in the season is completed.
