@@ -385,6 +385,110 @@ export async function upsertMatches(
   return await batchAndCountChanges(env, stmts);
 }
 
+// Shared UPDATE SET fragment for both ON CONFLICT branches in
+// `buildMatchUpsert`. Excludes the columns that differ between branches
+// (date / home_team_id / away_team_id for the external-id branch, and
+// external_afl_id for the tuple branch — see buildMatchUpsert for the
+// full statement). All fields use COALESCE so an upcoming-status
+// re-fetch never clobbers a completed match's data with NULLs.
+const MATCH_UPDATE_COMMON_SET = `
+      round_number = excluded.round_number,
+      round_type = excluded.round_type,
+      round = excluded.round,
+      round_abbreviation = excluded.round_abbreviation,
+      local_time = excluded.local_time,
+      venue_id = COALESCE(excluded.venue_id, matches.venue_id),
+      home_goals = COALESCE(excluded.home_goals, matches.home_goals),
+      home_behinds = COALESCE(excluded.home_behinds, matches.home_behinds),
+      home_points = COALESCE(excluded.home_points, matches.home_points),
+      away_goals = COALESCE(excluded.away_goals, matches.away_goals),
+      away_behinds = COALESCE(excluded.away_behinds, matches.away_behinds),
+      away_points = COALESCE(excluded.away_points, matches.away_points),
+      margin = COALESCE(excluded.margin, matches.margin),
+      attendance = COALESCE(excluded.attendance, matches.attendance),
+      home_rushed_behinds = COALESCE(excluded.home_rushed_behinds, matches.home_rushed_behinds),
+      away_rushed_behinds = COALESCE(excluded.away_rushed_behinds, matches.away_rushed_behinds),
+      home_minutes_in_front = COALESCE(excluded.home_minutes_in_front, matches.home_minutes_in_front),
+      away_minutes_in_front = COALESCE(excluded.away_minutes_in_front, matches.away_minutes_in_front),
+      home_q1_goals = COALESCE(excluded.home_q1_goals, matches.home_q1_goals),
+      home_q1_behinds = COALESCE(excluded.home_q1_behinds, matches.home_q1_behinds),
+      home_q2_goals = COALESCE(excluded.home_q2_goals, matches.home_q2_goals),
+      home_q2_behinds = COALESCE(excluded.home_q2_behinds, matches.home_q2_behinds),
+      home_q3_goals = COALESCE(excluded.home_q3_goals, matches.home_q3_goals),
+      home_q3_behinds = COALESCE(excluded.home_q3_behinds, matches.home_q3_behinds),
+      home_q4_goals = COALESCE(excluded.home_q4_goals, matches.home_q4_goals),
+      home_q4_behinds = COALESCE(excluded.home_q4_behinds, matches.home_q4_behinds),
+      away_q1_goals = COALESCE(excluded.away_q1_goals, matches.away_q1_goals),
+      away_q1_behinds = COALESCE(excluded.away_q1_behinds, matches.away_q1_behinds),
+      away_q2_goals = COALESCE(excluded.away_q2_goals, matches.away_q2_goals),
+      away_q2_behinds = COALESCE(excluded.away_q2_behinds, matches.away_q2_behinds),
+      away_q3_goals = COALESCE(excluded.away_q3_goals, matches.away_q3_goals),
+      away_q3_behinds = COALESCE(excluded.away_q3_behinds, matches.away_q3_behinds),
+      away_q4_goals = COALESCE(excluded.away_q4_goals, matches.away_q4_goals),
+      away_q4_behinds = COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds),
+      weather_temp_c = COALESCE(excluded.weather_temp_c, matches.weather_temp_c),
+      weather_type = COALESCE(excluded.weather_type, matches.weather_type)`;
+
+// Shared change-detection predicate fragment. The matching WHERE clause
+// ensures `meta.changes` only ticks when something actually differs from
+// the existing row, not on no-op upserts.
+const MATCH_UPDATE_COMMON_WHERE = `
+      matches.round_number IS NOT excluded.round_number OR
+      matches.round_type IS NOT excluded.round_type OR
+      matches.round IS NOT excluded.round OR
+      matches.round_abbreviation IS NOT excluded.round_abbreviation OR
+      matches.local_time IS NOT excluded.local_time OR
+      matches.venue_id IS NOT COALESCE(excluded.venue_id, matches.venue_id) OR
+      matches.home_goals IS NOT COALESCE(excluded.home_goals, matches.home_goals) OR
+      matches.home_behinds IS NOT COALESCE(excluded.home_behinds, matches.home_behinds) OR
+      matches.home_points IS NOT COALESCE(excluded.home_points, matches.home_points) OR
+      matches.away_goals IS NOT COALESCE(excluded.away_goals, matches.away_goals) OR
+      matches.away_behinds IS NOT COALESCE(excluded.away_behinds, matches.away_behinds) OR
+      matches.away_points IS NOT COALESCE(excluded.away_points, matches.away_points) OR
+      matches.margin IS NOT COALESCE(excluded.margin, matches.margin) OR
+      matches.attendance IS NOT COALESCE(excluded.attendance, matches.attendance) OR
+      matches.home_rushed_behinds IS NOT COALESCE(excluded.home_rushed_behinds, matches.home_rushed_behinds) OR
+      matches.away_rushed_behinds IS NOT COALESCE(excluded.away_rushed_behinds, matches.away_rushed_behinds) OR
+      matches.home_minutes_in_front IS NOT COALESCE(excluded.home_minutes_in_front, matches.home_minutes_in_front) OR
+      matches.away_minutes_in_front IS NOT COALESCE(excluded.away_minutes_in_front, matches.away_minutes_in_front) OR
+      matches.home_q1_goals IS NOT COALESCE(excluded.home_q1_goals, matches.home_q1_goals) OR
+      matches.home_q1_behinds IS NOT COALESCE(excluded.home_q1_behinds, matches.home_q1_behinds) OR
+      matches.home_q2_goals IS NOT COALESCE(excluded.home_q2_goals, matches.home_q2_goals) OR
+      matches.home_q2_behinds IS NOT COALESCE(excluded.home_q2_behinds, matches.home_q2_behinds) OR
+      matches.home_q3_goals IS NOT COALESCE(excluded.home_q3_goals, matches.home_q3_goals) OR
+      matches.home_q3_behinds IS NOT COALESCE(excluded.home_q3_behinds, matches.home_q3_behinds) OR
+      matches.home_q4_goals IS NOT COALESCE(excluded.home_q4_goals, matches.home_q4_goals) OR
+      matches.home_q4_behinds IS NOT COALESCE(excluded.home_q4_behinds, matches.home_q4_behinds) OR
+      matches.away_q1_goals IS NOT COALESCE(excluded.away_q1_goals, matches.away_q1_goals) OR
+      matches.away_q1_behinds IS NOT COALESCE(excluded.away_q1_behinds, matches.away_q1_behinds) OR
+      matches.away_q2_goals IS NOT COALESCE(excluded.away_q2_goals, matches.away_q2_goals) OR
+      matches.away_q2_behinds IS NOT COALESCE(excluded.away_q2_behinds, matches.away_q2_behinds) OR
+      matches.away_q3_goals IS NOT COALESCE(excluded.away_q3_goals, matches.away_q3_goals) OR
+      matches.away_q3_behinds IS NOT COALESCE(excluded.away_q3_behinds, matches.away_q3_behinds) OR
+      matches.away_q4_goals IS NOT COALESCE(excluded.away_q4_goals, matches.away_q4_goals) OR
+      matches.away_q4_behinds IS NOT COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds) OR
+      matches.weather_temp_c IS NOT COALESCE(excluded.weather_temp_c, matches.weather_temp_c) OR
+      matches.weather_type IS NOT COALESCE(excluded.weather_type, matches.weather_type)`;
+
+/**
+ * Build the per-match upsert statement.
+ *
+ * Has two ON CONFLICT clauses so the upsert is robust to either kind of
+ * row-identity collision:
+ *
+ * 1. `(external_afl_id) WHERE external_afl_id IS NOT NULL` — primary
+ *    path for AFL-API-sourced matches. When the AFL revises the fixture
+ *    (moves a game to a different date or swaps home/away), the stable
+ *    `external_afl_id` still matches the existing row, so the UPDATE
+ *    rewrites `date` / `home_team_id` / `away_team_id` in place rather
+ *    than failing the unique index and leaving the row stale. Replaces
+ *    the manual delete-and-re-insert dance migration 0010 performed
+ *    after the 2026-05-22 R16–R22 fixture revision (issue #80).
+ * 2. `(date, home_team_id, away_team_id)` — fallback for rows that
+ *    don't have an `external_afl_id` (historical / scraped sources).
+ *    Preserves the original behaviour and COALESCEs in the new
+ *    `external_afl_id` value when fitzroy starts providing one.
+ */
 function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1PreparedStatement {
   const homeTeam = normaliseTeam(m.homeTeam);
   const awayTeam = normaliseTeam(m.awayTeam);
@@ -431,82 +535,22 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       ?, ?,
       ?, ?
     )
+    ON CONFLICT (external_afl_id) WHERE external_afl_id IS NOT NULL DO UPDATE SET
+      date = excluded.date,
+      home_team_id = excluded.home_team_id,
+      away_team_id = excluded.away_team_id,
+      ${MATCH_UPDATE_COMMON_SET}
+    WHERE
+      matches.date IS NOT excluded.date OR
+      matches.home_team_id IS NOT excluded.home_team_id OR
+      matches.away_team_id IS NOT excluded.away_team_id OR
+      ${MATCH_UPDATE_COMMON_WHERE}
     ON CONFLICT (date, home_team_id, away_team_id) DO UPDATE SET
       external_afl_id = COALESCE(excluded.external_afl_id, matches.external_afl_id),
-      round_number = excluded.round_number,
-      round_type = excluded.round_type,
-      round = excluded.round,
-      round_abbreviation = excluded.round_abbreviation,
-      local_time = excluded.local_time,
-      venue_id = COALESCE(excluded.venue_id, matches.venue_id),
-      home_goals = COALESCE(excluded.home_goals, matches.home_goals),
-      home_behinds = COALESCE(excluded.home_behinds, matches.home_behinds),
-      home_points = COALESCE(excluded.home_points, matches.home_points),
-      away_goals = COALESCE(excluded.away_goals, matches.away_goals),
-      away_behinds = COALESCE(excluded.away_behinds, matches.away_behinds),
-      away_points = COALESCE(excluded.away_points, matches.away_points),
-      margin = COALESCE(excluded.margin, matches.margin),
-      attendance = COALESCE(excluded.attendance, matches.attendance),
-      home_rushed_behinds = COALESCE(excluded.home_rushed_behinds, matches.home_rushed_behinds),
-      away_rushed_behinds = COALESCE(excluded.away_rushed_behinds, matches.away_rushed_behinds),
-      home_minutes_in_front = COALESCE(excluded.home_minutes_in_front, matches.home_minutes_in_front),
-      away_minutes_in_front = COALESCE(excluded.away_minutes_in_front, matches.away_minutes_in_front),
-      home_q1_goals = COALESCE(excluded.home_q1_goals, matches.home_q1_goals),
-      home_q1_behinds = COALESCE(excluded.home_q1_behinds, matches.home_q1_behinds),
-      home_q2_goals = COALESCE(excluded.home_q2_goals, matches.home_q2_goals),
-      home_q2_behinds = COALESCE(excluded.home_q2_behinds, matches.home_q2_behinds),
-      home_q3_goals = COALESCE(excluded.home_q3_goals, matches.home_q3_goals),
-      home_q3_behinds = COALESCE(excluded.home_q3_behinds, matches.home_q3_behinds),
-      home_q4_goals = COALESCE(excluded.home_q4_goals, matches.home_q4_goals),
-      home_q4_behinds = COALESCE(excluded.home_q4_behinds, matches.home_q4_behinds),
-      away_q1_goals = COALESCE(excluded.away_q1_goals, matches.away_q1_goals),
-      away_q1_behinds = COALESCE(excluded.away_q1_behinds, matches.away_q1_behinds),
-      away_q2_goals = COALESCE(excluded.away_q2_goals, matches.away_q2_goals),
-      away_q2_behinds = COALESCE(excluded.away_q2_behinds, matches.away_q2_behinds),
-      away_q3_goals = COALESCE(excluded.away_q3_goals, matches.away_q3_goals),
-      away_q3_behinds = COALESCE(excluded.away_q3_behinds, matches.away_q3_behinds),
-      away_q4_goals = COALESCE(excluded.away_q4_goals, matches.away_q4_goals),
-      away_q4_behinds = COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds),
-      weather_temp_c = COALESCE(excluded.weather_temp_c, matches.weather_temp_c),
-      weather_type = COALESCE(excluded.weather_type, matches.weather_type)
+      ${MATCH_UPDATE_COMMON_SET}
     WHERE
       matches.external_afl_id IS NOT COALESCE(excluded.external_afl_id, matches.external_afl_id) OR
-      matches.round_number IS NOT excluded.round_number OR
-      matches.round_type IS NOT excluded.round_type OR
-      matches.round IS NOT excluded.round OR
-      matches.round_abbreviation IS NOT excluded.round_abbreviation OR
-      matches.local_time IS NOT excluded.local_time OR
-      matches.venue_id IS NOT COALESCE(excluded.venue_id, matches.venue_id) OR
-      matches.home_goals IS NOT COALESCE(excluded.home_goals, matches.home_goals) OR
-      matches.home_behinds IS NOT COALESCE(excluded.home_behinds, matches.home_behinds) OR
-      matches.home_points IS NOT COALESCE(excluded.home_points, matches.home_points) OR
-      matches.away_goals IS NOT COALESCE(excluded.away_goals, matches.away_goals) OR
-      matches.away_behinds IS NOT COALESCE(excluded.away_behinds, matches.away_behinds) OR
-      matches.away_points IS NOT COALESCE(excluded.away_points, matches.away_points) OR
-      matches.margin IS NOT COALESCE(excluded.margin, matches.margin) OR
-      matches.attendance IS NOT COALESCE(excluded.attendance, matches.attendance) OR
-      matches.home_rushed_behinds IS NOT COALESCE(excluded.home_rushed_behinds, matches.home_rushed_behinds) OR
-      matches.away_rushed_behinds IS NOT COALESCE(excluded.away_rushed_behinds, matches.away_rushed_behinds) OR
-      matches.home_minutes_in_front IS NOT COALESCE(excluded.home_minutes_in_front, matches.home_minutes_in_front) OR
-      matches.away_minutes_in_front IS NOT COALESCE(excluded.away_minutes_in_front, matches.away_minutes_in_front) OR
-      matches.home_q1_goals IS NOT COALESCE(excluded.home_q1_goals, matches.home_q1_goals) OR
-      matches.home_q1_behinds IS NOT COALESCE(excluded.home_q1_behinds, matches.home_q1_behinds) OR
-      matches.home_q2_goals IS NOT COALESCE(excluded.home_q2_goals, matches.home_q2_goals) OR
-      matches.home_q2_behinds IS NOT COALESCE(excluded.home_q2_behinds, matches.home_q2_behinds) OR
-      matches.home_q3_goals IS NOT COALESCE(excluded.home_q3_goals, matches.home_q3_goals) OR
-      matches.home_q3_behinds IS NOT COALESCE(excluded.home_q3_behinds, matches.home_q3_behinds) OR
-      matches.home_q4_goals IS NOT COALESCE(excluded.home_q4_goals, matches.home_q4_goals) OR
-      matches.home_q4_behinds IS NOT COALESCE(excluded.home_q4_behinds, matches.home_q4_behinds) OR
-      matches.away_q1_goals IS NOT COALESCE(excluded.away_q1_goals, matches.away_q1_goals) OR
-      matches.away_q1_behinds IS NOT COALESCE(excluded.away_q1_behinds, matches.away_q1_behinds) OR
-      matches.away_q2_goals IS NOT COALESCE(excluded.away_q2_goals, matches.away_q2_goals) OR
-      matches.away_q2_behinds IS NOT COALESCE(excluded.away_q2_behinds, matches.away_q2_behinds) OR
-      matches.away_q3_goals IS NOT COALESCE(excluded.away_q3_goals, matches.away_q3_goals) OR
-      matches.away_q3_behinds IS NOT COALESCE(excluded.away_q3_behinds, matches.away_q3_behinds) OR
-      matches.away_q4_goals IS NOT COALESCE(excluded.away_q4_goals, matches.away_q4_goals) OR
-      matches.away_q4_behinds IS NOT COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds) OR
-      matches.weather_temp_c IS NOT COALESCE(excluded.weather_temp_c, matches.weather_temp_c) OR
-      matches.weather_type IS NOT COALESCE(excluded.weather_type, matches.weather_type)`,
+      ${MATCH_UPDATE_COMMON_WHERE}`,
   ).bind(
     m.matchId,
     ctx.seasonId,

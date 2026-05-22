@@ -189,6 +189,72 @@ describe("upsertMatches", () => {
     }>();
     expect(row).toEqual({ round: "Opening Round", round_abbreviation: "OR", round_number: 0 });
   });
+
+  // Issue #80 regression — see CHANGELOG v3.1.0.
+  it("realigns a row in place when the AFL revises the fixture (date moves; external_afl_id stable)", async () => {
+    const { competitionId, seasonId } = await setup();
+    const original = makeMatch({
+      matchId: "M-RV",
+      date: new Date("2026-06-22T08:30:00Z"),
+      homePoints: null,
+      awayPoints: null,
+    });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [original]);
+    const venueMap = await ensureVenues(env, [original]);
+    await upsertMatches(env, [original], { seasonId, teamMap, venueMap });
+
+    const revised = makeMatch({
+      matchId: "M-RV",
+      date: new Date("2026-06-25T08:30:00Z"),
+      homePoints: null,
+      awayPoints: null,
+    });
+    const changes = await upsertMatches(env, [revised], { seasonId, teamMap, venueMap });
+    expect(changes).toBe(1);
+
+    const rows = await env.DB.prepare(
+      "SELECT id, date, external_afl_id FROM matches WHERE external_afl_id = ?",
+    )
+      .bind("M-RV")
+      .all<{ id: number; date: string; external_afl_id: string }>();
+    expect(rows.results.length).toBe(1);
+    expect(rows.results[0]?.date).toBe("2026-06-25");
+  });
+
+  it("backfills external_afl_id via the (date, home, away) conflict path on historical rows", async () => {
+    const { competitionId, seasonId } = await setup();
+    const m = makeMatch();
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [m]);
+    const venueMap = await ensureVenues(env, [m]);
+
+    // Seed a row directly with NULL external_afl_id to simulate historical
+    // data loaded from a source (afltables / footywire) that doesn't
+    // populate the AFL API id. fitzroy then later returns this match with
+    // an external_afl_id and we expect the (date, home, away) clause to
+    // COALESCE the new id in rather than failing.
+    await env.DB.prepare(
+      `INSERT INTO matches (external_afl_id, season_id, date, home_team_id, away_team_id, venue_id, round, round_abbreviation, round_number, round_type)
+       VALUES (NULL, ?, ?, ?, ?, ?, 'Round 1', 'Rd 1', 1, 'Regular')`,
+    )
+      .bind(
+        seasonId,
+        "2026-03-19",
+        teamMap.get("Carlton") ?? null,
+        teamMap.get("Richmond") ?? null,
+        venueMap.get("MCG") ?? null,
+      )
+      .run();
+
+    await upsertMatches(env, [makeMatch({ matchId: "M-BF" })], { seasonId, teamMap, venueMap });
+
+    const after = await env.DB.prepare("SELECT id, date, external_afl_id FROM matches").all<{
+      id: number;
+      date: string;
+      external_afl_id: string | null;
+    }>();
+    expect(after.results.length).toBe(1);
+    expect(after.results[0]?.external_afl_id).toBe("M-BF");
+  });
 });
 
 describe("selectCompletedCount", () => {
