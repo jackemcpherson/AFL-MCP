@@ -90,6 +90,8 @@ CREATE TABLE matches (
   away_q3_behinds INTEGER,
   away_q4_goals INTEGER,
   away_q4_behinds INTEGER,
+  status TEXT,
+  live_period_status TEXT,
   UNIQUE (date, home_team_id, away_team_id)
 );
 

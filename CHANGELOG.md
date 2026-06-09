@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-06-09
+
+### Added
+
+- Two new columns on `matches`: `status TEXT` (the match lifecycle —
+  Upcoming / Live / Complete / Postponed / Cancelled, sourced from
+  `fitzroy.Match.status`) and `live_period_status TEXT` (the raw AFL
+  API score-level status, e.g. LIVE / QTR_TIME / HALF_TIME / 3QTR_TIME
+  / FULL_TIME, sourced from fitzroy 2.3.0's new `Match.livePeriodStatus`
+  field). Both columns enable live-match siren detection without
+  requiring consumers to infer state from `home_points IS NULL`.
+  Backfill via migration `0011_match_status.sql`; new rows write both
+  columns immediately and existing rows backfill on the next sync that
+  touches them.
+- New regression test in `test/integration/upsert-matches.test.ts`
+  covering the lifecycle transition from `Upcoming` → `Live` with a
+  `live_period_status` change.
+
+### Changed
+
+- Bumped `fitzroy` from `^2.2.0` to `^2.3.0` to pick up the
+  `Match.livePeriodStatus` field that the new `live_period_status`
+  column is populated from. The 2.3.0 release also switched fitzroy's
+  HTML parser to `parse5 + cheerio/slim` to drop the transitive
+  `node:stream` import, which means the AFL-MCP Worker no longer needs
+  to rely on the `nodejs_compat` flag for the library entry.
+
 ## [3.1.0] - 2026-05-22
 
 ### Changed

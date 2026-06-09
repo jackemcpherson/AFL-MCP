@@ -58,7 +58,8 @@ export function getSchemaInfo() {
           "away_q1_goals INTEGER, away_q1_behinds INTEGER,",
           "away_q2_goals INTEGER, away_q2_behinds INTEGER,",
           "away_q3_goals INTEGER, away_q3_behinds INTEGER,",
-          "away_q4_goals INTEGER, away_q4_behinds INTEGER",
+          "away_q4_goals INTEGER, away_q4_behinds INTEGER,",
+          "status TEXT, live_period_status TEXT",
         ].join(" "),
         player_match_stats: [
           "id INTEGER PRIMARY KEY, match_id INTEGER REFERENCES matches(id),",
@@ -154,6 +155,8 @@ export function getSchemaInfo() {
         "external_fryzigg_id: AFLM cross-reference ID from fryzigg. ~99% of AFLM historical matches.",
         "attendance: AFLM only, populated pre-2020. NULL elsewhere.",
         "Quarter scores (home_q1_goals through away_q4_behinds): AFLM populated for all matches from 2020 onward; NULL for AFLM 1990-2019. AFLW/VFL/VFLW: populated where AFL API provides them, NULL otherwise.",
+        "matches.status is the match lifecycle. Values: 'Upcoming', 'Live', 'Complete', 'Postponed', 'Cancelled'. Populated from 2026-06 onward for any match the AFL API sync touches; NULL on historical rows backfilled before that date and on rows from non-afl-api sources (fryzigg / afl-tables historical imports).",
+        "matches.live_period_status is the raw AFL API score-level status, intended for live-match siren detection (quarter-time / half-time / full-time). Observed values: 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', 'FULL_TIME'. Values are upstream-defined raw strings and may change without notice — treat as opaque text. NULL pre-match, for completed historical rows, and for any match outside the AFL API source.",
         // Lineups
         "match_lineups represents the post-change team — the players who actually took the field. AFLM 2023+ from AFL API post-change feed; AFLM 2021–2022 derived from player_match_stats (Thursday-night announced team is all the API returns). AFLW: AFL API direct. VFL/VFLW: best-effort — fitzroy may return empty for some rounds; treat absence as not-yet-published rather than canonical.",
         "match_lineups is_emergency=1 means the player is named as an emergency and may not play. Only populated from AFLM 2024 onward — pre-2024 AFLM and other competitions have is_emergency=0 for all players.",
