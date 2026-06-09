@@ -34,6 +34,7 @@ export function makeMatch(overrides: Partial<Match> = {}): Match {
     q3Away: null,
     q4Away: null,
     status: "Complete",
+    livePeriodStatus: null,
     attendance: 60000,
     weatherTempCelsius: 18,
     weatherType: "Clear",

@@ -80,6 +80,38 @@ describe("upsertMatches", () => {
     expect(row).toEqual({ external_afl_id: "M-FUT", home_points: null, away_points: null });
   });
 
+  it("writes match status and live_period_status, and updates them on subsequent upserts", async () => {
+    const { competitionId, seasonId } = await setup();
+    const upcoming = makeMatch({
+      matchId: "M-LIVE",
+      status: "Upcoming",
+      livePeriodStatus: null,
+      homePoints: null,
+      awayPoints: null,
+      homeGoals: null,
+      homeBehinds: null,
+      awayGoals: null,
+      awayBehinds: null,
+      margin: null,
+      attendance: null,
+    });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [upcoming]);
+    const venueMap = await ensureVenues(env, [upcoming]);
+
+    await upsertMatches(env, [upcoming], { seasonId, teamMap, venueMap });
+    const before = await env.DB.prepare(
+      "SELECT status, live_period_status FROM matches WHERE external_afl_id = 'M-LIVE'",
+    ).first<{ status: string; live_period_status: string | null }>();
+    expect(before).toEqual({ status: "Upcoming", live_period_status: null });
+
+    const live = { ...upcoming, status: "Live" as const, livePeriodStatus: "QTR_TIME" };
+    await upsertMatches(env, [live], { seasonId, teamMap, venueMap });
+    const after = await env.DB.prepare(
+      "SELECT status, live_period_status FROM matches WHERE external_afl_id = 'M-LIVE'",
+    ).first<{ status: string; live_period_status: string | null }>();
+    expect(after).toEqual({ status: "Live", live_period_status: "QTR_TIME" });
+  });
+
   it("does not clobber a completed match's scores when re-fetched as upcoming (COALESCE)", async () => {
     const { competitionId, seasonId } = await setup();
     const completed = makeMatch();

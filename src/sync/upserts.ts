@@ -427,7 +427,9 @@ const MATCH_UPDATE_COMMON_SET = `
       away_q4_goals = COALESCE(excluded.away_q4_goals, matches.away_q4_goals),
       away_q4_behinds = COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds),
       weather_temp_c = COALESCE(excluded.weather_temp_c, matches.weather_temp_c),
-      weather_type = COALESCE(excluded.weather_type, matches.weather_type)`;
+      weather_type = COALESCE(excluded.weather_type, matches.weather_type),
+      status = COALESCE(excluded.status, matches.status),
+      live_period_status = COALESCE(excluded.live_period_status, matches.live_period_status)`;
 
 // Shared change-detection predicate fragment. The matching WHERE clause
 // ensures `meta.changes` only ticks when something actually differs from
@@ -468,7 +470,9 @@ const MATCH_UPDATE_COMMON_WHERE = `
       matches.away_q4_goals IS NOT COALESCE(excluded.away_q4_goals, matches.away_q4_goals) OR
       matches.away_q4_behinds IS NOT COALESCE(excluded.away_q4_behinds, matches.away_q4_behinds) OR
       matches.weather_temp_c IS NOT COALESCE(excluded.weather_temp_c, matches.weather_temp_c) OR
-      matches.weather_type IS NOT COALESCE(excluded.weather_type, matches.weather_type)`;
+      matches.weather_type IS NOT COALESCE(excluded.weather_type, matches.weather_type) OR
+      matches.status IS NOT COALESCE(excluded.status, matches.status) OR
+      matches.live_period_status IS NOT COALESCE(excluded.live_period_status, matches.live_period_status)`;
 
 /**
  * Build the per-match upsert statement.
@@ -516,12 +520,14 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       away_q2_goals, away_q2_behinds,
       away_q3_goals, away_q3_behinds,
       away_q4_goals, away_q4_behinds,
-      weather_temp_c, weather_type
+      weather_temp_c, weather_type,
+      status, live_period_status
     ) VALUES (
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?,
+      ?, ?,
       ?, ?,
       ?, ?,
       ?, ?,
@@ -593,6 +599,8 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
     m.q4Away?.behinds ?? null,
     m.weatherTempCelsius,
     m.weatherType,
+    m.status,
+    m.livePeriodStatus,
   );
 }
 
