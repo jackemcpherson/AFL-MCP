@@ -14,11 +14,15 @@ async function getHealth(): Promise<Response> {
   return worker.fetch(new Request("https://afl.test/mcp/health"), env as Env, stubCtx);
 }
 
-async function seedSyncLog(timestamp: string, error: string | null): Promise<void> {
+async function seedSyncLog(
+  timestamp: string,
+  error: string | null,
+  type = "sync:AFLM",
+): Promise<void> {
   await (env as Env).DB.prepare(
-    "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:AFLM', 0, ?)",
+    "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, ?, 0, ?)",
   )
-    .bind(timestamp, error)
+    .bind(timestamp, type, error)
     .run();
 }
 
@@ -46,12 +50,42 @@ describe("GET /mcp/health (OPS-02)", () => {
     expect(res.status).toBe(503);
   });
 
-  it("returns 503 when the last sync recorded an error", async () => {
+  it("returns 503 when a competition-level sync recorded a recent error", async () => {
     await seedSyncLog(new Date().toISOString(), "fetchMatches failed: boom");
     const res = await getHealth();
     expect(res.status).toBe(503);
     const body = (await res.json()) as { status: string; stale: boolean };
     expect(body.status).toBe("unhealthy");
     expect(body.stale).toBe(false);
+  });
+
+  it("returns 503 when a sync:fatal row is recent", async () => {
+    await seedSyncLog(new Date().toISOString(), null);
+    await seedSyncLog(new Date().toISOString(), "gate exploded", "sync:fatal");
+    const res = await getHealth();
+    expect(res.status).toBe(503);
+  });
+
+  it("stays 200 for routine sub-task degradations like lineup 404s", async () => {
+    await seedSyncLog(new Date().toISOString(), null);
+    await seedSyncLog(
+      new Date().toISOString(),
+      "fetchLineup failed: Request failed: 404 Not Found",
+      "sync:AFLW:lineups",
+    );
+    const res = await getHealth();
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe("ok");
+  });
+
+  it("recovers to 200 once a critical error ages out of the window", async () => {
+    await seedSyncLog(
+      new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+      "fetchMatches failed: boom",
+    );
+    await seedSyncLog(new Date().toISOString(), null);
+    const res = await getHealth();
+    expect(res.status).toBe(200);
   });
 });
