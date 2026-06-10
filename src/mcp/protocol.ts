@@ -13,11 +13,9 @@ const COMPETITION_CODES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
 const PROTOCOL_VERSION = "2025-03-26";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-} as const;
+// No CORS headers are sent: MCP clients are server-side, and withholding
+// Access-Control-Allow-Origin stops arbitrary web pages from driving the
+// code-execution endpoint with visitors' browsers (SEC-03).
 
 const TOOLS: ToolDefinition[] = [
   {
@@ -171,13 +169,24 @@ export async function handleMcpRequest(
   ctx: ExecutionContext,
 ): Promise<Response> {
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+    return new Response(null, { status: 204 });
   }
 
   if (request.method !== "POST") {
     return Response.json(jsonRpcError(0, -32600, "Only POST requests are accepted"), {
       status: 405,
     });
+  }
+
+  if (env.MCP_RATE_LIMIT) {
+    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const { success } = await env.MCP_RATE_LIMIT.limit({ key: ip });
+    if (!success) {
+      return Response.json(jsonRpcError(0, -32000, "Rate limit exceeded — retry later"), {
+        status: 429,
+        headers: { "Retry-After": "60" },
+      });
+    }
   }
 
   const contentType = request.headers.get("content-type") ?? "";
@@ -205,9 +214,6 @@ export async function handleMcpRequest(
   const response = await handleJsonRpc(rpcRequest, env, ctx);
 
   return Response.json(response, {
-    headers: {
-      "Content-Type": "application/json",
-      ...CORS_HEADERS,
-    },
+    headers: { "Content-Type": "application/json" },
   });
 }

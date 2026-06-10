@@ -38,13 +38,12 @@ const stubEnv = {} as unknown as import("../src/types").Env;
 const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
 describe("handleMcpRequest", () => {
-  it("returns CORS headers on OPTIONS preflight", async () => {
+  it("answers OPTIONS preflight without CORS allow headers (SEC-03)", async () => {
     const req = new Request("https://afl.test/mcp", { method: "OPTIONS" });
     const res = await handleMcpRequest(req, stubEnv, stubCtx);
 
     expect(res.status).toBe(204);
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
   it("rejects non-POST methods with 405", async () => {
@@ -224,13 +223,48 @@ describe("handleMcpRequest", () => {
     expect(json.result?.content?.[0]?.text).toContain("code parameter is required");
   });
 
-  it("includes CORS header on all JSON responses", async () => {
+  it("does not emit CORS allow headers on JSON responses (SEC-03)", async () => {
     const res = await handleMcpRequest(
       makeRequest({ jsonrpc: "2.0", id: 10, method: "ping" }),
       stubEnv,
       stubCtx,
     );
 
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("returns 429 when the rate limiter denies the request", async () => {
+    const limitedEnv = {
+      MCP_RATE_LIMIT: { limit: async () => ({ success: false }) },
+    } as unknown as import("../src/types").Env;
+    const res = await handleMcpRequest(
+      makeRequest({ jsonrpc: "2.0", id: 11, method: "ping" }),
+      limitedEnv,
+      stubCtx,
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+  });
+
+  it("keys the rate limiter on the connecting IP", async () => {
+    const seenKeys: string[] = [];
+    const limitedEnv = {
+      MCP_RATE_LIMIT: {
+        limit: async ({ key }: { key: string }) => {
+          seenKeys.push(key);
+          return { success: true };
+        },
+      },
+    } as unknown as import("../src/types").Env;
+    const req = new Request("https://afl.test/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 12, method: "ping" }),
+    });
+    const res = await handleMcpRequest(req, limitedEnv, stubCtx);
+
+    expect(res.status).toBe(200);
+    expect(seenKeys).toEqual(["203.0.113.7"]);
   });
 });
