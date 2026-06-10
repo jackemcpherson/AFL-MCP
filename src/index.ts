@@ -13,6 +13,9 @@ const MIN_BACKFILL_YEAR = 1897;
 /** Maximum years per backfill request, bounding upstream fetch amplification. */
 const MAX_BACKFILL_YEARS = 30;
 
+/** /mcp/health reports unhealthy when the newest sync_log row is older than this. */
+const SYNC_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
+
 interface BackfillRequestBody {
   competitions: readonly CompetitionCode[];
   fromYear: number;
@@ -35,11 +38,25 @@ export default {
           "SELECT timestamp, type, rows_affected, error FROM sync_log ORDER BY id DESC LIMIT 1",
         ).first(),
       ]);
-      return Response.json({
-        status: "ok",
-        latest_match: freshness?.latest_match,
-        last_sync: lastSync,
-      });
+      // The cadence gate always lets the hourly tick through and every
+      // synced competition writes a sync_log row, so a quiet log means the
+      // cron itself is broken. Returning 503 lets any dumb uptime monitor
+      // alert on status code alone (OPS-02).
+      const lastTimestamp = typeof lastSync?.timestamp === "string" ? lastSync.timestamp : null;
+      const ageMs = lastTimestamp === null ? null : Date.now() - Date.parse(lastTimestamp);
+      const isStale = ageMs === null || Number.isNaN(ageMs) || ageMs > SYNC_STALE_AFTER_MS;
+      const lastError = typeof lastSync?.error === "string" ? lastSync.error : null;
+      const isHealthy = !isStale && lastError === null;
+      return Response.json(
+        {
+          status: isHealthy ? "ok" : "unhealthy",
+          stale: isStale,
+          last_sync_age_ms: ageMs,
+          latest_match: freshness?.latest_match,
+          last_sync: lastSync,
+        },
+        { status: isHealthy ? 200 : 503 },
+      );
     }
 
     if (path.startsWith("/mcp/admin/")) {
@@ -63,7 +80,23 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(sync(env, ALL_COMPETITIONS));
+    // An exception before the per-competition try/catch (e.g. in the
+    // shouldRunNow gate) was previously invisible — waitUntil swallowed
+    // it. Record a sync:fatal row so /mcp/health turns unhealthy (OPS-02).
+    ctx.waitUntil(
+      sync(env, ALL_COMPETITIONS).catch(async (err) => {
+        console.error("sync fatal:", err);
+        try {
+          await env.DB.prepare(
+            "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:fatal', 0, ?)",
+          )
+            .bind(new Date().toISOString(), err instanceof Error ? err.message : String(err))
+            .run();
+        } catch (logErr) {
+          console.error("sync fatal logging failed:", logErr);
+        }
+      }),
+    );
   },
 };
 

@@ -28,3 +28,4 @@ plans/
 data/export/
 data/sql/
 data/sql-*/
+.dev.vars
