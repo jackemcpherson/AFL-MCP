@@ -37,6 +37,7 @@ export async function executeCode(
   code: string,
   env: Env,
   ctx: ExecutionContext,
+  timeoutMs: number = EXECUTION_TIMEOUT_MS,
 ): Promise<ExecuteResult> {
   const start = Date.now();
 
@@ -89,8 +90,8 @@ export async function executeCode(
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(
-        () => reject(new Error(`Execution timed out after ${EXECUTION_TIMEOUT_MS / 1000}s`)),
-        EXECUTION_TIMEOUT_MS,
+        () => reject(new Error(`Execution timed out after ${timeoutMs / 1000}s`)),
+        timeoutMs,
       );
     });
 
