@@ -1,14 +1,17 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../types";
+import { assertReadOnlySql } from "./sql-guard";
 
 export class DbProxy extends WorkerEntrypoint<Env> {
   async query(sql: string, ...params: unknown[]) {
+    assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;
     return await bound.all();
   }
 
   async queryFirst(sql: string, ...params: unknown[]) {
+    assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;
     return await bound.first();
