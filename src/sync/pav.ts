@@ -87,11 +87,16 @@ team_ratings AS (
     CROSS JOIN league_avg la
 ),
 
--- Step 4: Apply defence transform
+-- Step 4: Apply defence transform.
+-- The original ((2dn - dn²)/(2dn)) × 100 × 2 reduces algebraically to
+-- 100 × (2 - dn); written in reduced form for clarity. The CASE keeps
+-- the old NULLIF guard's dn = 0 → NULL behaviour exactly (COR-11:
+-- semantics unchanged, only simplified — see test/pav.test.ts).
 team_ratings_full AS (
     SELECT team_id, off_rating, mid_rating, dn,
-        (100.0 * ((2.0 * dn - dn * dn)
-            / NULLIF(2.0 * dn, 0))) * 2.0          AS def_rating
+        CASE WHEN dn = 0 THEN NULL
+             ELSE 100.0 * (2.0 - dn)
+        END                                        AS def_rating
     FROM team_ratings
 ),
 

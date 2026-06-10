@@ -148,8 +148,24 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
   if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
-    await Promise.all([recalculatePav(env, "AFLM"), recalculatePav(env, "AFLW")]);
-    return Response.json({ status: "ok" });
+    // Optional ?year= override — the wall-clock default is wrong at
+    // season/year boundaries (COR-11).
+    const url = new URL(request.url);
+    const yearParam = url.searchParams.get("year");
+    let year: number | undefined;
+    if (yearParam !== null) {
+      const parsed = Number.parseInt(yearParam, 10);
+      const currentYear = new Date().getUTCFullYear();
+      if (!Number.isInteger(parsed) || parsed < MIN_BACKFILL_YEAR || parsed > currentYear) {
+        return Response.json(
+          { error: `year must be between ${MIN_BACKFILL_YEAR} and ${currentYear}` },
+          { status: 400 },
+        );
+      }
+      year = parsed;
+    }
+    await Promise.all([recalculatePav(env, "AFLM", year), recalculatePav(env, "AFLW", year)]);
+    return Response.json({ status: "ok", year: year ?? new Date().getFullYear() });
   }
 
   if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {

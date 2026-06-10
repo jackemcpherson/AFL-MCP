@@ -70,18 +70,49 @@ export async function sync(
   const now = new Date();
   if (!options?.skipShouldRunNow && !(await shouldRunNow(now, env))) return [];
 
-  const seasons: number[] =
-    options?.fromYear !== undefined && options.toYear !== undefined
-      ? rangeInclusive(options.fromYear, options.toYear)
-      : [now.getUTCFullYear()];
-
-  const results: BackfillResult[] = [];
-  for (const competition of competitions) {
-    for (const season of seasons) {
-      results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
-    }
+  // Cron ticks and admin syncs previously had no mutual exclusion —
+  // overlapping runs double-fetched upstream data and interleaved PAV
+  // recalcs (COR-11). A stale lease (holder crashed) expires after 10 min.
+  const holder = crypto.randomUUID();
+  if (!(await acquireSyncLease(env, holder))) {
+    await logSync(env, "sync:lease", 0, "skipped: another sync holds the lease");
+    return [];
   }
-  return results;
+
+  try {
+    const seasons: number[] =
+      options?.fromYear !== undefined && options.toYear !== undefined
+        ? rangeInclusive(options.fromYear, options.toYear)
+        : [now.getUTCFullYear()];
+
+    const results: BackfillResult[] = [];
+    for (const competition of competitions) {
+      for (const season of seasons) {
+        results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
+      }
+    }
+    return results;
+  } finally {
+    await releaseSyncLease(env, holder);
+  }
+}
+
+async function acquireSyncLease(env: Env, holder: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE sync_lease SET holder = ?1, acquired_at = datetime('now')
+     WHERE id = 1 AND (holder IS NULL OR acquired_at < datetime('now', '-10 minutes'))`,
+  )
+    .bind(holder)
+    .run();
+  return result.meta.changes === 1;
+}
+
+async function releaseSyncLease(env: Env, holder: string): Promise<void> {
+  await env.DB.prepare(
+    "UPDATE sync_lease SET holder = NULL, acquired_at = NULL WHERE id = 1 AND holder = ?1",
+  )
+    .bind(holder)
+    .run();
 }
 
 /**
