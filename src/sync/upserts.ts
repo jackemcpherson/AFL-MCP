@@ -345,11 +345,18 @@ export async function upsertPlayers(
     const stmts: D1PreparedStatement[] = [];
     for (const p of chunk) {
       stmts.push(
+        // Adopt at most ONE legacy row. Homonyms are real across 130
+        // seasons; updating every name match gave multiple rows the same
+        // AFL id, violating the unique index and aborting the whole
+        // transactional batch until manual intervention (COR-05).
         env.DB.prepare(
           `UPDATE players SET external_afl_player_id = ?
-           WHERE first_name = ? AND surname = ?
-             AND external_afl_player_id IS NULL
-             AND external_id IS NOT NULL
+           WHERE id = (
+             SELECT MIN(id) FROM players
+             WHERE first_name = ? AND surname = ?
+               AND external_afl_player_id IS NULL
+               AND external_id IS NOT NULL
+           )
              AND NOT EXISTS (SELECT 1 FROM players WHERE external_afl_player_id = ?)`,
         ).bind(p.playerId, p.givenName, p.surname, p.playerId),
       );
