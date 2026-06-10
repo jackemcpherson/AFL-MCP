@@ -108,8 +108,22 @@ export async function executeCode(
   } catch (err) {
     return {
       result: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: sanitizeErrorMessage(err),
       execution_time_ms: Date.now() - start,
     };
   }
+}
+
+/**
+ * Reduces an execution error to a single bounded line so callers get
+ * actionable feedback (their own SQL/code errors) without stack frames,
+ * file paths, or unbounded internal detail.
+ */
+export function sanitizeErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const firstLine = message.split("\n")[0]?.trim() ?? "";
+  if (firstLine === "") {
+    return "execution failed";
+  }
+  return firstLine.length > 500 ? `${firstLine.slice(0, 500)}…` : firstLine;
 }
