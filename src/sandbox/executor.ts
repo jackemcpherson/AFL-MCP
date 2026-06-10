@@ -1,14 +1,17 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../types";
+import { assertReadOnlySql } from "./sql-guard";
 
 export class DbProxy extends WorkerEntrypoint<Env> {
   async query(sql: string, ...params: unknown[]) {
+    assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;
     return await bound.all();
   }
 
   async queryFirst(sql: string, ...params: unknown[]) {
+    assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;
     return await bound.first();
@@ -21,10 +24,20 @@ export interface ExecuteResult {
   execution_time_ms: number;
 }
 
+/** Wall-clock execution budget, matching the limit documented by the `tools` tool. */
+const EXECUTION_TIMEOUT_MS = 30_000;
+
+/** Serialized results larger than this are truncated rather than returned whole. */
+const MAX_RESULT_CHARS = 1_000_000;
+
+/** Resource limits applied to the sandbox isolate itself. */
+const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
+
 export async function executeCode(
   code: string,
   env: Env,
   ctx: ExecutionContext,
+  timeoutMs: number = EXECUTION_TIMEOUT_MS,
 ): Promise<ExecuteResult> {
   const start = Date.now();
 
@@ -59,20 +72,59 @@ export async function executeCode(
       modules: { "agent.js": wrappedCode },
       env: { __db: dbProxy },
       globalOutbound: null,
+      limits: SANDBOX_LIMITS,
     });
 
-    const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
-    const result = await response.json();
+    const execution = (async (): Promise<unknown> => {
+      const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
+      const text = await response.text();
+      if (text.length > MAX_RESULT_CHARS) {
+        return `${text.slice(0, MAX_RESULT_CHARS)}\n… [result truncated at ${MAX_RESULT_CHARS} characters — narrow your query with LIMIT or aggregation]`;
+      }
+      return JSON.parse(text) as unknown;
+    })();
+    // If the timeout wins the race, the abandoned execution promise may still
+    // reject later; swallow that so it never becomes an unhandled rejection.
+    execution.catch(() => undefined);
 
-    return {
-      result,
-      execution_time_ms: Date.now() - start,
-    };
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Execution timed out after ${timeoutMs / 1000}s`)),
+        timeoutMs,
+      );
+    });
+
+    try {
+      const result = await Promise.race([execution, timeout]);
+      return {
+        result,
+        execution_time_ms: Date.now() - start,
+      };
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   } catch (err) {
     return {
       result: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: sanitizeErrorMessage(err),
       execution_time_ms: Date.now() - start,
     };
   }
+}
+
+/**
+ * Reduces an execution error to a single bounded line so callers get
+ * actionable feedback (their own SQL/code errors) without stack frames,
+ * file paths, or unbounded internal detail.
+ */
+export function sanitizeErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const firstLine = message.split("\n")[0]?.trim() ?? "";
+  if (firstLine === "") {
+    return "execution failed";
+  }
+  return firstLine.length > 500 ? `${firstLine.slice(0, 500)}…` : firstLine;
 }

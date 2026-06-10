@@ -7,6 +7,12 @@ import type { Env } from "./types";
 const ALL_COMPETITIONS: readonly CompetitionCode[] = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 const VALID_COMPETITIONS: ReadonlySet<string> = new Set(ALL_COMPETITIONS);
 
+/** Earliest season in the historical record. */
+const MIN_BACKFILL_YEAR = 1897;
+
+/** Maximum years per backfill request, bounding upstream fetch amplification. */
+const MAX_BACKFILL_YEARS = 30;
+
 interface BackfillRequestBody {
   competitions: readonly CompetitionCode[];
   fromYear: number;
@@ -36,41 +42,17 @@ export default {
       });
     }
 
-    if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
-      await Promise.all([recalculatePav(env, "AFLM"), recalculatePav(env, "AFLW")]);
-      return Response.json({ status: "ok" });
-    }
-
-    if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {
-      const results = await calculateAllPav(env);
-      return Response.json({ status: "ok", results });
-    }
-
-    if (path === "/mcp/admin/sync" && request.method === "POST") {
-      await sync(env, ALL_COMPETITIONS);
-      return Response.json({ status: "ok" });
-    }
-
-    if (path === "/mcp/admin/backfill" && request.method === "POST") {
-      let body: BackfillRequestBody;
+    if (path.startsWith("/mcp/admin/")) {
+      const denied = requireAdmin(request, env);
+      if (denied) {
+        return denied;
+      }
       try {
-        body = (await request.json()) as BackfillRequestBody;
-      } catch {
-        return Response.json({ error: "invalid JSON body" }, { status: 400 });
+        return await handleAdmin(path, request, env);
+      } catch (err) {
+        console.error("admin route error:", err);
+        return Response.json({ error: "internal error" }, { status: 500 });
       }
-
-      const validation = validateBackfill(body);
-      if (validation !== null) {
-        return Response.json({ error: validation }, { status: 400 });
-      }
-
-      const results = await sync(env, body.competitions, {
-        fromYear: body.fromYear,
-        toYear: body.toYear,
-        skipShouldRunNow: body.skipShouldRunNow ?? true,
-        skipPav: body.skipPav ?? false,
-      });
-      return Response.json({ status: "ok", results });
     }
 
     if (path === "/mcp" || path.startsWith("/mcp/")) {
@@ -84,6 +66,82 @@ export default {
     ctx.waitUntil(sync(env, ALL_COMPETITIONS));
   },
 };
+
+/**
+ * Authorises an admin request via `Authorization: Bearer <ADMIN_TOKEN>`.
+ *
+ * Fails closed: when no token is configured the admin surface is disabled
+ * entirely rather than left open.
+ *
+ * @returns A denial response, or null when the request is authorised.
+ */
+function requireAdmin(request: Request, env: Env): Response | null {
+  if (!env.ADMIN_TOKEN) {
+    return Response.json({ error: "admin endpoints are not configured" }, { status: 503 });
+  }
+  const auth = request.headers.get("authorization") ?? "";
+  const provided = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+  if (!timingSafeEqual(provided, env.ADMIN_TOKEN)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
+/** Constant-time string comparison so token checks don't leak match length/prefix. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const aBytes = encoder.encode(a);
+  const bBytes = encoder.encode(b);
+  if (aBytes.length !== bBytes.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
+async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
+  if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
+    await Promise.all([recalculatePav(env, "AFLM"), recalculatePav(env, "AFLW")]);
+    return Response.json({ status: "ok" });
+  }
+
+  if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {
+    const results = await calculateAllPav(env);
+    return Response.json({ status: "ok", results });
+  }
+
+  if (path === "/mcp/admin/sync" && request.method === "POST") {
+    await sync(env, ALL_COMPETITIONS);
+    return Response.json({ status: "ok" });
+  }
+
+  if (path === "/mcp/admin/backfill" && request.method === "POST") {
+    let body: BackfillRequestBody;
+    try {
+      body = (await request.json()) as BackfillRequestBody;
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+
+    const validation = validateBackfill(body);
+    if (validation !== null) {
+      return Response.json({ error: validation }, { status: 400 });
+    }
+
+    const results = await sync(env, body.competitions, {
+      fromYear: body.fromYear,
+      toYear: body.toYear,
+      skipShouldRunNow: body.skipShouldRunNow ?? true,
+      skipPav: body.skipPav ?? false,
+    });
+    return Response.json({ status: "ok", results });
+  }
+
+  return Response.json({ error: "not found" }, { status: 404 });
+}
 
 function validateBackfill(body: BackfillRequestBody): string | null {
   if (!Array.isArray(body.competitions) || body.competitions.length === 0) {
@@ -102,6 +160,13 @@ function validateBackfill(body: BackfillRequestBody): string | null {
   }
   if (body.toYear < body.fromYear) {
     return "toYear must be >= fromYear";
+  }
+  const currentYear = new Date().getUTCFullYear();
+  if (body.fromYear < MIN_BACKFILL_YEAR || body.toYear > currentYear) {
+    return `years must be between ${MIN_BACKFILL_YEAR} and ${currentYear}`;
+  }
+  if (body.toYear - body.fromYear + 1 > MAX_BACKFILL_YEARS) {
+    return `year range too large: max ${MAX_BACKFILL_YEARS} years per request`;
   }
   return null;
 }

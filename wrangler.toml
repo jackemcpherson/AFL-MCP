@@ -15,5 +15,11 @@ migrations_dir = "src/db/migrations"
 [[worker_loaders]]
 binding = "LOADER"
 
+# Per-IP rate limit for the public MCP endpoint (SEC-03).
+[[ratelimits]]
+name = "MCP_RATE_LIMIT"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
 [triggers]
 crons = ["*/5 * * * *"]
