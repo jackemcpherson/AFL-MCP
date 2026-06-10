@@ -30,12 +30,21 @@ export default {
     const path = url.pathname;
 
     if (path === "/health" || path === "/mcp/health") {
-      const [freshness, lastSync] = await Promise.all([
+      const [freshness, lastSync, lastCritical] = await Promise.all([
         env.DB.prepare(
           "SELECT MAX(date) as latest_match FROM matches WHERE home_points IS NOT NULL",
         ).first(),
         env.DB.prepare(
           "SELECT timestamp, type, rows_affected, error FROM sync_log ORDER BY id DESC LIMIT 1",
+        ).first(),
+        // Sub-task rows (sync:*:lineups, sync:*:stats) record routine
+        // degradations — e.g. lineup 404s before teams are announced — and
+        // must not page. Only whole-competition failures or sync:fatal count.
+        env.DB.prepare(
+          `SELECT timestamp, type, error FROM sync_log
+           WHERE error IS NOT NULL
+             AND (type = 'sync:fatal' OR type IN ('sync:AFLM','sync:AFLW','sync:VFL','sync:VFLW'))
+           ORDER BY id DESC LIMIT 1`,
         ).first(),
       ]);
       // The cadence gate always lets the hourly tick through and every
@@ -45,8 +54,13 @@ export default {
       const lastTimestamp = typeof lastSync?.timestamp === "string" ? lastSync.timestamp : null;
       const ageMs = lastTimestamp === null ? null : Date.now() - Date.parse(lastTimestamp);
       const isStale = ageMs === null || Number.isNaN(ageMs) || ageMs > SYNC_STALE_AFTER_MS;
-      const lastError = typeof lastSync?.error === "string" ? lastSync.error : null;
-      const isHealthy = !isStale && lastError === null;
+      const criticalTs =
+        typeof lastCritical?.timestamp === "string" ? Date.parse(lastCritical.timestamp) : null;
+      const hasRecentCriticalError =
+        criticalTs !== null &&
+        !Number.isNaN(criticalTs) &&
+        Date.now() - criticalTs <= SYNC_STALE_AFTER_MS;
+      const isHealthy = !isStale && !hasRecentCriticalError;
       return Response.json(
         {
           status: isHealthy ? "ok" : "unhealthy",
@@ -54,6 +68,7 @@ export default {
           last_sync_age_ms: ageMs,
           latest_match: freshness?.latest_match,
           last_sync: lastSync,
+          last_critical_error: lastCritical ?? null,
         },
         { status: isHealthy ? 200 : 503 },
       );
