@@ -1,11 +1,15 @@
 import type { CompetitionCode } from "fitzroy";
 import { handleMcpRequest } from "./mcp/protocol";
+import {
+  type BackfillRequest,
+  BackfillRequestSchema,
+  describeBackfillIssue,
+} from "./mcp/validation";
 import { calculateAllPav, recalculatePav } from "./sync/pav";
 import { sync } from "./sync/sync";
 import type { Env } from "./types";
 
 const ALL_COMPETITIONS: readonly CompetitionCode[] = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
-const VALID_COMPETITIONS: ReadonlySet<string> = new Set(ALL_COMPETITIONS);
 
 /** Earliest season in the historical record. */
 const MIN_BACKFILL_YEAR = 1897;
@@ -15,14 +19,6 @@ const MAX_BACKFILL_YEARS = 30;
 
 /** /mcp/health reports unhealthy when the newest sync_log row is older than this. */
 const SYNC_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
-
-interface BackfillRequestBody {
-  competitions: readonly CompetitionCode[];
-  fromYear: number;
-  toYear: number;
-  skipShouldRunNow?: boolean;
-  skipPav?: boolean;
-}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -167,16 +163,22 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/backfill" && request.method === "POST") {
-    let body: BackfillRequestBody;
+    let raw: unknown;
     try {
-      body = (await request.json()) as BackfillRequestBody;
+      raw = await request.json();
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
-    const validation = validateBackfill(body);
-    if (validation !== null) {
-      return Response.json({ error: validation }, { status: 400 });
+    const parsed = BackfillRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Response.json({ error: describeBackfillIssue(parsed.error) }, { status: 400 });
+    }
+    const body = parsed.data;
+
+    const rangeError = validateYearRange(body);
+    if (rangeError !== null) {
+      return Response.json({ error: rangeError }, { status: 400 });
     }
 
     const results = await sync(env, body.competitions, {
@@ -191,21 +193,8 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
-function validateBackfill(body: BackfillRequestBody): string | null {
-  if (!Array.isArray(body.competitions) || body.competitions.length === 0) {
-    return "competitions must be a non-empty array";
-  }
-  for (const c of body.competitions) {
-    if (typeof c !== "string" || !VALID_COMPETITIONS.has(c)) {
-      return `invalid competition code: ${String(c)}`;
-    }
-  }
-  if (typeof body.fromYear !== "number" || !Number.isInteger(body.fromYear)) {
-    return "fromYear must be an integer";
-  }
-  if (typeof body.toYear !== "number" || !Number.isInteger(body.toYear)) {
-    return "toYear must be an integer";
-  }
+/** Cross-field clamps (SEC-02); shape validation lives in BackfillRequestSchema. */
+function validateYearRange(body: BackfillRequest): string | null {
   if (body.toYear < body.fromYear) {
     return "toYear must be >= fromYear";
   }
