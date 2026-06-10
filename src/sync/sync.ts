@@ -14,6 +14,7 @@ import {
   selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
   selectNextRound,
+  selectRoundHasAnyLineups,
   unionPlayers,
   updateSeasonCompleteness,
   upsertLineups,
@@ -91,6 +92,13 @@ export async function sync(
         results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
       }
     }
+
+    // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
+    // debugging horizon while keeping the table tiny.
+    await env.DB.prepare("DELETE FROM sync_log WHERE timestamp < datetime('now', '-90 days')")
+      .run()
+      .catch(() => undefined);
+
     return results;
   } finally {
     await releaseSyncLease(env, holder);
@@ -165,9 +173,16 @@ async function syncCompetition(
     // multi-match completions and recovers from partial write failures).
     const shouldFetchStats = apiCompletedCount > dbCompletedCount || hasStatsBacklog;
 
-    const lineupRounds = new Set<number>();
-    if (nextRound !== null) lineupRounds.add(nextRound);
-    for (const r of lineupBacklogRounds) lineupRounds.add(r);
+    const lineupRounds = new Set<number>(lineupBacklogRounds);
+    if (nextRound !== null) {
+      // Once the upcoming round has lineups stored, refresh on a 15-minute
+      // cadence instead of every 5-minute tick (OPT-03): a 3x cut in
+      // upstream lineup calls while still catching late team changes
+      // within 15 minutes. First acquisition never waits for the cadence.
+      const hasAny = await selectRoundHasAnyLineups(env, seasonId, nextRound);
+      const onCadence = new Date().getUTCMinutes() % 15 < 5;
+      if (!hasAny || onCadence) lineupRounds.add(nextRound);
+    }
 
     const [lineupBatches, stats] = await Promise.all([
       Promise.all(

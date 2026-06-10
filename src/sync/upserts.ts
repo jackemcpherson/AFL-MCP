@@ -298,6 +298,23 @@ export async function selectCompletedRoundsWithoutLineups(
   return results.map((r) => r.round_number);
 }
 
+/** Whether any match in the given round already has lineup rows stored. */
+export async function selectRoundHasAnyLineups(
+  env: Env,
+  seasonId: number,
+  round: number,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS present FROM matches m
+     WHERE m.season_id = ?1 AND m.round_number = ?2
+       AND EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
+     LIMIT 1`,
+  )
+    .bind(seasonId, round)
+    .first();
+  return row !== null;
+}
+
 /**
  * Smallest `round_number` with at least one not-yet-played match. Opening Round
  * is `round_number = 0` and is correctly returned ahead of R1 when unfinished.
