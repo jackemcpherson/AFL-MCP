@@ -14,4 +14,6 @@ interface WorkerLoader {
 export interface Env {
   DB: D1Database;
   LOADER: WorkerLoader;
+  /** Bearer token for /mcp/admin/* (wrangler secret). Admin routes are disabled when unset. */
+  ADMIN_TOKEN?: string;
 }
