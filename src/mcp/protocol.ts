@@ -2,7 +2,8 @@ import { executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
 import { getToolsInfo } from "./tools/tools";
-import type { JsonRpcRequest, JsonRpcResponse, ToolDefinition } from "./types";
+import type { JsonRpcResponse, ToolDefinition } from "./types";
+import { type JsonRpcRequest, JsonRpcRequestSchema } from "./validation";
 
 const SERVER_INFO = {
   name: "afl-mcp",
@@ -203,15 +204,18 @@ export async function handleMcpRequest(
     return Response.json(jsonRpcError(0, -32700, "Parse error: invalid JSON"), { status: 400 });
   }
 
-  const rpcRequest = body as JsonRpcRequest;
-  if (rpcRequest.jsonrpc !== "2.0" || !rpcRequest.method) {
-    return Response.json(
-      jsonRpcError(rpcRequest?.id ?? 0, -32600, "Invalid JSON-RPC 2.0 request"),
-      { status: 400 },
-    );
+  const rpcRequest = JsonRpcRequestSchema.safeParse(body);
+  if (!rpcRequest.success) {
+    const fallbackId =
+      typeof body === "object" && body !== null && "id" in body
+        ? (body as { id?: string | number }).id
+        : undefined;
+    return Response.json(jsonRpcError(fallbackId ?? 0, -32600, "Invalid JSON-RPC 2.0 request"), {
+      status: 400,
+    });
   }
 
-  const response = await handleJsonRpc(rpcRequest, env, ctx);
+  const response = await handleJsonRpc(rpcRequest.data, env, ctx);
 
   return Response.json(response, {
     headers: { "Content-Type": "application/json" },

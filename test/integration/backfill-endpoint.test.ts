@@ -33,7 +33,10 @@ describe("POST /mcp/admin/backfill — authentication", () => {
   it("returns 503 when no admin token is configured (fail closed)", async () => {
     const res = await worker.fetch(
       makeRequest({ competitions: ["AFLW"], fromYear: 2025, toYear: 2025 }),
-      { ...(env as Env), ADMIN_TOKEN: undefined } as Env,
+      (() => {
+        const { ADMIN_TOKEN: _omitted, ...withoutToken } = authedEnv;
+        return withoutToken as Env;
+      })(),
       stubCtx,
     );
     expect(res.status).toBe(503);
