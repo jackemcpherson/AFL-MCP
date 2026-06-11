@@ -285,7 +285,17 @@ async function fetchPlayerStatsSafe(env: Env, competition: CompetitionCode, seas
     );
     return [];
   }
-  return result.data;
+  // fitzroy v3 returns a partial-result envelope; failed games are worth a
+  // sync_log row but must not block the games that did parse.
+  if (result.data.failedMatchIds.length > 0) {
+    await logSync(
+      env,
+      `sync:${competition}:stats`,
+      0,
+      `partial season stats: ${result.data.failedMatchIds.length} game(s) failed (${result.data.failedMatchIds.join(", ")})`,
+    );
+  }
+  return result.data.stats;
 }
 
 function describeError(err: unknown): string {
