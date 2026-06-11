@@ -13,7 +13,7 @@
     "db:seed": "tsx scripts/seed-d1.ts"
   },
   "dependencies": {
-    "fitzroy": "^3.0.0",
+    "fitzroy": "3.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
