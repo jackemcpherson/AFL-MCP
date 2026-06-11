@@ -18,8 +18,10 @@ export function getToolsInfo() {
     constraints: [
       "No network access — all data comes from the database",
       "No npm packages — standard TypeScript/JavaScript only",
-      "30-second execution timeout",
-      "Read-only database access",
+      "30-second execution timeout (enforced)",
+      "Read-only database access — write/DDL statements are rejected (enforced)",
+      "Results over 1 MB are truncated — narrow queries with LIMIT or aggregation",
+      "Rate limited per IP (60 requests/minute)",
     ],
     guidance: [
       "Call schema first if you need to inspect table structure",

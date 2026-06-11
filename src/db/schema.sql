@@ -50,6 +50,7 @@ CREATE TABLE matches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   season_id INTEGER NOT NULL REFERENCES seasons(id),
   round TEXT NOT NULL,
+  round_abbreviation TEXT,
   round_number INTEGER,
   round_type TEXT DEFAULT 'Regular',
   date TEXT NOT NULL,
@@ -219,4 +220,11 @@ CREATE TABLE sync_log (
   type TEXT NOT NULL,
   rows_affected INTEGER DEFAULT 0,
   error TEXT
+);
+
+-- Single-row lease for cron/admin sync mutual exclusion (migration 0012).
+CREATE TABLE sync_lease (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  holder TEXT,
+  acquired_at TEXT
 );
