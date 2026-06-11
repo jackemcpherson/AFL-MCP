@@ -67,6 +67,15 @@ full pipeline.
 - `src/sync/pav.ts` — PAV recalculation.
 - `src/db/schema.sql` — D1 schema (10 tables).
 
+## Style-Guide Exception
+
+This Worker takes the style guide's **minimal-Worker exception**: no
+Hono (hand-rolled routing in `src/index.ts`) and no Drizzle (raw
+parameterised SQL, with the repeated upsert fragments generated from
+column manifests in `src/sync/columns.ts`). Zod still validates all
+HTTP boundaries (`src/mcp/validation.ts`). Revisit if routing outgrows
+the current if/else chain or schema churn makes the manifests painful.
+
 ## Key Constraints
 
 - **Strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
