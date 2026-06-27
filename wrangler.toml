@@ -23,3 +23,6 @@ simple = { limit = 60, period = 60 }
 
 [triggers]
 crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true
