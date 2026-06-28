@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import pkg from "../package.json";
 
 // Mock the cloudflare:workers module that executor.ts imports
 vi.mock("cloudflare:workers", () => ({
@@ -20,7 +21,7 @@ interface JsonRpcTestResponse {
   jsonrpc?: string;
   id?: number;
   result?: {
-    serverInfo?: { name: string };
+    serverInfo?: { name: string; version?: string };
     capabilities?: { tools?: unknown };
     tools?: { name: string }[];
     content?: { type: string; text: string }[];
@@ -97,6 +98,7 @@ describe("handleMcpRequest", () => {
     expect(json.jsonrpc).toBe("2.0");
     expect(json.id).toBe(1);
     expect(json.result?.serverInfo?.name).toBe("afl-mcp");
+    expect(json.result?.serverInfo?.version).toBe(pkg.version);
     expect(json.result?.capabilities?.tools).toBeDefined();
   });
 
