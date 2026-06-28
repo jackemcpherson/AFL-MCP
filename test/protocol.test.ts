@@ -124,6 +124,16 @@ describe("handleMcpRequest", () => {
     expect(json.error).toBeUndefined();
   });
 
+  it("acknowledges notifications with 202 and no body", async () => {
+    const res = await handleMcpRequest(
+      makeRequest({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe("");
+  });
+
   it("returns method-not-found for unknown methods", async () => {
     const res = await handleMcpRequest(
       makeRequest({ jsonrpc: "2.0", id: 4, method: "unknown/method" }),
