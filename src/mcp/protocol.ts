@@ -141,9 +141,6 @@ async function handleJsonRpc(
         serverInfo: SERVER_INFO,
       });
 
-    case "notifications/initialized":
-      return jsonRpcResponse(id, {});
-
     case "tools/list":
       return jsonRpcResponse(id, { tools: TOOLS });
 
@@ -214,6 +211,12 @@ export async function handleMcpRequest(
     return Response.json(jsonRpcError(fallbackId ?? 0, -32600, "Invalid JSON-RPC 2.0 request"), {
       status: 400,
     });
+  }
+
+  // JSON-RPC notifications (method "notifications/*") take no response.
+  // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
+  if (rpcRequest.data.method.startsWith("notifications/")) {
+    return new Response(null, { status: 202 });
   }
 
   let response: JsonRpcResponse;
