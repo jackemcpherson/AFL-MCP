@@ -237,7 +237,8 @@ async function fetchPlayerListDirect(slug: string): Promise<ParsedListEntry[]> {
   if (!resp.ok) throw new Error(`direct fetch ${slug} ${resp.status}`);
   const html = await resp.text();
   const rows: ParsedListEntry[] = [];
-  const rowRe = /<a href="\.\.\/players\/[^"]+">([^<,]+),\s*([^<]+)<\/a><\/td>(?:<td[^>]*>([^<]*)<\/td>)(?:<td[^>]*>[^<]*<\/td>){4}\s*<td[^>]*>([^<]*)<\/td>/g;
+  const rowRe =
+    /<a href="\.\.\/players\/[^"]+">([^<,]+),\s*([^<]+)<\/a><\/td>(?:<td[^>]*>([^<]*)<\/td>)(?:<td[^>]*>[^<]*<\/td>){4}\s*<td[^>]*>([^<]*)<\/td>/g;
   let m: RegExpExecArray | null = rowRe.exec(html);
   while (m !== null) {
     const surname = (m[1] ?? "").trim();
@@ -255,7 +256,6 @@ async function fetchPlayerListDirect(slug: string): Promise<ParsedListEntry[]> {
   }
   return rows;
 }
-
 
 async function stageAflTables(startYear: number, endYear: number): Promise<string[]> {
   console.log("Stage 2 (AFL Tables): loading NULL-DOB players with club stints from D1...");
@@ -459,7 +459,14 @@ async function main() {
 }
 
 function printAgeOutliers(): void {
-  const rows = queryD1<{ id: number; first_name: string | null; surname: string; dob: string; min_age: number; max_age: number }>(
+  const rows = queryD1<{
+    id: number;
+    first_name: string | null;
+    surname: string;
+    dob: string;
+    min_age: number;
+    max_age: number;
+  }>(
     `SELECT p.id, p.first_name, p.surname, p.date_of_birth AS dob,
             MIN((julianday(m.date) - julianday(p.date_of_birth)) / 365.25) AS min_age,
             MAX((julianday(m.date) - julianday(p.date_of_birth)) / 365.25) AS max_age
