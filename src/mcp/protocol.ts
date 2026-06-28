@@ -1,3 +1,4 @@
+import pkg from "../../package.json";
 import { executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
@@ -7,7 +8,7 @@ import { type JsonRpcRequest, JsonRpcRequestSchema } from "./validation";
 
 const SERVER_INFO = {
   name: "afl-mcp",
-  version: "3.0.0",
+  version: pkg.version,
 };
 
 const COMPETITION_CODES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
