@@ -216,7 +216,13 @@ export async function handleMcpRequest(
     });
   }
 
-  const response = await handleJsonRpc(rpcRequest.data, env, ctx);
+  let response: JsonRpcResponse;
+  try {
+    response = await handleJsonRpc(rpcRequest.data, env, ctx);
+  } catch (err) {
+    console.error("mcp handler error:", err);
+    response = jsonRpcError(rpcRequest.data.id, -32603, "Internal error");
+  }
 
   return Response.json(response, {
     headers: { "Content-Type": "application/json" },
