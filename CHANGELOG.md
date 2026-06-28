@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-06-28
+
+### Fixed
+
+- The MCP `initialize` handshake now reports the real server version, sourced
+  from `package.json`, instead of a hardcoded literal that had drifted to
+  `3.0.0`. `tsconfig.json` enables `resolveJsonModule` to support the import.
+- `handleMcpRequest` now wraps dispatch in a top-level error boundary: an
+  unexpected handler throw returns a well-formed JSON-RPC `-32603` (Internal
+  error) at HTTP 200 instead of an opaque Cloudflare 500 with no JSON-RPC
+  envelope. Internal error detail is logged, never returned to the client.
+- JSON-RPC notifications (methods under `notifications/*`, e.g.
+  `notifications/initialized`) are now acknowledged with HTTP 202 and an empty
+  body, per the MCP streamable-HTTP transport, instead of an erroneous
+  JSON-RPC response carrying `id: 0`.
+
+### Removed
+
+- Stale Python-era artifact `scripts/export-pg.sh` (the one-shot
+  PostgreSQL→D1 export, obsolete since the platform migration to Cloudflare
+  Workers/D1).
+
 ## [3.2.0] - 2026-06-09
 
 ### Added
