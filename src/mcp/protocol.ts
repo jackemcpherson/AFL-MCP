@@ -114,6 +114,13 @@ async function handleToolCall(
       if (typeof code !== "string" || code.trim() === "") {
         return mcpError("code parameter is required and must be a non-empty string");
       }
+      const rawCompetition = args.competition;
+      const competition =
+        typeof rawCompetition === "string" &&
+        (COMPETITION_CODES as readonly string[]).includes(rawCompetition)
+          ? rawCompetition
+          : null;
+      console.log(JSON.stringify({ event: "tool:code", competition }));
       const result = await executeCode(code, env, ctx);
       if (result.error) {
         return mcpError(`Execution error (${result.execution_time_ms}ms): ${result.error}`);

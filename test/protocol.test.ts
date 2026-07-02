@@ -6,6 +6,11 @@ vi.mock("cloudflare:workers", () => ({
   WorkerEntrypoint: class {},
 }));
 
+// Mock the executor so code-tool tests don't need a live sandbox
+vi.mock("../src/sandbox/executor", () => ({
+  executeCode: vi.fn().mockResolvedValue({ result: "ok", execution_time_ms: 5 }),
+}));
+
 import { handleMcpRequest } from "../src/mcp/protocol";
 
 function makeRequest(body: unknown, method = "POST"): Request {
@@ -243,6 +248,92 @@ describe("handleMcpRequest", () => {
     );
 
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  describe("code tool competition telemetry", () => {
+    it("logs { event: 'tool:code', competition: 'AFLW' } when a valid competition hint is supplied", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const res = await handleMcpRequest(
+          makeRequest({
+            jsonrpc: "2.0",
+            id: 20,
+            method: "tools/call",
+            params: { name: "code", arguments: { code: "return 1", competition: "AFLW" } },
+          }),
+          stubEnv,
+          stubCtx,
+        );
+        const json = await parseJson(res);
+        expect(json.result?.isError).toBeFalsy();
+        const telemetryCall = logSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+        );
+        expect(telemetryCall).toBeDefined();
+        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+          event: "tool:code",
+          competition: "AFLW",
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it("logs competition: null when the competition hint is omitted", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const res = await handleMcpRequest(
+          makeRequest({
+            jsonrpc: "2.0",
+            id: 21,
+            method: "tools/call",
+            params: { name: "code", arguments: { code: "return 1" } },
+          }),
+          stubEnv,
+          stubCtx,
+        );
+        const json = await parseJson(res);
+        expect(json.result?.isError).toBeFalsy();
+        const telemetryCall = logSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+        );
+        expect(telemetryCall).toBeDefined();
+        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+          event: "tool:code",
+          competition: null,
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it("logs competition: null and does NOT return an error when competition is an unrecognised value", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const res = await handleMcpRequest(
+          makeRequest({
+            jsonrpc: "2.0",
+            id: 22,
+            method: "tools/call",
+            params: { name: "code", arguments: { code: "return 1", competition: "NRL" } },
+          }),
+          stubEnv,
+          stubCtx,
+        );
+        const json = await parseJson(res);
+        expect(json.result?.isError).toBeFalsy();
+        const telemetryCall = logSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+        );
+        expect(telemetryCall).toBeDefined();
+        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+          event: "tool:code",
+          competition: null,
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
   });
 
   it("returns 429 when the rate limiter denies the request", async () => {
