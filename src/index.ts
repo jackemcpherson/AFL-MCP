@@ -26,6 +26,16 @@ export default {
     const path = url.pathname;
 
     if (path === "/health" || path === "/mcp/health") {
+      if (env.MCP_RATE_LIMIT) {
+        const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+        const { success } = await env.MCP_RATE_LIMIT.limit({ key: ip });
+        if (!success) {
+          return Response.json(
+            { error: "rate limit exceeded" },
+            { status: 429, headers: { "Retry-After": "60" } },
+          );
+        }
+      }
       const [freshness, lastSync, lastCritical] = await Promise.all([
         env.DB.prepare(
           "SELECT MAX(date) as latest_match FROM matches WHERE home_points IS NOT NULL",
@@ -63,8 +73,7 @@ export default {
           stale: isStale,
           last_sync_age_ms: ageMs,
           latest_match: freshness?.latest_match,
-          last_sync: lastSync,
-          last_critical_error: lastCritical ?? null,
+          has_recent_critical_error: hasRecentCriticalError,
         },
         { status: isHealthy ? 200 : 503 },
       );
