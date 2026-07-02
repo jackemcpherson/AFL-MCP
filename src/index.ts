@@ -174,8 +174,8 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/sync" && request.method === "POST") {
-    await sync(env, ALL_COMPETITIONS);
-    return Response.json({ status: "ok" });
+    const results = await sync(env, ALL_COMPETITIONS, { skipShouldRunNow: true });
+    return Response.json({ status: "ok", results });
   }
 
   if (path === "/mcp/admin/backfill" && request.method === "POST") {
