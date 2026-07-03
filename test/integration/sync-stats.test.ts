@@ -124,6 +124,92 @@ describe("upsertStats", () => {
     expect(count?.n).toBe(1);
   });
 
+  it("skips a row with an unmapped team and still writes the mapped row", async () => {
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
+
+    const result = await upsertStats(
+      env,
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          team: "Carlton",
+          disposals: 20,
+          timeOnGroundPercentage: 80,
+        }),
+        makePlayerStats({
+          playerId: "P-2",
+          team: "Ghost Team FC",
+          disposals: 15,
+          timeOnGroundPercentage: 75,
+        }),
+      ],
+      matchMap,
+      playerMap,
+      teamMap,
+    );
+
+    expect(result).toBe(1);
+    const rows = await env.DB.prepare(
+      "SELECT p.external_afl_player_id FROM player_match_stats s JOIN players p ON s.player_id = p.id",
+    ).all<{ external_afl_player_id: string }>();
+    expect(rows.results.map((r) => r.external_afl_player_id)).toEqual(["P-1"]);
+  });
+
+  it("records a sync_log entry when a team name is unmapped", async () => {
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
+
+    await upsertStats(
+      env,
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          team: "Carlton",
+          disposals: 20,
+          timeOnGroundPercentage: 80,
+        }),
+        makePlayerStats({
+          playerId: "P-2",
+          team: "Ghost Team FC",
+          disposals: 15,
+          timeOnGroundPercentage: 75,
+        }),
+      ],
+      matchMap,
+      playerMap,
+      teamMap,
+    );
+
+    const row = await env.DB.prepare(
+      "SELECT error FROM sync_log WHERE type = 'sync:stats:unmapped-team'",
+    ).first<{ error: string }>();
+    expect(row).not.toBeNull();
+    expect(row?.error).toContain("Ghost Team FC");
+  });
+
+  it("does not write a sync_log entry when all teams map successfully", async () => {
+    const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
+
+    await upsertStats(
+      env,
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          team: "Carlton",
+          disposals: 20,
+          timeOnGroundPercentage: 80,
+        }),
+      ],
+      matchMap,
+      playerMap,
+      teamMap,
+    );
+
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) as n FROM sync_log WHERE type = 'sync:stats:unmapped-team'",
+    ).first<{ n: number }>();
+    expect(row?.n).toBe(0);
+  });
+
   it("preserves supercoach_score and brownlow_votes when re-fetching with nulls", async () => {
     const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
 
