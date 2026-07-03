@@ -31,7 +31,7 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 |------|---------|
 | `schema` | Database structure, per-competition coverage, column details, join patterns, query API reference |
 | `tools` | Sandbox capabilities, constraints, and guidance |
-| `code` | Execute TypeScript against the D1 database in an isolated sandbox. Optional `competition` arg hints which competition the query is about (you must still filter via `JOIN competitions c WHERE c.code = ?` — the param does not auto-inject SQL) |
+| `code` | Execute TypeScript against the D1 database in an isolated sandbox. Optional `competition` arg hints which competition the query is about (you must still filter via `JOIN competitions c WHERE c.code = ?` — the param does not auto-inject SQL; it is recorded for usage telemetry) |
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 
