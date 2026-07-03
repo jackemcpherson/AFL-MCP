@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] - 2026-07-03
+
+### Dependencies
+
+- `fitzroy` updated `3.0.1` → `3.4.0` (range now `^3.4.0`). Test fixtures
+  gained the newly required `Match` fields (`matchClockPeriods`,
+  `completedQuarter`, `venueLocalDate`) and `Lineup.source`. Notable upstream
+  changes along the way: corrected Brisbane Lions AFL Tables slug (benefits
+  the DOB backfill), fryzigg coverage caps (AFLW capped at 2022), and
+  coaches-votes finals-round detection. No afl-api sync-path behaviour
+  changes; full integration suite green.
+- The `undici >= 7.28.0` override is retained: cheerio still declares
+  `^7.19.0` (admits but does not require a patched version) and miniflare
+  exact-pins `7.24.8`, so dropping the override would regress the dev chain
+  into the advisory range. Re-evaluate when either moves.
+- Removed the `tsx` devDependency — it was used only by the deleted
+  `db:seed` script; remaining scripts run under `bun` directly.
+
+### Removed
+
+- Nine completed one-shot scripts, per the deletion list in
+  [`docs/admin-backfills-design.md`](./docs/admin-backfills-design.md)
+  (maintainer signed off; git history preserves them):
+  `backfill-lineups-early.ts`, `backfill-rounds.ts`, `dedup-players.ts`,
+  `enrich-fryzigg.ts`, `probe-afltables-lineups.ts`,
+  `probe-missing-lineups.ts`, `probe-opening-rounds.ts`, `seed-d1.ts`,
+  `verify-integrity.ts` — plus the `db:seed` npm script that ran `seed-d1`.
+  The five retained scripts are the two recurring backfills (Brownlow, DOB)
+  and the three operational tools (lineup backfill/refetch, Brownlow gap
+  diagnostics).
+
+### Notes
+
+- The 2026 weather gap is now tracked upstream as
+  [fitzRoy-ts#179](https://github.com/jackemcpherson/fitzRoy-ts/issues/179)
+  (re-verified still null under fitzroy 3.4.0). AFL-MCP self-heals via its
+  existing coalesce columns once the upstream fix ships.
+- `scripts/backfill-dob.mts` has drifted from current `rds-js`/`fitzroy`
+  APIs (Result-shape changes surfaced during a typecheck experiment) — a
+  further argument for promoting it to an admin endpoint per the design doc
+  before its next run.
+
 ## [3.3.0] - 2026-07-03
 
 ### Fixed
