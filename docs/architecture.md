@@ -19,7 +19,7 @@ must still filter explicitly) and is recorded for usage telemetry.
 | MCP tools | `src/mcp/tools/` | `schema`, `tools`, `code` definitions. |
 | Sandbox | `src/sandbox/executor.ts` | Dynamic Worker isolate + `DbProxy` RPC bridge. |
 | Sync | `src/sync/` | Cron-driven data pipeline (orchestrator, upserts, PAV) — multi-competition. |
-| Schema | `src/db/schema.sql` | D1 schema (10 tables — see [`schema.md`](./schema.md)). |
+| Schema | `src/db/schema.sql` | D1 schema (11 tables — see [`schema.md`](./schema.md)). |
 
 ## Code execution model
 

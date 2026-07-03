@@ -116,7 +116,7 @@ bunx wrangler d1 migrations apply afl-stats --remote
 
 ## Data Sync
 
-A single cron (`*/5 * * * *`) drives all data updates for all four competitions. The orchestrator in `src/sync/sync.ts` decides whether to fetch on each tick: it always runs at the top of the hour, and otherwise runs only when a match exists in the database within roughly ±3 days of now. PAV is recalculated from inside the same pipeline whenever new player stats land for AFLM or AFLW.
+A single cron (`*/5 * * * *`) drives all data updates for all four competitions. The orchestrator in `src/sync/sync.ts` decides whether to fetch on each tick: it always runs at the top of the hour, and otherwise runs only when a match exists in the database within 1 day back / 3 days forward of now. PAV is recalculated from inside the same pipeline whenever new player stats land for AFLM or AFLW.
 
 For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
 

@@ -51,7 +51,7 @@ This rule applies to freshness checks, ETL logic, and any match query.
 
 Cron is `*/5 * * * *` (single trigger). The `shouldRunNow` gate in
 `src/sync/sync.ts` runs always at the top of the hour and otherwise only when
-a match exists within ±3 days. PAV is recalculated from within the pipeline
+a match exists within 1 day back / 3 days forward. PAV is recalculated from within the pipeline
 whenever stats actually change. See [`docs/sync.md`](./docs/sync.md) for the
 full pipeline.
 
@@ -65,7 +65,7 @@ full pipeline.
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
 - `src/sync/upserts.ts` — All DB writes for the sync pipeline.
 - `src/sync/pav.ts` — PAV recalculation.
-- `src/db/schema.sql` — D1 schema (10 tables).
+- `src/db/schema.sql` — D1 schema (11 tables).
 
 ## Style-Guide Exception
 
