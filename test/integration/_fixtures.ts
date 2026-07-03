@@ -44,6 +44,9 @@ export function makeMatch(overrides: Partial<Match> = {}): Match {
     awayRushedBehinds: null,
     homeMinutesInFront: null,
     awayMinutesInFront: null,
+    matchClockPeriods: null,
+    completedQuarter: null,
+    venueLocalDate: null,
     source: "afl-api",
     competition: "AFLM",
     ...overrides,
@@ -172,6 +175,7 @@ export function makeLineup(overrides: Partial<Lineup> = {}): Lineup {
     homePlayers: [],
     awayPlayers: [],
     competition: "AFLM",
+    source: "afl-api",
     ...overrides,
   };
 }

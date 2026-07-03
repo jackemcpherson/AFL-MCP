@@ -1,6 +1,6 @@
 {
   "name": "afl-mcp",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
@@ -9,11 +9,10 @@
     "check": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "wrangler d1 migrations apply afl-stats",
-    "db:seed": "tsx scripts/seed-d1.ts"
+    "db:migrate": "wrangler d1 migrations apply afl-stats"
   },
   "dependencies": {
-    "fitzroy": "^3.0.1",
+    "fitzroy": "^3.4.0",
     "zod": "^4.4.3"
   },
   "overrides": {
@@ -23,7 +22,6 @@
     "@biomejs/biome": "^2.4.9",
     "@cloudflare/vitest-pool-workers": "^0.16.3",
     "@cloudflare/workers-types": "^4.20260418.1",
-    "tsx": "^4.0.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4",
     "wrangler": "^4.0.0"
