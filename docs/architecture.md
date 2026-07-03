@@ -8,7 +8,7 @@ Mode tools: `schema`, `tools`, and `code`. The `code` tool accepts arbitrary
 TypeScript which the Worker executes inside a sandboxed Dynamic Worker
 isolate with read-only access to the database; an optional `competition`
 parameter on the tool surfaces the dimension to the LLM as a hint (the SQL
-must still filter explicitly).
+must still filter explicitly) and is recorded for usage telemetry.
 
 ## Components
 
@@ -19,7 +19,7 @@ must still filter explicitly).
 | MCP tools | `src/mcp/tools/` | `schema`, `tools`, `code` definitions. |
 | Sandbox | `src/sandbox/executor.ts` | Dynamic Worker isolate + `DbProxy` RPC bridge. |
 | Sync | `src/sync/` | Cron-driven data pipeline (orchestrator, upserts, PAV) — multi-competition. |
-| Schema | `src/db/schema.sql` | D1 schema (10 tables — see [`schema.md`](./schema.md)). |
+| Schema | `src/db/schema.sql` | D1 schema (11 tables — see [`schema.md`](./schema.md)). |
 
 ## Code execution model
 

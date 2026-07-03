@@ -5,7 +5,7 @@ migrations in [`src/db/migrations/`](../src/db/migrations). The `schema` MCP
 tool exposes a hardcoded variant of this for clients
 (`src/mcp/tools/schema.ts`); keep both in sync when adding columns.
 
-The D1 database (`afl-stats`) has 10 tables and covers four competitions:
+The D1 database (`afl-stats`) has 11 tables and covers four competitions:
 **AFLM**, **AFLW**, **VFL**, **VFLW**. Always filter queries by competition
 (join through `seasons → competitions`, then `WHERE c.code = ?`) — without
 the filter, results mix competitions silently because team rows with the

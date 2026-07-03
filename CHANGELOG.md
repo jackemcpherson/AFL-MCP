@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-07-03
+
+### Fixed
+
+- `upsertStats` no longer aborts an entire 500-statement batch when a stat
+  row's team name cannot be resolved (e.g. a novel Sir Doug Nicholls Round
+  alias appearing in the stats feed before `TEAM_NAME_MAP` learns it). The
+  unmapped row is skipped — mirroring the existing lineups guard — and each
+  distinct unmapped name is recorded once per call as a
+  `sync:stats:unmapped-team` row in `sync_log`, which observes without paging
+  `/mcp/health`.
+- `POST /mcp/admin/sync` now actually syncs: it passes
+  `skipShouldRunNow: true` (matching the backfill endpoint's default) so the
+  manual trigger works outside the cadence window, and returns the
+  per-competition `results` array so a no-op (e.g. sync lease held by a
+  concurrent cron tick) is visible to the operator instead of masked by a
+  bare `{status:"ok"}`.
+
+### Changed
+
+- **`/mcp/health` response trimmed (hardening).** The anonymous payload no
+  longer includes the raw `last_sync` and `last_critical_error` rows (whose
+  `error` columns carried verbatim upstream failure text); it now returns
+  `status`, `stale`, `last_sync_age_ms`, `latest_match`, and a boolean
+  `has_recent_critical_error`. The 200/503 status-code contract for uptime
+  monitors is unchanged. The endpoint is also now covered by the same per-IP
+  rate limit as the MCP endpoint.
+- The `code` tool's `competition` parameter is now recorded as structured
+  usage telemetry (a `{"event":"tool:code","competition":...}` log line
+  indexed by Workers observability). Its query semantics are unchanged — it
+  still does not auto-inject SQL.
+
+### Dependencies
+
+- `fitzroy` moved from an exact `3.0.1` pin to `^3.0.1` so patch releases
+  flow through dependency updates. The lockfile currently holds 3.0.1
+  (fitzroy 3.3.0 introduces breaking type changes; adopt deliberately).
+- Added `"overrides": { "undici": ">=7.28.0" }`, clearing four high-severity
+  undici advisories reachable via the runtime chain
+  `fitzroy › cheerio › undici` (resolves undici 8.5.0). Remove the override
+  once cheerio requires a patched undici natively.
+
+### Added
+
+- Golden-value test for the PAV formula
+  (`test/integration/pav-golden.test.ts`): an independent TypeScript
+  reference implementation of the HPN formula, run against a deterministic
+  2-team/8-player fixture and asserted component-wise (±0.01) against
+  `PAV_SELECT_SQL` for every player, with frozen golden literals. SQL and
+  reference agreed on first run.
+- Regression tests for the admin sync endpoint, the health payload contract,
+  and unmapped-team stat skips (suite grows 145 → 161 tests).
+- `docs/weather-2026-spike.md` — why AFLM 2026 weather is 0%: the AFL API's
+  `matchItems/round` endpoint returns no weather at any match status (2025
+  control confirms); the fix belongs upstream in fitzRoy-ts and AFL-MCP's
+  coalesce write path needs no change. Includes ready-to-file issue text.
+- `docs/admin-backfills-design.md` — inventory of all 14 `scripts/` files
+  (2 recurring, 9 one-shot-done, 3 operational) and endpoint specs for
+  promoting the Brownlow and date-of-birth backfills to the admin surface.
+- `docs/weather-coverage-audit.md` — the 2026-06-30 production weather
+  coverage audit (previously untracked) committed for provenance.
+
 ## [3.2.1] - 2026-06-28
 
 ### Fixed

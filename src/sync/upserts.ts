@@ -557,6 +557,12 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
  * Upsert per-match player stats. Phantom rows (no time on ground AND no
  * disposals) are filtered — these are emergencies/late withdrawals who never
  * took the field but appear in the API.
+ *
+ * Rows whose team name cannot be resolved in `teamMap` are skipped rather than
+ * batched with a `NULL` team_id (which would violate the NOT NULL constraint
+ * and abort the entire D1 batch). Each distinct unmapped team name is recorded
+ * once per call as a `sync:stats:unmapped-team` entry in `sync_log` so silent
+ * skips remain observable without paging `/mcp/health`.
  */
 export async function upsertStats(
   env: Env,
@@ -566,14 +572,27 @@ export async function upsertStats(
   teamMap: Map<string, number>,
 ): Promise<number> {
   const stmts: D1PreparedStatement[] = [];
+  const unmappedTeams = new Set<string>();
   for (const s of stats) {
     const playerId = playerMap.get(s.playerId);
     if (!playerId) continue;
     if (!s.timeOnGroundPercentage && !s.disposals) continue;
     const matchId = matchMap.get(s.matchId);
     if (!matchId) continue;
-    const teamId = teamMap.get(normaliseTeam(s.team)) ?? null;
+    const teamId = teamMap.get(normaliseTeam(s.team));
+    if (teamId === undefined) {
+      unmappedTeams.add(s.team);
+      continue;
+    }
     stmts.push(buildStatUpsert(env, s, matchId, playerId, teamId));
+  }
+  if (unmappedTeams.size > 0) {
+    await logSync(
+      env,
+      "sync:stats:unmapped-team",
+      0,
+      `skipped stat rows for unmapped team(s): ${Array.from(unmappedTeams).join(", ")}`,
+    );
   }
   return await batchAndCountChanges(env, stmts);
 }

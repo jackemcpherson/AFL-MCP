@@ -31,7 +31,7 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 |------|---------|
 | `schema` | Database structure, per-competition coverage, column details, join patterns, query API reference |
 | `tools` | Sandbox capabilities, constraints, and guidance |
-| `code` | Execute TypeScript against the D1 database in an isolated sandbox. Optional `competition` arg hints which competition the query is about (you must still filter via `JOIN competitions c WHERE c.code = ?` — the param does not auto-inject SQL) |
+| `code` | Execute TypeScript against the D1 database in an isolated sandbox. Optional `competition` arg hints which competition the query is about (you must still filter via `JOIN competitions c WHERE c.code = ?` — the param does not auto-inject SQL; it is recorded for usage telemetry) |
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 
@@ -116,7 +116,7 @@ bunx wrangler d1 migrations apply afl-stats --remote
 
 ## Data Sync
 
-A single cron (`*/5 * * * *`) drives all data updates for all four competitions. The orchestrator in `src/sync/sync.ts` decides whether to fetch on each tick: it always runs at the top of the hour, and otherwise runs only when a match exists in the database within roughly ±3 days of now. PAV is recalculated from inside the same pipeline whenever new player stats land for AFLM or AFLW.
+A single cron (`*/5 * * * *`) drives all data updates for all four competitions. The orchestrator in `src/sync/sync.ts` decides whether to fetch on each tick: it always runs at the top of the hour, and otherwise runs only when a match exists in the database within 1 day back / 3 days forward of now. PAV is recalculated from inside the same pipeline whenever new player stats land for AFLM or AFLW.
 
 For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
 

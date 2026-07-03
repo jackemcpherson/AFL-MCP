@@ -88,4 +88,27 @@ describe("GET /mcp/health (OPS-02)", () => {
     const res = await getHealth();
     expect(res.status).toBe(200);
   });
+
+  it("does not include raw error text in the response body", async () => {
+    await seedSyncLog(new Date().toISOString(), "fetchMatches failed: secret-internal-detail");
+    const res = await getHealth();
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("secret-internal-detail");
+    expect(serialized).toContain('"has_recent_critical_error":true');
+  });
+
+  it("response payload contains exactly the trimmed set of keys", async () => {
+    await seedSyncLog(new Date().toISOString(), null);
+    const res = await getHealth();
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual([
+      "has_recent_critical_error",
+      "last_sync_age_ms",
+      "latest_match",
+      "stale",
+      "status",
+    ]);
+  });
 });
