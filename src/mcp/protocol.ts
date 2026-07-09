@@ -110,6 +110,11 @@ async function handleToolCall(
       return mcpContent(getToolsInfo());
 
     case "code": {
+      if (env.CODE_TOOL_DISABLED === "true") {
+        return mcpError(
+          "The code tool is temporarily disabled by the operator. The schema and tools endpoints remain available.",
+        );
+      }
       const code = args.code;
       if (typeof code !== "string" || code.trim() === "") {
         return mcpError("code parameter is required and must be a non-empty string");
