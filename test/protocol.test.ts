@@ -223,6 +223,24 @@ describe("handleMcpRequest", () => {
     expect(json.result?.content?.[0]?.text).toContain("Unknown tool");
   });
 
+  it("rejects code execution when the kill switch is set", async () => {
+    const disabledEnv = { CODE_TOOL_DISABLED: "true" } as unknown as import("../src/types").Env;
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "code", arguments: { code: "return 1;" } },
+      }),
+      disabledEnv,
+      stubCtx,
+    );
+
+    const json = await parseJson(res);
+    expect(json.result?.isError).toBe(true);
+    expect(json.result?.content?.[0]?.text).toContain("temporarily disabled");
+  });
+
   it("returns error when code tool receives empty string", async () => {
     const res = await handleMcpRequest(
       makeRequest({
