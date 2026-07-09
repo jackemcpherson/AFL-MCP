@@ -92,3 +92,11 @@ the current if/else chain or schema churn makes the manifests painful.
 Follow Google-style TSDoc conventions. Document all public functions, exported
 interfaces/types, and module-level constants with `@param`, `@returns`, `@throws`,
 and `@example` tags. Skip docs for self-explanatory one-liners.
+
+## Ecosystem doc
+
+The public ecosystem doc (homepage repo: `public/docs/afl-data-ecosystem.md`,
+served at jackemcpherson.com/docs/afl-data-ecosystem.md) describes this
+project's public surface. If a change alters that surface — exported
+functions/types, data sources or coverage, endpoints, DB schema, CLI
+commands, cron behavior — update the doc in the same sitting.
