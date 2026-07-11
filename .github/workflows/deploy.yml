@@ -13,6 +13,7 @@ on:
       - "src/**"
       - "wrangler.toml"
       - "package.json"
+      - "bun.lock"
       - ".github/workflows/deploy.yml"
 
 concurrency:
@@ -35,6 +36,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -54,10 +57,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          echo "Publishing afl-mcp/${SHA}.js and afl-mcp/${SHA}-migrations.tar.gz"
-          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${SHA}.js" \
+          ARTIFACT_DIGEST="$(sha256sum dist/index.js | cut -d' ' -f1)"
+          MIGRATIONS_DIGEST="$(sha256sum migrations.tar.gz | cut -d' ' -f1)"
+          echo "Publishing afl-mcp/${GITHUB_SHA}.js and afl-mcp/${GITHUB_SHA}-migrations.tar.gz"
+          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}.js" \
             --file dist/index.js --remote
-          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${SHA}-migrations.tar.gz" \
+          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}-migrations.tar.gz" \
             --file migrations.tar.gz --remote
-          echo "Deploy by bumping afl_mcp_version to ${SHA} in cloudflare-infra."
+          {
+            echo "### Published Worker artifacts"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- \`afl-mcp/${GITHUB_SHA}.js\`: \`${ARTIFACT_DIGEST}\`"
+            echo "- \`afl-mcp/${GITHUB_SHA}-migrations.tar.gz\`: \`${MIGRATIONS_DIGEST}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
