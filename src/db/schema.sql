@@ -93,6 +93,7 @@ CREATE TABLE matches (
   away_q4_behinds INTEGER,
   status TEXT,
   live_period_status TEXT,
+  completed_quarter INTEGER CHECK (completed_quarter IS NULL OR completed_quarter BETWEEN 0 AND 4),
   UNIQUE (date, home_team_id, away_team_id)
 );
 

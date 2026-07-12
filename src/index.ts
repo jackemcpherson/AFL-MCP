@@ -1,9 +1,13 @@
 import type { CompetitionCode } from "fitzroy";
+import { backfillBrownlow } from "./admin/brownlow";
+import { getAdminStatus } from "./admin/status";
 import { handleMcpRequest } from "./mcp/protocol";
 import {
   type BackfillRequest,
   BackfillRequestSchema,
+  BrownlowBackfillRequestSchema,
   describeBackfillIssue,
+  describeBrownlowBackfillIssue,
 } from "./mcp/validation";
 import { calculateAllPav, recalculatePav } from "./sync/pav";
 import { sync } from "./sync/sync";
@@ -16,6 +20,12 @@ const MIN_BACKFILL_YEAR = 1897;
 
 /** Maximum years per backfill request, bounding upstream fetch amplification. */
 const MAX_BACKFILL_YEARS = 30;
+
+/** Earliest season supported by the AFL Tables Brownlow operation. */
+const MIN_BROWNLOW_YEAR = 1990;
+
+/** Maximum Brownlow seasons per request, bounding upstream match-page fetches. */
+const MAX_BROWNLOW_YEARS = 2;
 
 /** /mcp/health reports unhealthy when the newest sync_log row is older than this. */
 const SYNC_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
@@ -41,7 +51,9 @@ export default {
           "SELECT MAX(date) as latest_match FROM matches WHERE home_points IS NOT NULL",
         ).first(),
         env.DB.prepare(
-          "SELECT timestamp, type, rows_affected, error FROM sync_log ORDER BY id DESC LIMIT 1",
+          `SELECT timestamp, type, rows_affected, error FROM sync_log
+           WHERE type != 'admin:brownlow-backfill'
+           ORDER BY id DESC LIMIT 1`,
         ).first(),
         // Sub-task rows (sync:*:lineups, sync:*:stats) record routine
         // degradations — e.g. lineup 404s before teams are announced — and
@@ -86,8 +98,8 @@ export default {
       }
       try {
         return await handleAdmin(path, request, env);
-      } catch (err) {
-        console.error("admin route error:", err);
+      } catch {
+        console.error(JSON.stringify({ event: "admin_route_error", path }));
         return Response.json({ error: "internal error" }, { status: 500 });
       }
     }
@@ -156,6 +168,37 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
+  if (path === "/mcp/admin/status" && request.method === "GET") {
+    return Response.json(await getAdminStatus(env));
+  }
+
+  if (path === "/mcp/admin/backfill-brownlow" && request.method === "POST") {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = BrownlowBackfillRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Response.json({ error: describeBrownlowBackfillIssue(parsed.error) }, { status: 400 });
+    }
+    const rangeError = validateBrownlowYearRange(parsed.data.fromYear, parsed.data.toYear);
+    if (rangeError !== null) {
+      return Response.json({ error: rangeError }, { status: 400 });
+    }
+    const result = await backfillBrownlow(
+      env,
+      parsed.data.fromYear,
+      parsed.data.toYear,
+      parsed.data.dryRun,
+    );
+    if (result.body.status === "blocked" && result.body.seasons.length === 0) {
+      return Response.json({ error: "operation lease held" }, { status: 409 });
+    }
+    return Response.json(result.body, { status: result.httpStatus });
+  }
+
   if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
     // Optional ?year= override — the wall-clock default is wrong at
     // season/year boundaries (COR-11).
@@ -216,6 +259,18 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   return Response.json({ error: "not found" }, { status: 404 });
+}
+
+function validateBrownlowYearRange(fromYear: number, toYear: number): string | null {
+  if (toYear < fromYear) return "toYear must be >= fromYear";
+  const currentYear = new Date().getUTCFullYear();
+  if (fromYear < MIN_BROWNLOW_YEAR || toYear > currentYear) {
+    return `years must be between ${MIN_BROWNLOW_YEAR} and ${currentYear}`;
+  }
+  if (toYear - fromYear + 1 > MAX_BROWNLOW_YEARS) {
+    return `year range too large: max ${MAX_BROWNLOW_YEARS} years per request`;
+  }
+  return null;
 }
 
 /** Cross-field clamps (SEC-02); shape validation lives in BackfillRequestSchema. */

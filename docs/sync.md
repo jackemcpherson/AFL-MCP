@@ -53,7 +53,10 @@ endpoint iterates a year range):
    (if the API has more completed matches than the database, OR a stats
    backlog exists) — both in parallel.
 5. **Upsert** teams, venues, players, matches, stats, lineups (in dependency
-   order — `upserts.ts` handles the foreign-key wiring).
+   order — `upserts.ts` handles the foreign-key wiring). Match upserts retain
+   the AFL API's `completedQuarter` as nullable `completed_quarter` (0–4).
+   `COALESCE` preserves the last authoritative value if the upstream clock is
+   transiently absent.
 6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
    `{AFLM, AFLW}` AND `skipPav` is not set. VFL/VFLW are skipped because the
    AFL API doesn't populate the PAV formula's required inputs
@@ -99,6 +102,11 @@ responsible for chunking year ranges. A single year per request is safe for
 AFLM; the smaller competitions (AFLW, VFL, VFLW) can typically run a few years
 in one call.
 
+Cron, manual sync, and annual Brownlow ingestion share the single
+`sync_lease` row. Acquisition is atomic, holders expire after ten minutes,
+and release checks the holder. Contending syncs keep their established
+log-and-return behavior; Brownlow returns HTTP 409.
+
 ## Round labels
 
 The AFL season includes special rounds that don't follow standard numeric
@@ -138,17 +146,60 @@ Per-competition floor years are in
 - AFLW: 2017 — the inaugural AFLW season; AFL API populates the full PAV
   input set from the start.
 
-VFL/VFLW have no PAV rows because `goal_assists`, `marks_inside_50`, and
-`one_percenters` are NULL upstream from the AFL API for those competitions
-(verified empirically via direct `playerStats/match/{id}` calls — not a
-fitzroy artifact).
+VFL/VFLW have no PAV rows because `goal_assists`, `marks_inside_fifty`, and
+`one_percenters` are not sufficiently complete for the formula. VFLW can have
+sparse values in these fields, so their typed coverage expectation is
+`best-effort`, not universally absent.
+
+## Match clock context
+
+The sync persists only the smallest authoritative clock state:
+`completed_quarter` is `NULL` or 0–4. It does not store per-period clock
+objects or transition timestamps. Consumers must pair the value with
+`matches.status`; it reflects the five-minute sync cadence, not second-level
+match timing. `live_period_status` remains raw upstream text.
+
+`matches.local_time` remains Melbourne time (`Australia/Melbourne`) across
+all competitions, matching the AFL API ecosystem convention. Venue-native
+time and timezone are intentionally discarded.
 
 ## Brownlow votes
 
-Brownlow vote ingestion currently relies on `cells[16]` from AFL Tables, which
-fitzroy doesn't yet wire through. Tracked at
-[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117).
-The `upsertStats` path uses `COALESCE` on `brownlow_votes`, so when the npm
-fix lands a one-off historical backfill (`fetchPlayerStats({ source:
-"afl-tables", season })`) can run without clobbering current-season values.
+fitzroy 3.4 parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
+scrapes in the partial-result envelope `{ stats, failedMatchIds }`.
+[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117) is
+closed. Brownlow ingestion is an explicit annual operation rather than
+part of the five-minute sync: the AFL Tables season scrape is expensive and
+votes are published once after the count. `POST
+/mcp/admin/backfill-brownlow` accepts one or two AFLM seasons:
+
+```json
+{ "fromYear": 2025, "toYear": 2025, "dryRun": true }
+```
+
+`dryRun` defaults to true. The operation consumes both `stats` and
+`failedMatchIds`, resolves matches by date plus canonical team, resolves
+players without choosing ambiguous candidates, and requires exactly six
+positive votes for every regular-season match. Any partial fetch, unresolved
+row, ambiguity, finals vote, or mixed/non-six total blocks all seasons before
+the first update. A wholly unpublished season performs no writes. Write mode
+uses batches of at most 100 parameterized updates guarded by
+`brownlow_votes IS NULL OR brownlow_votes = 0`; it does not recalculate PAV.
+The full contract is in
+[`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
+
+The `upsertStats` path uses `COALESCE` on `brownlow_votes`, and the annual
+backfill also writes only when the current value is NULL or zero. This
+keeps repeated runs idempotent and prevents either path from clobbering an
+existing vote.
 Brownlow votes are AFLM-only — the medal isn't awarded for AFLW/VFL/VFLW.
+
+## Private operator status
+
+`GET /mcp/admin/status` returns a stable aggregate snapshot for AFLM, AFLW,
+VFL, and VFLW: independent latest whole-sync success/error ages, latest
+completed match dates, active lease age, all five integrity-view counts, and
+24-hour partial-lineup, partial-stats, and unmapped-team event counts. It uses
+nine fixed statements and a fixed window. It never returns raw log errors,
+lease holders, IDs, row samples, client data, or tokens. Public `/health` and
+`/mcp/health` retain their existing small uptime contract.

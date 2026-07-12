@@ -112,6 +112,73 @@ describe("upsertMatches", () => {
     expect(after).toEqual({ status: "Live", live_period_status: "QTR_TIME" });
   });
 
+  it("persists completed-quarter progression and preserves the last value on transient null", async () => {
+    const { competitionId, seasonId } = await setup();
+    const initial = makeMatch({ matchId: "M-QUARTER", status: "Live", completedQuarter: 0 });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [initial]);
+    const venueMap = await ensureVenues(env, [initial]);
+
+    for (const completedQuarter of [0, 1, 2, 3, 4] as const) {
+      await upsertMatches(env, [{ ...initial, completedQuarter }], { seasonId, teamMap, venueMap });
+      const row = await env.DB.prepare(
+        "SELECT completed_quarter FROM matches WHERE external_afl_id = ?",
+      )
+        .bind("M-QUARTER")
+        .first<{ completed_quarter: number }>();
+      expect(row?.completed_quarter).toBe(completedQuarter);
+    }
+
+    await upsertMatches(env, [{ ...initial, completedQuarter: null }], {
+      seasonId,
+      teamMap,
+      venueMap,
+    });
+    const preserved = await env.DB.prepare(
+      "SELECT completed_quarter FROM matches WHERE external_afl_id = ?",
+    )
+      .bind("M-QUARTER")
+      .first<{ completed_quarter: number }>();
+    expect(preserved?.completed_quarter).toBe(4);
+  });
+
+  it("stores null for an upcoming match without a clock", async () => {
+    const { competitionId, seasonId } = await setup();
+    const upcoming = makeMatch({
+      matchId: "M-NO-CLOCK",
+      status: "Upcoming",
+      completedQuarter: null,
+      homePoints: null,
+      awayPoints: null,
+    });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [upcoming]);
+    const venueMap = await ensureVenues(env, [upcoming]);
+    await upsertMatches(env, [upcoming], { seasonId, teamMap, venueMap });
+    const row = await env.DB.prepare(
+      "SELECT completed_quarter FROM matches WHERE external_afl_id = ?",
+    )
+      .bind("M-NO-CLOCK")
+      .first<{ completed_quarter: number | null }>();
+    expect(row?.completed_quarter).toBeNull();
+  });
+
+  it("enforces the completed-quarter database range", async () => {
+    const { competitionId, seasonId } = await setup();
+    const match = makeMatch({ matchId: "M-CHECK", completedQuarter: 0 });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
+    const venueMap = await ensureVenues(env, [match]);
+    await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+    await expect(
+      env.DB.prepare("UPDATE matches SET completed_quarter = 5 WHERE external_afl_id = ?")
+        .bind("M-CHECK")
+        .run(),
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare("UPDATE matches SET completed_quarter = -1 WHERE external_afl_id = ?")
+        .bind("M-CHECK")
+        .run(),
+    ).rejects.toThrow();
+  });
+
   it("does not clobber a completed match's scores when re-fetched as upcoming (COALESCE)", async () => {
     const { competitionId, seasonId } = await setup();
     const completed = makeMatch();

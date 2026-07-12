@@ -43,6 +43,27 @@ async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
 const stubEnv = {} as unknown as import("../src/types").Env;
 const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
+function observedSchemaEnv(): import("../src/types").Env {
+  const rows = [
+    { id: 77 },
+    { row_count: 2, n0: 2 },
+    { row_count: 3, temperature_count: 0, type_count: 1 },
+    { row_count: 4 },
+    { row_count: 5, match_count: 2 },
+    { row_count: 3 },
+  ];
+  let callIndex = 0;
+  return {
+    DB: {
+      prepare: () => ({
+        bind: () => ({
+          first: async () => rows[callIndex++] ?? null,
+        }),
+      }),
+    } as unknown as D1Database,
+  } as import("../src/types").Env;
+}
+
 describe("handleMcpRequest", () => {
   it("answers OPTIONS preflight without CORS allow headers (SEC-03)", async () => {
     const req = new Request("https://afl.test/mcp", { method: "OPTIONS" });
@@ -117,6 +138,10 @@ describe("handleMcpRequest", () => {
     const json = await parseJson(res);
     const toolNames = json.result?.tools?.map((t) => t.name);
     expect(toolNames).toEqual(["schema", "tools", "code"]);
+    const schemaTool = json.result?.tools?.find((tool) => tool.name === "schema") as
+      | { inputSchema?: { properties?: Record<string, unknown> } }
+      | undefined;
+    expect(schemaTool?.inputSchema?.properties).toHaveProperty("includeObserved");
   });
 
   it("handles ping", async () => {
@@ -170,6 +195,47 @@ describe("handleMcpRequest", () => {
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
     expect(schema.database.tables).toHaveProperty("matches");
     expect(schema.database.tables).toHaveProperty("player_match_stats");
+    expect(schema.database.coverage_contract.version).toBe(1);
+  });
+
+  it("rejects invalid observed schema arguments before querying D1", async () => {
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 51,
+        method: "tools/call",
+        params: { name: "schema", arguments: { includeObserved: true, competition: "AFLM" } },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    const json = await parseJson(res);
+    expect(json.result?.isError).toBe(true);
+    expect(json.result?.content?.[0]?.text).toContain("requires competition and season");
+  });
+
+  it("returns a bounded observed season overlay through the schema tool", async () => {
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 52,
+        method: "tools/call",
+        params: {
+          name: "schema",
+          arguments: { includeObserved: true, competition: "AFLW", season: 2025 },
+        },
+      }),
+      observedSchemaEnv(),
+      stubCtx,
+    );
+    const json = await parseJson(res);
+    expect(json.result?.isError).toBeFalsy();
+    const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
+    const observed =
+      schema.database.coverage_contract.by_competition.AFLW.player_match_stats.guernsey_number[
+        "2025"
+      ].observed;
+    expect(observed).toMatchObject({ unit: "rows", rows: 2, non_null: 2, ratio: 1 });
   });
 
   it("returns tools info content", async () => {

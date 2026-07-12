@@ -1,29 +1,74 @@
-export function getSchemaInfo() {
+import type { Env } from "../../types";
+import {
+  type CoverageOptions,
+  competitionYears,
+  coverageContract,
+  legacyCompetitionCoverage,
+} from "./coverage";
+
+const LEGACY_COVERAGE_PATHS = [
+  ["matches.attendance", "matches", "attendance"],
+  ["matches.weather_temp_c", "matches", "weather_temp_c"],
+  ["matches.weather_type", "matches", "weather_type"],
+  ["matches.home_q1_goals_through_away_q4_behinds", "matches", "home_q1_goals"],
+  ["player_match_stats.brownlow_votes", "player_match_stats", "brownlow_votes"],
+  ["player_match_stats.supercoach_score", "player_match_stats", "supercoach_score"],
+  ["player_match_stats.afl_fantasy_score", "player_match_stats", "afl_fantasy_score"],
+  ["player_match_stats.subbed", "player_match_stats", "subbed"],
+  ["player_match_stats.disposal_efficiency_pct", "player_match_stats", "disposal_efficiency_pct"],
+  ["player_match_stats.score_involvements", "player_match_stats", "score_involvements"],
+  ["player_match_stats.metres_gained", "player_match_stats", "metres_gained"],
+  ["player_match_stats.intercepts", "player_match_stats", "intercepts"],
+  ["player_match_stats.pressure_acts", "player_match_stats", "pressure_acts"],
+  ["player_match_stats.goal_assists", "player_match_stats", "goal_assists"],
+  ["player_match_stats.marks_inside_fifty", "player_match_stats", "marks_inside_fifty"],
+  ["player_match_stats.one_percenters", "player_match_stats", "one_percenters"],
+  ["player_season_pav.*", "player_season_pav", "*"],
+] as const;
+
+function legacyCoverageEntry(ranges: Record<string, { readonly notes: readonly string[] }>) {
+  const entry = Object.entries(ranges)[0];
+  const [fromRaw = "all", toRaw = fromRaw] = (entry?.[0] ?? "all").split("..");
+  const parseBound = (value: string): number | string =>
+    /^\d{4}$/.test(value) ? Number(value) : value;
+  return {
+    from: parseBound(fromRaw),
+    to: parseBound(toRaw),
+    notes:
+      entry?.[1].notes.join(" ") ||
+      "Deprecated compatibility summary; use database.coverage_contract for typed expectations.",
+  };
+}
+
+/** Return the public database contract, optionally including one bounded observation. */
+export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
+  const coverage = await coverageContract(options, env);
   return {
     database: {
       engine: "SQLite (Cloudflare D1)",
       competitions: {
         AFLM: {
           name: "AFL Men's",
-          years: "1990 to current season",
-          coverage: { matches: true, stats: true, lineups: "2015+", pav: "1998+" },
+          years: competitionYears("AFLM"),
+          coverage: legacyCompetitionCoverage("AFLM"),
         },
         AFLW: {
           name: "AFL Women's",
-          years: "2017 to current season",
-          coverage: { matches: true, stats: true, lineups: "2017+", pav: "2017+" },
+          years: competitionYears("AFLW"),
+          coverage: legacyCompetitionCoverage("AFLW"),
         },
         VFL: {
           name: "Victorian Football League",
-          years: "2021 to current season",
-          coverage: { matches: true, stats: true, lineups: "best-effort", pav: false },
+          years: competitionYears("VFL"),
+          coverage: legacyCompetitionCoverage("VFL"),
         },
         VFLW: {
           name: "VFL Women's",
-          years: "2021 to current season",
-          coverage: { matches: true, stats: true, lineups: "best-effort", pav: false },
+          years: competitionYears("VFLW"),
+          coverage: legacyCompetitionCoverage("VFLW"),
         },
       },
+      coverage_contract: coverage,
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT (AFLM/AFLW/VFL/VFLW), name TEXT",
         seasons:
@@ -59,7 +104,8 @@ export function getSchemaInfo() {
           "away_q2_goals INTEGER, away_q2_behinds INTEGER,",
           "away_q3_goals INTEGER, away_q3_behinds INTEGER,",
           "away_q4_goals INTEGER, away_q4_behinds INTEGER,",
-          "status TEXT, live_period_status TEXT",
+          "status TEXT, live_period_status TEXT,",
+          "completed_quarter INTEGER (NULL or 0-4; highest fully completed quarter)",
         ].join(" "),
         player_match_stats: [
           "id INTEGER PRIMARY KEY, match_id INTEGER REFERENCES matches(id),",
@@ -119,8 +165,7 @@ export function getSchemaInfo() {
       notes: [
         // Multi-competition rules — read first
         "ALWAYS filter queries by competition. Join `seasons s ON m.season_id = s.id` then `competitions c ON s.competition_id = c.id` and add `WHERE c.code = ?`. Without this filter, results mix competitions silently — team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) have distinct team_id values, so unfiltered aggregates double-count.",
-        "Available competitions: AFLM (1990+), AFLW (2017+), VFL (2021+), VFLW (2021+). See the `competitions` block at the top of this schema for per-competition coverage of matches, stats, lineups, and PAV.",
-        "PAV is computed for AFLM (1998+) and AFLW (2017+) only. VFL/VFLW have no PAV rows because the AFL API does not populate the required inputs (`goal_assists`, `marks_inside_fifty`, `one_percenters` are all NULL upstream for those competitions).",
+        "Coverage expectations, exact ranges, sources, and review dates are canonical in database.coverage_contract. Descriptive notes never override that typed contract.",
         // Round labels — competition-specific
         "Round labels: matches has TWO round-string columns mirroring the AFL API directly (same approach as the R fitzRoy package — no cross-competition normalisation):",
         "- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+, round_number=0), `Wildcard` (VFL only, before finals), and finals `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`.",
@@ -137,132 +182,38 @@ export function getSchemaInfo() {
         "total_pav ≈ off_pav + mid_pav + def_pav. ~12-15% of rows differ by exactly ±0.01 because each component is rounded independently. Treat the relationship as approximate, not exact.",
         "PAV zone meanings: off_pav = offensive (goals, score involvements, forward craft); mid_pav = midfield (disposals, clearances, tackles, contested ball); def_pav = defensive (intercepts, spoils, one-percenters, rebounds).",
         "PAV interpretation (AFLM scale): 25+ exceptional (Brownlow contention), 20-25 great (All-Australian), 15-20 very good (team best-22), 10-15 solid contributor, 5-10 below average or limited games, <5 minimal contribution. AFLW PAV is on a similar but lower-totals scale because of shorter games and smaller squads.",
-        "player_season_pav uses LEFT JOIN when combining with player_match_stats — pre-1998 AFLM, pre-2017 AFLW, and any VFL/VFLW row will have no PAV.",
+        "Use LEFT JOIN when combining player_season_pav with player_match_stats because PAV is not applicable to every competition-season.",
         // Format
         "match date format is ISO 8601 (YYYY-MM-DD).",
         "matches.margin is signed from the home team's perspective: positive = home team won by that many points, negative = away team won. Use ABS(margin) for absolute margin.",
         "teams.abbreviation: AFL standard 2–4 letter codes for AFLM (ADE, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB). May be NULL for AFLW/VFL/VFLW teams sourced from fitzroy.",
-        // Source-specific column coverage (AFLM-focused; VFL/VFLW use afl-api only)
-        "Data sources: all four competitions ingest current data from the AFL API. AFLM also has historical (pre-2012) data backfilled from fryzigg, which populates a few columns AFL API doesn't (subbed, weather_*, supercoach_score for 2007–2019). AFLW comes from AFL API only. VFL/VFLW come from AFL API only.",
-        "external_afl_player_id is the AFL API player ID (CD_I format), populated for AFL API-sourced rows.",
+        // Value semantics; coverage and ranges live only in coverage_contract.
+        "external_afl_player_id is the AFL API player ID (CD_I format).",
         "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
-        "brownlow_votes: AFLM only (the Brownlow Medal is an AFL Men's award). Complete from 1990-2025 except for 22 regular-season matches across 2022-2025 with partial vote totals; NULL for the current 2026 AFLM season and for all AFLW/VFL/VFLW rows.",
-        "supercoach_score: AFLM only, fryzigg source. Fully populated 2007-2019. NULL pre-2007, from 2020 onward, and for AFLW/VFL/VFLW.",
-        "afl_fantasy_score: AFLM via both sources from 2007 onward (6 NULLs in 2020). Sparse or NULL elsewhere.",
-        "subbed: AFLM-only fryzigg source. Populated 1990-2019. Values: 'Not Subbed', 'Subbed'.",
-        "weather_temp_c and weather_type: AFLM-only fryzigg source. Populated 2010-2025. NULL elsewhere.",
-        "local_time: Melbourne local time (AEST/AEDT) as HH:MM:SS. Available for all seasons across all competitions.",
-        "external_fryzigg_id: AFLM cross-reference ID from fryzigg. ~99% of AFLM historical matches.",
-        "attendance: AFLM only, populated pre-2020. NULL elsewhere.",
-        "Quarter scores (home_q1_goals through away_q4_behinds): AFLM populated for all matches from 2020 onward; NULL for AFLM 1990-2019. AFLW/VFL/VFLW: populated where AFL API provides them, NULL otherwise.",
-        "matches.status is the match lifecycle. Values: 'Upcoming', 'Live', 'Complete', 'Postponed', 'Cancelled'. Populated from 2026-06 onward for any match the AFL API sync touches; NULL on historical rows backfilled before that date and on rows from non-afl-api sources (fryzigg / afl-tables historical imports).",
-        "matches.live_period_status is the raw AFL API score-level status, intended for live-match siren detection (quarter-time / half-time / full-time). Observed values: 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', 'FULL_TIME'. Values are upstream-defined raw strings and may change without notice — treat as opaque text. NULL pre-match, for completed historical rows, and for any match outside the AFL API source.",
+        "subbed values are 'Not Subbed' and 'Subbed'.",
+        "local_time is Melbourne local time (AEST/AEDT) as HH:MM:SS for every competition; venue-native time is intentionally not stored.",
+        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'.",
+        "matches.live_period_status is opaque raw AFL API text; observed values include 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', and 'FULL_TIME'.",
+        "matches.completed_quarter is the highest fully completed quarter from the AFL API match clock: 0 means play has not completed a quarter, 1-4 identify the last completed quarter, and NULL means no clock was supplied or the row predates refresh. Pair it with status; it is five-minute-sync context, not a live siren SLA.",
         // Lineups
-        "match_lineups represents the post-change team — the players who actually took the field. AFLM 2023+ from AFL API post-change feed; AFLM 2021–2022 derived from player_match_stats (Thursday-night announced team is all the API returns). AFLW: AFL API direct. VFL/VFLW: best-effort — fitzroy may return empty for some rounds; treat absence as not-yet-published rather than canonical.",
-        "match_lineups is_emergency=1 means the player is named as an emergency and may not play. Only populated from AFLM 2024 onward — pre-2024 AFLM and other competitions have is_emergency=0 for all players.",
+        "match_lineups represents the post-change team — the players who actually took the field. Treat absence as not-yet-published rather than canonical.",
+        "match_lineups is_emergency=1 means the player is named as an emergency and may not play.",
         "match_lineups is_substitute=1 marks all interchange/bench players (INT + SUB positions), not just the medical sub. To find just the medical substitute, filter on position = 'SUB'.",
-        "match_lineups data is available from 2015 onward (AFLM via AFL API). AFLW from 2017+. Four specific AFLM rounds have no lineup rows because fitzroy's afl-api source rejects them: 2015 R4, 2017 R8, 2018 R9, 2019 R11, plus the 2015 GF.",
-        "match_lineups position codes: 18 starting positions (FB, BPL, BPR, CHB, HBFL, HBFR, FF, FPL, FPR, CHF, HFFL, HFFR, C, WL, WR, R, RR, RK), plus INT (interchange), SUB (medical substitute), and EMERG (emergency, AFLM 2024+ only).",
+        "match_lineups position codes: 18 starting positions (FB, BPL, BPR, CHB, HBFL, HBFR, FF, FPL, FPR, CHF, HFFL, HFFR, C, WL, WR, R, RR, RK), plus INT (interchange), SUB (medical substitute), and EMERG (emergency).",
         "Most players with both fryzigg and AFL API data are unified under a single player_id. A small number of common-name players may have separate records for genuinely different people who share a name.",
         "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds.",
         "seasons.is_complete: 1 when every match in the season has been played (home_points NOT NULL for all rows). 0 for in-progress and not-started seasons.",
       ],
       column_coverage: {
+        deprecated: true,
         description:
-          "First/last fully populated season for AFLM-specific columns whose coverage doesn't span the whole AFLM dataset. Most are NULL or sparse for AFLW/VFL/VFLW — when in doubt, sample. Columns not listed here are populated for all seasons within each competition's coverage window.",
-        columns: {
-          "matches.attendance": {
-            from: 1990,
-            to: 2019,
-            notes: "AFLM only. NULL from 2020 onward and for non-AFLM competitions.",
-          },
-          "matches.weather_temp_c": {
-            from: 2010,
-            to: 2025,
-            notes: "AFLM only (fryzigg source). NULL elsewhere.",
-          },
-          "matches.weather_type": {
-            from: 2010,
-            to: 2025,
-            notes: "AFLM only (fryzigg source). Same coverage as weather_temp_c.",
-          },
-          "matches.home_q1_goals_through_away_q4_behinds": {
-            from: 2020,
-            to: "current",
-            notes:
-              "AFLM 2020+ complete. Other competitions: where AFL API provides them, otherwise NULL.",
-          },
-          "player_match_stats.brownlow_votes": {
-            from: 1990,
-            to: 2025,
-            notes:
-              "AFLM only (Brownlow is an AFL Men's award). NULL for AFLW/VFL/VFLW rows and the current 2026 AFLM season.",
-          },
-          "player_match_stats.supercoach_score": {
-            from: 2007,
-            to: 2019,
-            notes: "AFLM only (fryzigg). NULL pre-2007, from 2020 onward, and elsewhere.",
-          },
-          "player_match_stats.afl_fantasy_score": {
-            from: 2007,
-            to: "current",
-            notes: "AFLM 2007+. Sparse for other competitions.",
-          },
-          "player_match_stats.subbed": {
-            from: 1990,
-            to: 2019,
-            notes: "AFLM only (fryzigg).",
-          },
-          "player_match_stats.disposal_efficiency_pct": {
-            from: 2012,
-            to: "current",
-            notes: "AFLM 2012+. Available for AFLW from 2017+ and VFL/VFLW from 2021+.",
-          },
-          "player_match_stats.score_involvements": {
-            from: 2015,
-            to: "current",
-            notes: "AFLM 2015+ complete. AFLW from 2017. Sparse for VFL/VFLW.",
-          },
-          "player_match_stats.metres_gained": {
-            from: 2015,
-            to: "current",
-            notes: "AFLM 2015+. NULL for VFL/VFLW.",
-          },
-          "player_match_stats.intercepts": {
-            from: 2015,
-            to: "current",
-            notes: "AFLM 2015+. AFLW 2017+. VFL/VFLW: present where AFL API tracks it.",
-          },
-          "player_match_stats.pressure_acts": {
-            from: 2017,
-            to: "current",
-            notes: "AFLM 2017+. NULL for VFL/VFLW.",
-          },
-          "player_match_stats.goal_assists": {
-            from: 1990,
-            to: "current",
-            notes:
-              "AFLM 1990+ and AFLW 2017+. NULL for ALL VFL and VFLW rows (AFL API does not populate this for those competitions).",
-          },
-          "player_match_stats.marks_inside_fifty": {
-            from: 1990,
-            to: "current",
-            notes:
-              "AFLM 1990+ and AFLW 2017+. NULL for ALL VFL and VFLW rows (AFL API does not populate this for those competitions).",
-          },
-          "player_match_stats.one_percenters": {
-            from: 1990,
-            to: "current",
-            notes:
-              "AFLM 1990+ and AFLW 2017+. NULL for ALL VFL and VFLW rows (AFL API does not populate this for those competitions).",
-          },
-          "player_season_pav.*": {
-            from: 1998,
-            to: "current",
-            notes:
-              "AFLM 1998+ and AFLW 2017+. No PAV rows for VFL/VFLW. Use LEFT JOIN when combining with player_match_stats.",
-          },
-        },
+          "Compatibility alias for one release. Use database.coverage_contract; values below are generated from its AFLM expectations.",
+        columns: Object.fromEntries(
+          LEGACY_COVERAGE_PATHS.map(([alias, table, column]) => [
+            alias,
+            legacyCoverageEntry(coverage.by_competition.AFLM[table]?.[column] ?? {}),
+          ]),
+        ),
       },
       common_joins: {
         // Always filter by competition — first bound parameter in every example.

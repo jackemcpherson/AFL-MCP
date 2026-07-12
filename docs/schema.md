@@ -63,6 +63,13 @@ One row per `(competition, year)`.
 - Indexed on `date`, `season_id`, `home_team_id`, `away_team_id`, `venue_id`,
   and conditionally on `external_afl_id`.
 - See [`sync.md`](./sync.md#round-labels) for the full label rules.
+- `local_time` is always Melbourne local time (`Australia/Melbourne`,
+  AEST/AEDT) for every competition. Venue-native time is intentionally not
+  stored.
+- `completed_quarter` is nullable and constrained to 0–4. `0` means no
+  quarter is complete; `1`–`4` are the highest completed quarter; `NULL`
+  means no AFL API clock was supplied or the row predates refresh. Pair it
+  with `status`; the five-minute sync does not make it a live siren signal.
 
 ### `player_match_stats`
 Long table — one row per `(match, player)`, ~70 columns covering disposals,
@@ -70,11 +77,11 @@ contested possessions, marks, hitouts, score involvements, ratings, fantasy
 scores, Brownlow votes, etc. Indexed on `match_id`, `player_id`, `team_id`,
 and `(player_id, team_id)`.
 
-Per-column coverage varies by competition. AFLM 1990+ and AFLW 2017+ have the
-full stat set. VFL/VFLW (AFL API only, 2021+) have most columns populated but
-return NULL for `goal_assists`, `marks_inside_fifty`, `one_percenters` and a
-handful of advanced columns — verified at the AFL API level. `brownlow_votes`
-is AFLM-only.
+Per-column coverage varies by competition. Use the typed coverage contract in
+the `schema` MCP response rather than inferring completeness from omitted
+notes. In particular, VFLW has sparse measured values for `goal_assists`,
+`marks_inside_fifty`, and `one_percenters`; these are `best-effort`, not
+universally absent. `brownlow_votes` is AFLM-only.
 
 ### `match_lineups`
 Pre-match selected squads. Distinct from `player_match_stats` because lineups
@@ -99,13 +106,36 @@ traded mid-season has separate rows per club.
   rows because the AFL API doesn't populate the formula's inputs. Use
   `LEFT JOIN` when combining with `player_match_stats`.
 
+## Coverage contract
+
+The no-argument `schema` call returns deterministic static expectations in
+`database.coverage_contract` (version 1) and performs no D1 reads. Every leaf
+separates `expected` from `observed`, records source provenance and a review
+date, and expands grouped fields to real column names. The legacy
+`column_coverage` object is a generated, deprecated compatibility alias for
+one release.
+
+Call `schema` with `includeObserved: true`, one `competition`, and one integer
+`season` to overlay a bounded measurement. Stats, weather, PAV, and lineup
+presence use separate indexed aggregates; successful results are cached for
+15 minutes. A zero-row observation does not prove absence. Invalid or broad
+requests are rejected before D1 access.
+
 ## Operational
 
 ### `sync_log`
 Append-only log of sync ticks that did work or errored. Columns:
 `timestamp`, `type` (e.g. `sync:AFLM`, `sync:VFL`, `pav_recalculation:AFLW`,
-`backfill:AFLM:2024`), `rows_affected`, `error`. Successful no-op ticks are
-not logged.
+`backfill:AFLM:2024`, `admin:brownlow-backfill`), `rows_affected`, `error`.
+Brownlow operation errors are bounded codes rather than upstream rows or IDs.
+Successful no-op ticks are not logged.
+
+### `sync_lease`
+Single-row mutex shared by cron sync, manual sync, and Brownlow ingestion.
+Columns are the fixed `id = 1`, an opaque `holder`, and `acquired_at`. Atomic
+acquisition permits a free row or one older than ten minutes; release is
+holder-checked. The private status endpoint derives only active state and age
+and never returns the holder.
 
 ## Conventions
 

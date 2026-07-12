@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-07-12
+
+### Added
+
+- **Admin operations v2**: annual dry-run-first Brownlow ingestion endpoint
+  (`POST /mcp/admin/backfill-brownlow`) and private aggregate operator status
+  endpoint (`GET /mcp/admin/status`), both behind the existing
+  `Authorization: Bearer <ADMIN_TOKEN>` guard, plus a shared cron/admin lease
+  (`src/sync/lease.ts`). Brownlow ingestion is AFLM-only, annual, dry-run
+  first, and never recalculates PAV. The health endpoint's latest-log query
+  now excludes `admin:brownlow-backfill` entries; the response shape is
+  unchanged. Design: [`docs/admin-operations-v2-design.md`](./docs/admin-operations-v2-design.md).
+- **Match context coverage contract**: migration `0013_completed_quarter.sql`
+  adds a nullable `matches.completed_quarter` column (CHECK 0–4) written via
+  coalescing upsert. The `schema` tool gains versioned typed coverage
+  expectations and an optional bounded observed-coverage request (one
+  competition-season query with a 15-minute cache); the default response
+  remains read-free. Design: [`docs/match-context-coverage-design.md`](./docs/match-context-coverage-design.md).
+
 ## [3.3.1] - 2026-07-03
 
 ### Dependencies

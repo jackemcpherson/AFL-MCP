@@ -2,6 +2,12 @@
 
 **Plan**: 011 | **Status**: draft | **Date**: 2026-07-02
 
+> **Brownlow section superseded (2026-07-12):** fitzroy-ts #117 is closed and
+> fitzroy 3.4 returns `{ stats, failedMatchIds }` with `brownlowVotes` parsed.
+> The Brownlow endpoint, lease-sharing, and private diagnostics contracts now
+> live in [`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
+> Sections 2.1 and 3.1 below remain as historical design context only.
+
 ## 1. Inventory
 
 All 14 files under `scripts/`. None are imported by `src/`. None are
@@ -40,8 +46,9 @@ Classification counts: **RECURRING 2**, **ONE-SHOT-DONE 9**, **OPERATIONAL-KEEP 
 #### `backfill-brownlow.ts` → Promote to admin endpoint
 
 Brownlow votes are published after the season's final round and media
-count (typically late September or October). There will always be a
-current-year gap until `fitzroy-ts#117` ships. The volume per year
+count (typically late September or October). fitzroy 3.4 now parses the
+votes; the remaining current-year gap lasts until the annual count. The
+volume per year
 (~450–600 player-game rows) and the three-tier name-resolution
 algorithm (exact → normalised exact → surname-on-team → season
 fallback) both exceed what the five-minute cron tick can absorb safely
@@ -220,11 +227,10 @@ backfill 1990–2025 (36 seasons), make four requests: 1990–1999,
   surface in the response body for the caller to inspect; they do not
   trigger paging.
 
-**Obsolescence**: This endpoint becomes redundant when
-`fitzroy-ts#117` is resolved and Brownlow votes flow through the normal
-sync pipeline (`fetchPlayerStats({ source: "afl-tables" })` wired to
-`upsertStats`). At that point the endpoint can be removed and the
-sync pipeline will populate `brownlow_votes` each season automatically.
+**Current decision**: fitzroy-ts #117 is resolved, but the endpoint remains an
+annual operator action. AFL Tables season scraping does not belong in the
+five-minute pipeline. See the superseding v2 design for the validated envelope,
+resolution gates, and final contract.
 
 **Implementation estimate**: S — algorithm already written in
 `backfill-brownlow.ts`; port the three-tier name resolution and D1

@@ -35,6 +35,13 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 
+The no-argument `schema` call remains deterministic and read-free. To measure
+current completeness for exactly one competition-season, pass
+`{"includeObserved":true,"competition":"AFLM","season":2026}`. The response
+keeps typed expectations separate from measured observations and caches a
+successful measurement for 15 minutes; zero rows never prove absence. The MCP
+surface remains three tools.
+
 ### Filtering by competition
 
 Always join through `seasons → competitions` and filter by `c.code` in your SQL. Without the filter, results mix competitions silently because team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) are distinct `team_id`s.
@@ -132,12 +139,29 @@ For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
 
 It iterates `(competition, year)` pairs and returns per-tick row counts. Caller is responsible for chunking year ranges to stay under the Worker walltime cap (typically a single year per request for AFLM, a few for the smaller competitions).
 
+### Private operations
+
+All `/mcp/admin/*` routes require `Authorization: Bearer <ADMIN_TOKEN>`.
+Two bounded operator routes complement the normal sync:
+
+- `POST /mcp/admin/backfill-brownlow` validates and optionally writes AFLM
+  Brownlow votes for one or two seasons. Its body is
+  `{ "fromYear": 2025, "toYear": 2025, "dryRun": true }`; `dryRun`
+  defaults to `true`. Run the dry-run first and review the aggregate resolution
+  and six-vote counters before setting it to `false`.
+- `GET /mcp/admin/status` returns aggregate sync freshness, lease state,
+  integrity-view counts, and 24-hour degradation event counts. It never
+  returns lease holders, raw sync errors, player/match samples, or tokens.
+
+Brownlow, manual sync, and cron share one ten-minute operation lease, so an
+overlapping request returns `409` rather than duplicating upstream work.
+
 See [`docs/sync.md`](./docs/sync.md) for the full pipeline, the `shouldRunNow` gate, and the AFL season-structure considerations (Opening Round, finals codes, VFL Wildcard) that any query touching match data needs to handle.
 
 ## Further Documentation
 
 - [`docs/architecture.md`](./docs/architecture.md) — Worker entry, MCP transport, sandbox model.
-- [`docs/sync.md`](./docs/sync.md) — Cron, gating, sync pipeline, PAV scope, backfill endpoint.
+- [`docs/sync.md`](./docs/sync.md) — Cron, gating, sync pipeline, PAV scope, backfill and operator endpoints.
 - [`docs/schema.md`](./docs/schema.md) — D1 table reference.
 
 ## Contributing
