@@ -99,6 +99,11 @@ responsible for chunking year ranges. A single year per request is safe for
 AFLM; the smaller competitions (AFLW, VFL, VFLW) can typically run a few years
 in one call.
 
+Cron, manual sync, and annual Brownlow ingestion share the single
+`sync_lease` row. Acquisition is atomic, holders expire after ten minutes,
+and release checks the holder. Contending syncs keep their established
+log-and-return behavior; Brownlow returns HTTP 409.
+
 ## Round labels
 
 The AFL season includes special rounds that don't follow standard numeric
@@ -145,10 +150,41 @@ fitzroy artifact).
 
 ## Brownlow votes
 
-Brownlow vote ingestion currently relies on `cells[16]` from AFL Tables, which
-fitzroy doesn't yet wire through. Tracked at
-[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117).
-The `upsertStats` path uses `COALESCE` on `brownlow_votes`, so when the npm
-fix lands a one-off historical backfill (`fetchPlayerStats({ source:
-"afl-tables", season })`) can run without clobbering current-season values.
+fitzroy 3.4 parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
+scrapes in the partial-result envelope `{ stats, failedMatchIds }`.
+[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117) is
+closed. Brownlow ingestion is an explicit annual operation rather than
+part of the five-minute sync: the AFL Tables season scrape is expensive and
+votes are published once after the count. `POST
+/mcp/admin/backfill-brownlow` accepts one or two AFLM seasons:
+
+```json
+{ "fromYear": 2025, "toYear": 2025, "dryRun": true }
+```
+
+`dryRun` defaults to true. The operation consumes both `stats` and
+`failedMatchIds`, resolves matches by date plus canonical team, resolves
+players without choosing ambiguous candidates, and requires exactly six
+positive votes for every regular-season match. Any partial fetch, unresolved
+row, ambiguity, finals vote, or mixed/non-six total blocks all seasons before
+the first update. A wholly unpublished season performs no writes. Write mode
+uses batches of at most 100 parameterized updates guarded by
+`brownlow_votes IS NULL OR brownlow_votes = 0`; it does not recalculate PAV.
+The full contract is in
+[`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
+
+The `upsertStats` path uses `COALESCE` on `brownlow_votes`, and the annual
+backfill also writes only when the current value is NULL or zero. This
+keeps repeated runs idempotent and prevents either path from clobbering an
+existing vote.
 Brownlow votes are AFLM-only — the medal isn't awarded for AFLW/VFL/VFLW.
+
+## Private operator status
+
+`GET /mcp/admin/status` returns a stable aggregate snapshot for AFLM, AFLW,
+VFL, and VFLW: independent latest whole-sync success/error ages, latest
+completed match dates, active lease age, all five integrity-view counts, and
+24-hour partial-lineup, partial-stats, and unmapped-team event counts. It uses
+nine fixed statements and a fixed window. It never returns raw log errors,
+lease holders, IDs, row samples, client data, or tokens. Public `/health` and
+`/mcp/health` retain their existing small uptime contract.

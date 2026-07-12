@@ -104,8 +104,16 @@ traded mid-season has separate rows per club.
 ### `sync_log`
 Append-only log of sync ticks that did work or errored. Columns:
 `timestamp`, `type` (e.g. `sync:AFLM`, `sync:VFL`, `pav_recalculation:AFLW`,
-`backfill:AFLM:2024`), `rows_affected`, `error`. Successful no-op ticks are
-not logged.
+`backfill:AFLM:2024`, `admin:brownlow-backfill`), `rows_affected`, `error`.
+Brownlow operation errors are bounded codes rather than upstream rows or IDs.
+Successful no-op ticks are not logged.
+
+### `sync_lease`
+Single-row mutex shared by cron sync, manual sync, and Brownlow ingestion.
+Columns are the fixed `id = 1`, an opaque `holder`, and `acquired_at`. Atomic
+acquisition permits a free row or one older than ten minutes; release is
+holder-checked. The private status endpoint derives only active state and age
+and never returns the holder.
 
 ## Conventions
 

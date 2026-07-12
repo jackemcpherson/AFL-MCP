@@ -31,6 +31,15 @@ export const BackfillRequestSchema = z.object({
 
 export type BackfillRequest = z.infer<typeof BackfillRequestSchema>;
 
+/** Shape of POST /mcp/admin/backfill-brownlow bodies. Range clamps live with the route. */
+export const BrownlowBackfillRequestSchema = z.object({
+  fromYear: z.number().int(),
+  toYear: z.number().int(),
+  dryRun: z.boolean().default(true),
+});
+
+export type BrownlowBackfillRequest = z.infer<typeof BrownlowBackfillRequestSchema>;
+
 /**
  * Map the first Zod issue to the caller-facing message contract the
  * endpoint has always used (and the integration tests assert).
@@ -46,4 +55,13 @@ export function describeBackfillIssue(error: z.ZodError): string {
   if (root === "fromYear") return "fromYear must be an integer";
   if (root === "toYear") return "toYear must be an integer";
   return issue?.message ?? "invalid request body";
+}
+
+/** Map the first Brownlow request issue to a stable caller-facing message. */
+export function describeBrownlowBackfillIssue(error: z.ZodError): string {
+  const root = error.issues[0]?.path[0];
+  if (root === "fromYear") return "fromYear must be an integer";
+  if (root === "toYear") return "toYear must be an integer";
+  if (root === "dryRun") return "dryRun must be a boolean";
+  return error.issues[0]?.message ?? "invalid request body";
 }
