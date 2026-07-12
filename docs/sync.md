@@ -53,7 +53,10 @@ endpoint iterates a year range):
    (if the API has more completed matches than the database, OR a stats
    backlog exists) — both in parallel.
 5. **Upsert** teams, venues, players, matches, stats, lineups (in dependency
-   order — `upserts.ts` handles the foreign-key wiring).
+   order — `upserts.ts` handles the foreign-key wiring). Match upserts retain
+   the AFL API's `completedQuarter` as nullable `completed_quarter` (0–4).
+   `COALESCE` preserves the last authoritative value if the upstream clock is
+   transiently absent.
 6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
    `{AFLM, AFLW}` AND `skipPav` is not set. VFL/VFLW are skipped because the
    AFL API doesn't populate the PAV formula's required inputs
@@ -138,10 +141,22 @@ Per-competition floor years are in
 - AFLW: 2017 — the inaugural AFLW season; AFL API populates the full PAV
   input set from the start.
 
-VFL/VFLW have no PAV rows because `goal_assists`, `marks_inside_50`, and
-`one_percenters` are NULL upstream from the AFL API for those competitions
-(verified empirically via direct `playerStats/match/{id}` calls — not a
-fitzroy artifact).
+VFL/VFLW have no PAV rows because `goal_assists`, `marks_inside_fifty`, and
+`one_percenters` are not sufficiently complete for the formula. VFLW can have
+sparse values in these fields, so their typed coverage expectation is
+`best-effort`, not universally absent.
+
+## Match clock context
+
+The sync persists only the smallest authoritative clock state:
+`completed_quarter` is `NULL` or 0–4. It does not store per-period clock
+objects or transition timestamps. Consumers must pair the value with
+`matches.status`; it reflects the five-minute sync cadence, not second-level
+match timing. `live_period_status` remains raw upstream text.
+
+`matches.local_time` remains Melbourne time (`Australia/Melbourne`) across
+all competitions, matching the AFL API ecosystem convention. Venue-native
+time and timezone are intentionally discarded.
 
 ## Brownlow votes
 

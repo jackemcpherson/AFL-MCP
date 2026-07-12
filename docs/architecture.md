@@ -10,6 +10,12 @@ isolate with read-only access to the database; an optional `competition`
 parameter on the tool surfaces the dimension to the LLM as a hint (the SQL
 must still filter explicitly) and is recorded for usage telemetry.
 
+The existing `schema` tool also accepts optional `includeObserved`,
+`competition`, and `season` arguments. Its default response is static and
+read-free. An observed request is restricted to one competition-season,
+runs separate indexed D1 aggregates for stats, weather, PAV, and lineups, and
+caches successful output for 15 minutes. This does not add a fourth tool.
+
 ## Components
 
 | Layer | Where | What |

@@ -486,6 +486,7 @@ export const MATCH_COLUMNS = [
   { name: "weather_type", kind: "coalesce", value: (r) => r.m.weatherType },
   { name: "status", kind: "coalesce", value: (r) => r.m.status },
   { name: "live_period_status", kind: "coalesce", value: (r) => r.m.livePeriodStatus },
+  { name: "completed_quarter", kind: "coalesce", value: (r) => r.m.completedQuarter },
 ] as const satisfies readonly UpsertColumn<MatchRow>[];
 
 // Shared UPDATE SET fragment for both ON CONFLICT branches in

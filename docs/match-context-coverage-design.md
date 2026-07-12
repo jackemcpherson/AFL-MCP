@@ -1,6 +1,6 @@
 # Match context and data coverage design
 
-Status: accepted design
+Status: implemented on `advisor/017-match-context-coverage`
 
 Evidence date: 2026-07-12
 
@@ -13,8 +13,9 @@ This document defines two additive changes to AFL-MCP:
 2. replace prose-only coverage exceptions with typed expectations plus an
    optional, bounded observation in the existing `schema` tool.
 
-It is an implementation specification, not an implementation. No production
-schema, Worker code, migration, or D1 data changed during this spike.
+Implementation follows this specification in migration 0013, the match
+upsert manifest, and the existing `schema` MCP tool. Deployment remains a
+separate GitOps release step; no production D1 data changed in this branch.
 
 ## Product invariants
 

@@ -35,6 +35,13 @@ The server exposes 3 tools via the [Model Context Protocol](https://modelcontext
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 
+The no-argument `schema` call remains deterministic and read-free. To measure
+current completeness for exactly one competition-season, pass
+`{"includeObserved":true,"competition":"AFLM","season":2026}`. The response
+keeps typed expectations separate from measured observations and caches a
+successful measurement for 15 minutes; zero rows never prove absence. The MCP
+surface remains three tools.
+
 ### Filtering by competition
 
 Always join through `seasons → competitions` and filter by `c.code` in your SQL. Without the filter, results mix competitions silently because team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) are distinct `team_id`s.
