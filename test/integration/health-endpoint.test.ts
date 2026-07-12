@@ -79,6 +79,15 @@ describe("GET /mcp/health (OPS-02)", () => {
     expect(body.status).toBe("ok");
   });
 
+  it("does not treat Brownlow operation logs as cron freshness", async () => {
+    await seedSyncLog(new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), null);
+    await seedSyncLog(new Date().toISOString(), null, "admin:brownlow-backfill");
+    const res = await getHealth();
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { stale: boolean };
+    expect(body.stale).toBe(true);
+  });
+
   it("recovers to 200 once a critical error ages out of the window", async () => {
     await seedSyncLog(
       new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),

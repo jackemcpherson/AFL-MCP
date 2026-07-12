@@ -14,7 +14,8 @@ must still filter explicitly) and is recorded for usage telemetry.
 
 | Layer | Where | What |
 |-------|-------|------|
-| Entry / routing | `src/index.ts` | Worker `fetch` and `scheduled` handlers; admin endpoints (`sync`, `backfill`, `recalculate-pav`). |
+| Entry / routing | `src/index.ts` | Worker `fetch` and `scheduled` handlers; authenticated admin endpoints (`sync`, `backfill`, `backfill-brownlow`, `status`, `recalculate-pav`). |
+| Admin operations | `src/admin/` | Annual Brownlow resolution/writes and bounded aggregate operator status. |
 | MCP protocol | `src/mcp/protocol.ts` | Streamable-HTTP transport. |
 | MCP tools | `src/mcp/tools/` | `schema`, `tools`, `code` definitions. |
 | Sandbox | `src/sandbox/executor.ts` | Dynamic Worker isolate + `DbProxy` RPC bridge. |
@@ -53,6 +54,10 @@ sync orchestrator (src/sync/sync.ts)
 DbProxy ←─── sandbox isolate ←─── code tool ←─── MCP client
 ```
 
-The sync writes; everything else reads through `DbProxy`. See
+The sync and authenticated admin operations write; MCP client code remains
+read-only through `DbProxy`. Brownlow ingestion fetches AFL Tables explicitly
+and shares the sync lease so it cannot overlap cron or manual sync. Private
+status performs nine fixed aggregate D1 statements and does not expose raw
+diagnostics. See
 [`sync.md`](./sync.md) for the cron, gating, and pipeline details, and
 [`schema.md`](./schema.md) for the table reference.

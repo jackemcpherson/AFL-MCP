@@ -2,6 +2,7 @@ import type { CompetitionCode, Match } from "fitzroy";
 import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
+import { acquireOperationLease, releaseOperationLease } from "./lease";
 import { logSync } from "./log";
 import { type PavCompetition, recalculatePav } from "./pav";
 import {
@@ -75,7 +76,7 @@ export async function sync(
   // overlapping runs double-fetched upstream data and interleaved PAV
   // recalcs (COR-11). A stale lease (holder crashed) expires after 10 min.
   const holder = crypto.randomUUID();
-  if (!(await acquireSyncLease(env, holder))) {
+  if (!(await acquireOperationLease(env, holder))) {
     await logSync(env, "sync:lease", 0, "skipped: another sync holds the lease");
     return [];
   }
@@ -101,26 +102,8 @@ export async function sync(
 
     return results;
   } finally {
-    await releaseSyncLease(env, holder);
+    await releaseOperationLease(env, holder);
   }
-}
-
-async function acquireSyncLease(env: Env, holder: string): Promise<boolean> {
-  const result = await env.DB.prepare(
-    `UPDATE sync_lease SET holder = ?1, acquired_at = datetime('now')
-     WHERE id = 1 AND (holder IS NULL OR acquired_at < datetime('now', '-10 minutes'))`,
-  )
-    .bind(holder)
-    .run();
-  return result.meta.changes === 1;
-}
-
-async function releaseSyncLease(env: Env, holder: string): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE sync_lease SET holder = NULL, acquired_at = NULL WHERE id = 1 AND holder = ?1",
-  )
-    .bind(holder)
-    .run();
 }
 
 /**

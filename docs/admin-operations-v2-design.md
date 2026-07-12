@@ -1,13 +1,14 @@
 # Design: Brownlow ingestion and private operator diagnostics
 
-**Plan**: 013 | **Status**: design complete | **Date**: 2026-07-12
+**Plan**: 013/016 | **Status**: implemented | **Date**: 2026-07-12
 
 This document specifies two authenticated admin operations:
 
 - annual AFLM Brownlow vote ingestion; and
 - bounded, aggregate-only operational status.
 
-It is an implementation contract, not a claim that either route exists. It
+The contract is implemented by `src/admin/brownlow.ts`,
+`src/admin/status.ts`, and the shared lease in `src/sync/lease.ts`. It
 supersedes only the Brownlow material in
 [`admin-backfills-design.md`](./admin-backfills-design.md). DOB and lineup
 recommendations there remain unchanged.
