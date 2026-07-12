@@ -4,7 +4,7 @@ import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
 import { getToolsInfo } from "./tools/tools";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
-import { type JsonRpcRequest, JsonRpcRequestSchema } from "./validation";
+import { type JsonRpcRequest, JsonRpcRequestSchema, SchemaToolRequestSchema } from "./validation";
 
 const SERVER_INFO = {
   name: "afl-mcp",
@@ -26,7 +26,11 @@ const TOOLS: ToolDefinition[] = [
       "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        includeObserved: { type: "boolean", default: false },
+        competition: { type: "string", enum: [...COMPETITION_CODES] },
+        season: { type: "integer" },
+      },
       additionalProperties: false,
     },
   },
@@ -103,8 +107,12 @@ async function handleToolCall(
   ctx: ExecutionContext,
 ) {
   switch (name) {
-    case "schema":
-      return mcpContent(getSchemaInfo());
+    case "schema": {
+      const parsed = SchemaToolRequestSchema.safeParse(args);
+      if (!parsed.success)
+        return mcpError(parsed.error.issues[0]?.message ?? "invalid schema arguments");
+      return mcpContent(await getSchemaInfo(parsed.data, env));
+    }
 
     case "tools":
       return mcpContent(getToolsInfo());

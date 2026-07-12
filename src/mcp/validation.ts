@@ -20,6 +20,51 @@ export type JsonRpcRequest = z.infer<typeof JsonRpcRequestSchema>;
 
 export const COMPETITION_CODE_VALUES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
+const COVERAGE_START_YEAR = { AFLM: 1990, AFLW: 2017, VFL: 2021, VFLW: 2021 } as const;
+
+/** Optional arguments accepted by the existing schema tool. */
+export const SchemaToolRequestSchema = z
+  .object({
+    includeObserved: z.boolean().optional().default(false),
+    competition: z.enum(COMPETITION_CODE_VALUES).optional(),
+    season: z.number().int().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.includeObserved) {
+      if (value.competition !== undefined || value.season !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "competition and season require includeObserved=true",
+        });
+      }
+      return;
+    }
+    if (value.competition === undefined || value.season === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "observed coverage requires competition and season",
+      });
+      return;
+    }
+    const currentMelbourneYear = Number(
+      new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", year: "numeric" }).format(
+        new Date(),
+      ),
+    );
+    if (
+      value.season < COVERAGE_START_YEAR[value.competition] ||
+      value.season > currentMelbourneYear + 1
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "season is outside the competition coverage range",
+      });
+    }
+  });
+
+export type SchemaToolRequest = z.infer<typeof SchemaToolRequestSchema>;
+
 /** Shape of POST /mcp/admin/backfill bodies. Range clamps live with the route. */
 export const BackfillRequestSchema = z.object({
   competitions: z.array(z.enum(COMPETITION_CODE_VALUES)).min(1),
