@@ -145,10 +145,16 @@ fitzroy artifact).
 
 ## Brownlow votes
 
-Brownlow vote ingestion currently relies on `cells[16]` from AFL Tables, which
-fitzroy doesn't yet wire through. Tracked at
-[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117).
-The `upsertStats` path uses `COALESCE` on `brownlow_votes`, so when the npm
-fix lands a one-off historical backfill (`fetchPlayerStats({ source:
-"afl-tables", season })`) can run without clobbering current-season values.
+fitzroy 3.4 parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
+scrapes in the partial-result envelope `{ stats, failedMatchIds }`.
+[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117) is
+closed. Brownlow ingestion remains an explicit annual operation rather than
+part of the five-minute sync: the AFL Tables season scrape is expensive and
+votes are published once after the count. The implementation contract is in
+[`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
+
+The `upsertStats` path uses `COALESCE` on `brownlow_votes`, and the proposed
+annual backfill also writes only when the current value is NULL or zero. This
+keeps repeated runs idempotent and prevents either path from clobbering an
+existing vote.
 Brownlow votes are AFLM-only — the medal isn't awarded for AFLW/VFL/VFLW.
