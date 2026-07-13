@@ -28,7 +28,12 @@ CREATE TABLE teams (
 
 CREATE TABLE venues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE
+  name TEXT NOT NULL UNIQUE,
+  latitude REAL,
+  longitude REAL,
+  timezone TEXT,                                     -- IANA
+  roof TEXT,                                         -- 'retractable' | 'none'
+  canonical_venue_id INTEGER REFERENCES venues(id)   -- alias -> physical ground
 );
 
 CREATE TABLE players (
@@ -214,6 +219,24 @@ CREATE TABLE match_lineups (
 CREATE INDEX idx_ml_match_id ON match_lineups(match_id);
 CREATE INDEX idx_ml_player_id ON match_lineups(player_id);
 CREATE INDEX idx_ml_team_match ON match_lineups(team_id, match_id);
+
+-- Match-window weather from Open-Meteo (migration 0014). Up to two rows per
+-- match: kind='forecast' (overwritten in place per refresh, kept after the
+-- match) and kind='observed'. Metrics are a 3-hour window from scheduled
+-- start plus prior-24h rainfall.
+CREATE TABLE match_weather (
+  match_id INTEGER NOT NULL REFERENCES matches(id),
+  kind TEXT NOT NULL CHECK (kind IN ('observed','forecast')),
+  temp_c REAL,               -- 3h mean from scheduled start
+  precip_mm REAL,            -- 3h total, match window
+  precip_24h_prior_mm REAL,  -- ground condition
+  wind_speed_kmh REAL,       -- 3h max
+  wind_gust_kmh REAL,        -- 3h max
+  humidity_pct REAL,         -- 3h mean
+  source TEXT NOT NULL,      -- 'era5_land+era5' | 'historical_forecast' | 'best_match'
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (match_id, kind)
+);
 
 CREATE TABLE sync_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
