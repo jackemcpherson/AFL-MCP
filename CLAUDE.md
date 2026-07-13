@@ -67,7 +67,7 @@ full pipeline.
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
 - `src/sync/upserts.ts` — All DB writes for the sync pipeline.
 - `src/sync/pav.ts` — PAV recalculation.
-- `src/db/schema.sql` — D1 schema (11 tables).
+- `src/db/schema.sql` — D1 schema (12 tables).
 
 ## Style-Guide Exception
 

@@ -158,7 +158,7 @@ export const ANALYTICS_COLUMNS = {
   competitions: ["id", "code", "name"],
   seasons: ["id", "competition_id", "year", "is_complete"],
   teams: ["id", "name", "abbreviation", "competition_id"],
-  venues: ["id", "name"],
+  venues: ["id", "name", "latitude", "longitude", "timezone", "roof", "canonical_venue_id"],
   players: [
     "id",
     "first_name",
@@ -194,6 +194,18 @@ export const ANALYTICS_COLUMNS = {
     "is_emergency",
     "is_substitute",
   ],
+  match_weather: [
+    "match_id",
+    "kind",
+    "temp_c",
+    "precip_mm",
+    "precip_24h_prior_mm",
+    "wind_speed_kmh",
+    "wind_gust_kmh",
+    "humidity_pct",
+    "source",
+    "fetched_at",
+  ],
 } as const;
 
 const CORE = {
@@ -202,6 +214,28 @@ const CORE = {
   source: ["afl-api"],
   notes: [],
 } as const satisfies CoverageTableExpectation;
+
+const VENUES = {
+  ...CORE,
+  source: ["afl-api", "venue-geodata"],
+  // Alias/placeholder semantics are documented once in the schema tool notes;
+  // per-leaf notes multiply across every column and blow the response budget.
+  notes: [],
+  overrides: {
+    latitude: "partial",
+    longitude: "partial",
+    timezone: "partial",
+    roof: "partial",
+  },
+} as const satisfies CoverageTableExpectation;
+
+// Weather semantics (window, kinds, sources, exclusions) are documented once
+// in the schema tool notes; per-leaf notes multiply across every column.
+const MATCH_WEATHER_BASE = {
+  expected: "partial",
+  source: ["open-meteo"],
+  notes: [],
+} as const;
 
 const AFLM_STAT_OVERRIDES = {
   brownlow_votes: "partial",
@@ -263,7 +297,7 @@ export const COVERAGE_EXPECTATIONS = {
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
-    venues: CORE,
+    venues: VENUES,
     players: CORE,
     matches: {
       ...CORE,
@@ -296,12 +330,13 @@ export const COVERAGE_EXPECTATIONS = {
       expected: "partial",
       notes: ["Known historical round gaps; absence may mean not yet published."],
     },
+    match_weather: { ...MATCH_WEATHER_BASE, range: "1990..current" },
   },
   AFLW: {
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
-    venues: CORE,
+    venues: VENUES,
     players: CORE,
     matches: {
       ...CORE,
@@ -322,12 +357,13 @@ export const COVERAGE_EXPECTATIONS = {
       expected: "partial",
       notes: ["Absence may mean not yet published."],
     },
+    match_weather: { ...MATCH_WEATHER_BASE, range: "2017..current" },
   },
   VFL: {
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
-    venues: CORE,
+    venues: VENUES,
     players: CORE,
     matches: {
       ...CORE,
@@ -353,12 +389,13 @@ export const COVERAGE_EXPECTATIONS = {
       expected: "best-effort",
       notes: ["Absence may mean not yet published."],
     },
+    match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
   },
   VFLW: {
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
-    venues: CORE,
+    venues: VENUES,
     players: CORE,
     matches: {
       ...CORE,
@@ -384,6 +421,7 @@ export const COVERAGE_EXPECTATIONS = {
       expected: "best-effort",
       notes: ["Absence may mean not yet published."],
     },
+    match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
   },
 } as const satisfies Record<CoverageCompetition, Record<TableName, CoverageTableExpectation>>;
 

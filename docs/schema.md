@@ -5,7 +5,7 @@ migrations in [`src/db/migrations/`](../src/db/migrations). The `schema` MCP
 tool exposes a hardcoded variant of this for clients
 (`src/mcp/tools/schema.ts`); keep both in sync when adding columns.
 
-The D1 database (`afl-stats`) has 11 tables and covers four competitions:
+The D1 database (`afl-stats`) has 12 tables and covers four competitions:
 **AFLM**, **AFLW**, **VFL**, **VFLW**. Always filter queries by competition
 (join through `seasons → competitions`, then `WHERE c.code = ?`) — without
 the filter, results mix competitions silently because team rows with the
@@ -31,6 +31,12 @@ One row per `(competition, year)`.
 ### `venues`
 - `name` UNIQUE. Shared across competitions (intentional — MCG hosts all
   four).
+- Geodata (migration 0014, seeded from `data/venue-geodata.csv`): `latitude`,
+  `longitude`, `timezone` (IANA), `roof` (`'retractable'` — Marvel Stadium
+  only — or `'none'`), and `canonical_venue_id` pointing sponsor-renamed
+  aliases at the physical ground (self-referencing for canonical rows). All
+  NULL (except `canonical_venue_id`) for the 'To Be Confirmed' placeholder
+  venue (id 17748).
 
 ### `players`
 - Stable identity via two external IDs, indexed conditionally so nulls don't
@@ -92,6 +98,24 @@ publish on Thursday, before stats exist.
   return empty for some rounds). 2021–2022 AFLM are derived from
   `player_match_stats` because the AFL API only publishes the
   Thursday-night announced team for those seasons.
+
+### `match_weather`
+Match-window weather from Open-Meteo (CC-BY 4.0), keyed `(match_id, kind)` —
+at most two rows per match.
+- `kind` is `'forecast'` (fetched ≤7 days out, overwritten in place per
+  refresh, kept after the match for forecast-error analysis) or
+  `'observed'`.
+- Metrics cover the 3 hours from scheduled start: `temp_c` and
+  `humidity_pct` are means, `precip_mm` a total, `wind_speed_kmh` and
+  `wind_gust_kmh` maxima. `precip_24h_prior_mm` totals the 24 hours before
+  the window (ground condition).
+- `source` records provenance: `'era5_land+era5'` (final reanalysis —
+  temp/humidity/wind from ERA5-Land, precipitation from ERA5),
+  `'historical_forecast'` (interim observed value, upgraded to reanalysis
+  once the match is >6 days old), `'best_match'` (forecast rows).
+- Cancelled matches and the placeholder venue (17748) never get rows.
+- Do not mix with the frozen fryzigg `matches.weather_temp_c` /
+  `weather_type` columns — those are daily-max values, AFLM 2010–2025 only.
 
 ## Derived data
 
