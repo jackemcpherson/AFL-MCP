@@ -10,6 +10,21 @@
  * timezone math happens here.
  */
 
+import { z } from "zod";
+
+/**
+ * Open-Meteo hourly payload: a local-time axis plus one value array per
+ * requested variable (plain keys on single-model responses, model-suffixed
+ * keys like `temperature_2m_era5_land` on dual-model archive responses).
+ * Non-hourly top-level fields (latitude, elevation, ...) are ignored.
+ */
+export const OpenMeteoPayloadSchema = z.object({
+  hourly: z.object({ time: z.array(z.string()) }).catchall(z.array(z.number().nullable())),
+});
+
+/** Parsed Open-Meteo hourly payload (the external API boundary). */
+export type OpenMeteoPayload = z.infer<typeof OpenMeteoPayloadSchema>;
+
 /** One hourly variable series extracted from an Open-Meteo response. */
 export interface HourlySeries {
   /** Local hourly timestamps, e.g. "2026-07-18T19:00". */
@@ -69,18 +84,18 @@ const WIND_GUST_KEYS = ["wind_gusts_10m", "wind_gusts_10m_era5_land", "wind_gust
  * @throws When the payload has no `hourly.time` array (e.g. an API error body).
  */
 export function extractHourlySeries(payload: unknown): HourlySeries {
-  const hourly = isRecord(payload) && isRecord(payload.hourly) ? payload.hourly : undefined;
-  const time = hourly?.time;
-  if (hourly === undefined || !isStringArray(time)) {
-    throw new Error("Open-Meteo payload has no hourly.time axis");
+  const parsed = OpenMeteoPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`Unexpected Open-Meteo payload: ${parsed.error.message}`);
   }
+  const { time, ...variables } = parsed.data.hourly;
   return {
     time,
-    temperatureC: readSeries(hourly, TEMPERATURE_KEYS, time.length),
-    precipitationMm: readSeries(hourly, PRECIPITATION_KEYS, time.length),
-    humidityPct: readSeries(hourly, HUMIDITY_KEYS, time.length),
-    windSpeedKmh: readSeries(hourly, WIND_SPEED_KEYS, time.length),
-    windGustKmh: readSeries(hourly, WIND_GUST_KEYS, time.length),
+    temperatureC: readSeries(variables, TEMPERATURE_KEYS, time.length),
+    precipitationMm: readSeries(variables, PRECIPITATION_KEYS, time.length),
+    humidityPct: readSeries(variables, HUMIDITY_KEYS, time.length),
+    windSpeedKmh: readSeries(variables, WIND_SPEED_KEYS, time.length),
+    windGustKmh: readSeries(variables, WIND_GUST_KEYS, time.length),
   };
 }
 
@@ -121,32 +136,19 @@ export function aggregateWeatherWindow(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
-}
-
-function toNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function readSeries(
-  hourly: Record<string, unknown>,
+  variables: Record<string, readonly (number | null)[]>,
   keys: readonly string[],
   length: number,
-): (number | null)[] {
+): readonly (number | null)[] {
   // Prefer the first candidate that carries actual data, then any present
   // array (all-null), then a synthesized all-null series.
-  let fallback: (number | null)[] | undefined;
+  let fallback: readonly (number | null)[] | undefined;
   for (const key of keys) {
-    const value = hourly[key];
-    if (!Array.isArray(value)) continue;
-    const mapped = value.map(toNumberOrNull);
-    if (mapped.some((v) => v !== null)) return mapped;
-    fallback ??= mapped;
+    const value = variables[key];
+    if (value === undefined) continue;
+    if (value.some((v) => v !== null)) return value;
+    fallback ??= value;
   }
   return fallback ?? new Array<number | null>(length).fill(null);
 }

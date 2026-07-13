@@ -33,6 +33,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { addDaysToIsoDate } from "../src/lib/time";
 import {
   aggregateWeatherWindow,
@@ -76,14 +77,17 @@ function writeBatchedSQL(prefix: string, statements: string[]): number {
   return fileIndex;
 }
 
-function queryD1<T>(sql: string): T[] {
+/** Envelope of `wrangler d1 execute --json`: one result set per statement. */
+const D1ExecuteOutputSchema = z.array(z.object({ results: z.array(z.unknown()).default([]) }));
+
+function queryD1<T>(sql: string, rowSchema: z.ZodType<T>): T[] {
   const escaped = sql.replace(/\n/g, " ").replace(/"/g, '\\"');
   const raw = execSync(`npx wrangler d1 execute afl-stats --remote --command "${escaped}" --json`, {
     encoding: "utf-8",
     maxBuffer: 50 * 1024 * 1024,
   });
-  const parsed = JSON.parse(raw);
-  return parsed[0]?.results ?? [];
+  const output = D1ExecuteOutputSchema.parse(JSON.parse(raw));
+  return z.array(rowSchema).parse(output[0]?.results ?? []);
 }
 
 function executeSQL(filePath: string): void {
@@ -99,15 +103,16 @@ function sleep(ms: number): Promise<void> {
 
 // ── Eligibility ──────────────────────────────────────────────────────
 
-interface EligibleMatch {
-  id: number;
-  date: string;
-  local_time: string | null;
-  competition: string;
-  year: number;
-  latitude: number;
-  longitude: number;
-}
+const EligibleMatchSchema = z.object({
+  id: z.number(),
+  date: z.string(),
+  local_time: z.string().nullable(),
+  competition: z.string(),
+  year: z.number(),
+  latitude: z.number(),
+  longitude: z.number(),
+});
+type EligibleMatch = z.infer<typeof EligibleMatchSchema>;
 
 const ELIGIBILITY_SELECT = `
   FROM matches m
@@ -122,11 +127,12 @@ const ELIGIBILITY_SELECT = `
     AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL`;
 
 function loadEligibleMatches(): EligibleMatch[] {
-  return queryD1<EligibleMatch>(
+  return queryD1(
     `SELECT m.id, m.date, m.local_time, c.code AS competition, s.year,
        cv.latitude, cv.longitude
      ${ELIGIBILITY_SELECT}
      ORDER BY m.date, m.id`,
+    EligibleMatchSchema,
   );
 }
 
@@ -214,11 +220,11 @@ async function fetchPhase(matches: EligibleMatch[]): Promise<void> {
 
 // ── Phase 2: generate ────────────────────────────────────────────────
 
+/** Shape of one data/weather-cache/<matchId>.json entry written by fetchPhase. */
+const CacheEntrySchema = z.object({ fetchedAt: z.string(), payload: z.unknown() });
+
 function metricsFromCache(match: EligibleMatch): { metrics: WeatherMetrics; fetchedAt: string } {
-  const cached = JSON.parse(readFileSync(cachePath(match.id), "utf-8")) as {
-    fetchedAt: string;
-    payload: unknown;
-  };
+  const cached = CacheEntrySchema.parse(JSON.parse(readFileSync(cachePath(match.id), "utf-8")));
   const series = extractHourlySeries(cached.payload);
   const scheduledStart = `${match.date}T${match.local_time ?? FALLBACK_LOCAL_TIME}`;
   return { metrics: aggregateWeatherWindow(series, scheduledStart), fetchedAt: cached.fetchedAt };
@@ -273,7 +279,7 @@ function applyPhase(): void {
 
 function verifyCoverage(): void {
   console.log("Coverage per competition/season (eligible vs observed):");
-  const rows = queryD1<{ competition: string; year: number; eligible: number; observed: number }>(
+  const rows = queryD1(
     `SELECT c.code AS competition, s.year,
        COUNT(*) AS eligible,
        SUM(CASE WHEN w.match_id IS NOT NULL THEN 1 ELSE 0 END) AS observed
@@ -288,6 +294,12 @@ function verifyCoverage(): void {
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
      GROUP BY c.code, s.year
      ORDER BY c.code, s.year`,
+    z.object({
+      competition: z.string(),
+      year: z.number(),
+      eligible: z.number(),
+      observed: z.number(),
+    }),
   );
   let gaps = 0;
   for (const row of rows) {
@@ -314,8 +326,9 @@ function verifyRanges(): void {
     ["fetched_at empty", "fetched_at IS NULL OR fetched_at = ''"],
   ];
   for (const [label, predicate] of checks) {
-    const rows = queryD1<{ n: number }>(
+    const rows = queryD1(
       `SELECT COUNT(*) AS n FROM match_weather WHERE kind = 'observed' AND (${predicate})`,
+      z.object({ n: z.number() }),
     );
     const n = rows[0]?.n ?? 0;
     console.log(`  ${label}: ${n}${n > 0 ? "  <-- VIOLATION" : ""}`);
@@ -324,17 +337,7 @@ function verifyRanges(): void {
 
 async function verifySpotCheck(): Promise<void> {
   console.log(`\nSpot check: re-fetching ${SPOT_CHECK_ROWS} random observed rows fresh...`);
-  const rows = queryD1<{
-    id: number;
-    date: string;
-    local_time: string | null;
-    latitude: number;
-    longitude: number;
-    temp_c: number | null;
-    precip_mm: number | null;
-    wind_speed_kmh: number | null;
-    humidity_pct: number | null;
-  }>(
+  const rows = queryD1(
     `SELECT m.id, m.date, m.local_time, cv.latitude, cv.longitude,
        w.temp_c, w.precip_mm, w.wind_speed_kmh, w.humidity_pct
      FROM match_weather w
@@ -343,6 +346,17 @@ async function verifySpotCheck(): Promise<void> {
      JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)
      WHERE w.kind = 'observed' AND w.source = '${SOURCE}'
      ORDER BY RANDOM() LIMIT ${SPOT_CHECK_ROWS}`,
+    z.object({
+      id: z.number(),
+      date: z.string(),
+      local_time: z.string().nullable(),
+      latitude: z.number(),
+      longitude: z.number(),
+      temp_c: z.number().nullable(),
+      precip_mm: z.number().nullable(),
+      wind_speed_kmh: z.number().nullable(),
+      humidity_pct: z.number().nullable(),
+    }),
   );
   let mismatches = 0;
   for (const row of rows) {

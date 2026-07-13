@@ -194,7 +194,38 @@ describe("extractHourlySeries", () => {
     expect(series.windGustKmh).toEqual([null, null]);
   });
 
+  it("accepts a realistic payload with extra top-level fields", () => {
+    const series = extractHourlySeries({
+      latitude: -37.8,
+      longitude: 145.0,
+      utc_offset_seconds: 36000,
+      timezone: "Australia/Melbourne",
+      elevation: 25,
+      hourly_units: { temperature_2m: "°C" },
+      hourly: { time, temperature_2m: [8.7, 8.6] },
+    });
+    expect(series.temperatureC).toEqual([8.7, 8.6]);
+  });
+
   it("throws on a payload without an hourly time axis", () => {
     expect(() => extractHourlySeries({ error: true, reason: "out of range" })).toThrow();
+  });
+
+  it("throws when a variable is not an array", () => {
+    expect(() => extractHourlySeries({ hourly: { time, temperature_2m: "not-an-array" } })).toThrow(
+      /Unexpected Open-Meteo payload/,
+    );
+  });
+
+  it("throws when a variable array contains a non-numeric value", () => {
+    expect(() => extractHourlySeries({ hourly: { time, temperature_2m: [10, "11"] } })).toThrow(
+      /Unexpected Open-Meteo payload/,
+    );
+  });
+
+  it("throws when the time axis is not all strings", () => {
+    expect(() =>
+      extractHourlySeries({ hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] } }),
+    ).toThrow(/Unexpected Open-Meteo payload/);
   });
 });
