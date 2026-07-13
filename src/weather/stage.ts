@@ -191,7 +191,6 @@ function forecastIsStale(row: CandidateRow, now: Date): boolean {
  * after completion.
  */
 async function selectFastObservedCandidates(env: Env, now: Date): Promise<CandidateRow[]> {
-  const lagCutoff = addDaysToIsoDate(toMelbourneDate(now), -ERA5_LAG_DAYS);
   const rows = await env.DB.prepare(
     `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
      FROM matches m
@@ -204,9 +203,18 @@ async function selectFastObservedCandidates(env: Env, now: Date): Promise<Candid
      ORDER BY m.date DESC, m.id
      LIMIT ?2`,
   )
-    .bind(lagCutoff, MAX_FETCHES_PER_QUERY)
+    .bind(finalCutoffDate(now), MAX_FETCHES_PER_QUERY)
     .all<CandidateRow>();
   return rows.results;
+}
+
+/**
+ * The latest Melbourne date that counts as "more than {@link ERA5_LAG_DAYS}
+ * days old" (#127: observed rows upgrade once the match is >6 days old, so
+ * a match dated exactly 6 days ago keeps its interim row for one more day).
+ */
+function finalCutoffDate(now: Date): string {
+  return addDaysToIsoDate(toMelbourneDate(now), -(ERA5_LAG_DAYS + 1));
 }
 
 /**
@@ -216,7 +224,6 @@ async function selectFastObservedCandidates(env: Env, now: Date): Promise<Candid
  * have points.
  */
 async function selectFinalObservedCandidates(env: Env, now: Date): Promise<CandidateRow[]> {
-  const lagCutoff = addDaysToIsoDate(toMelbourneDate(now), -ERA5_LAG_DAYS);
   const rows = await env.DB.prepare(
     `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
      FROM matches m
@@ -229,7 +236,7 @@ async function selectFinalObservedCandidates(env: Env, now: Date): Promise<Candi
      ORDER BY m.date DESC, m.id
      LIMIT ?3`,
   )
-    .bind(lagCutoff, OBSERVED_FINAL_SOURCE, MAX_FETCHES_PER_QUERY)
+    .bind(finalCutoffDate(now), OBSERVED_FINAL_SOURCE, MAX_FETCHES_PER_QUERY)
     .all<CandidateRow>();
   return rows.results;
 }
@@ -278,9 +285,11 @@ async function fetchAndStore(
 }
 
 /**
- * Two-day request (prior day + match day) so the prior-24h precipitation
- * window is covered; `timezone=Australia/Melbourne` always, because D1
- * match timestamps are Melbourne-local regardless of venue (#126).
+ * Three-day request: the prior day covers the prior-24h precipitation
+ * window and the day after keeps midnight-crossing match windows complete
+ * (a 22:40 start needs 00:00 on the next day). `timezone=Australia/Melbourne`
+ * always, because D1 match timestamps are Melbourne-local regardless of
+ * venue (#126).
  */
 function openMeteoUrl(job: WeatherJob): string {
   const params = new URLSearchParams({
@@ -289,7 +298,7 @@ function openMeteoUrl(job: WeatherJob): string {
     hourly: OPEN_METEO_HOURLY_VARIABLES,
     timezone: "Australia/Melbourne",
     start_date: addDaysToIsoDate(job.candidate.date, -1),
-    end_date: job.candidate.date,
+    end_date: addDaysToIsoDate(job.candidate.date, 1),
   });
   if (job.dualModel) params.set("models", "era5_land,era5");
   return `${job.apiBase}?${params.toString()}`;

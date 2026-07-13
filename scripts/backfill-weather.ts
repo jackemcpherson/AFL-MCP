@@ -5,7 +5,7 @@
  * generate batched SQL artifacts, apply via `wrangler d1 execute`.
  *
  * Phases (resume is free at every phase):
- *   1. FETCH    — eligibility query against remote D1; one 2-day dual-model
+ *   1. FETCH    — eligibility query against remote D1; one 3-day dual-model
  *                 archive call per match (`models=era5_land,era5`), throttled
  *                 to ~3 req/s; raw JSON cached in data/weather-cache/ keyed
  *                 by match id (re-runs skip cached matches).
@@ -142,7 +142,7 @@ function printEligibilitySummary(matches: EligibleMatch[]): void {
   }
   const cached = matches.filter((m) => existsSync(cachePath(m.id))).length;
   console.log(`Total eligible: ${matches.length} (${cached} already cached)`);
-  // A 2-day dual-model hourly request weighs roughly one API call.
+  // A 3-day dual-model hourly request weighs roughly one API call.
   console.log(
     `Estimated archive calls: ~${matches.length - cached} (free tier: 10,000/day), ` +
       `~${Math.ceil(((matches.length - cached) * THROTTLE_MS) / 60000)} min at ~3 req/s`,
@@ -161,8 +161,10 @@ function archiveUrl(latitude: number, longitude: number, date: string): string {
     longitude: String(longitude),
     hourly: OPEN_METEO_HOURLY_VARIABLES,
     timezone: "Australia/Melbourne",
+    // Three-day window: prior day for precip_24h_prior_mm, next day so a
+    // late-night bounce's 3h window survives crossing midnight.
     start_date: addDaysToIsoDate(date, -1),
-    end_date: date,
+    end_date: addDaysToIsoDate(date, 1),
     models: "era5_land,era5",
   });
   return `${ARCHIVE_API}?${params.toString()}`;

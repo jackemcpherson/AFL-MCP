@@ -131,14 +131,19 @@ async function weatherRows(matchId: number): Promise<WeatherRow[]> {
   return rows.results;
 }
 
-/** Canned Open-Meteo payload: constant hourly values across the two-day window. */
-function cannedPayload(startDate: string, options: { modelSuffixes?: boolean; temp?: number }) {
+/** Canned Open-Meteo payload: constant hourly values spanning the requested days. */
+function cannedPayload(
+  startDate: string,
+  days: number,
+  options: { modelSuffixes?: boolean; temp?: number },
+) {
+  const hours = days * 24;
   const time: string[] = [];
   const [y = 0, m = 1, d = 1] = startDate.split("-").map(Number);
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < hours; i++) {
     time.push(`${new Date(Date.UTC(y, m - 1, d, i)).toISOString().slice(0, 13)}:00`);
   }
-  const fill = (v: number | null) => new Array<number | null>(48).fill(v);
+  const fill = (v: number | null) => new Array<number | null>(hours).fill(v);
   const temp = options.temp ?? 15;
   const hourly: Record<string, unknown> = options.modelSuffixes
     ? {
@@ -167,8 +172,8 @@ function cannedPayload(startDate: string, options: { modelSuffixes?: boolean; te
 
 /**
  * Stub fetch recording every requested URL. Responds with a canned payload
- * whose time axis starts the day before the match date encoded in the
- * request's start_date parameter.
+ * whose hourly time axis spans exactly the start_date..end_date range of
+ * the request, mirroring the real API.
  */
 function stubFetch(options: { modelSuffixes?: boolean; temp?: number; status?: number } = {}) {
   const calls: URL[] = [];
@@ -179,7 +184,10 @@ function stubFetch(options: { modelSuffixes?: boolean; temp?: number; status?: n
       return new Response("upstream error", { status: options.status });
     }
     const startDate = url.searchParams.get("start_date") ?? "2026-07-12";
-    return Response.json(cannedPayload(startDate, options));
+    const endDate = url.searchParams.get("end_date") ?? startDate;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const days = Math.round((Date.parse(endDate) - Date.parse(startDate)) / dayMs) + 1;
+    return Response.json(cannedPayload(startDate, days, options));
   }) as typeof fetch;
   return { impl, calls };
 }
@@ -220,7 +228,23 @@ describe("runWeatherStage — forecasts", () => {
     expect(calls[0]?.host).toBe("api.open-meteo.com");
     expect(calls[0]?.searchParams.get("timezone")).toBe("Australia/Melbourne");
     expect(calls[0]?.searchParams.get("start_date")).toBe("2026-07-17");
-    expect(calls[0]?.searchParams.get("end_date")).toBe("2026-07-18");
+    expect(calls[0]?.searchParams.get("end_date")).toBe("2026-07-19");
+  });
+
+  it("aggregates all 3 hours of a night game whose window crosses midnight", async () => {
+    const seasonId = await seedSeason();
+    await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+    // 22:40 start: window hours 22:00, 23:00 on match day and 00:00 the day
+    // after — the request must extend past the match date to cover them.
+    const match = await seedMatch({ seasonId, date: "2026-07-16", localTime: "22:40:00" });
+
+    const { impl, calls } = stubFetch();
+    await runWeatherStage(env, impl, NOW);
+
+    expect(calls[0]?.searchParams.get("end_date")).toBe("2026-07-17");
+    const rows = await weatherRows(match);
+    // 3 hours x 0.5mm — a truncated window would only total 1.0.
+    expect(rows[0]).toMatchObject({ precip_mm: 1.5, temp_c: 15 });
   });
 
   it("refreshes daily before match day: refetches yesterday's forecast, keeps today's", async () => {
@@ -438,6 +462,40 @@ describe("runWeatherStage — observed", () => {
     });
     // The recent row stays on historical_forecast until it ages past 6 days.
     expect((await weatherRows(recent))[0]?.source).toBe("historical_forecast");
+  });
+
+  it("applies the >6-days-old upgrade boundary exactly", async () => {
+    const seasonId = await seedSeason();
+    await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+    // Today (Melbourne) is 2026-07-13: a 2026-07-07 match is exactly 6 days
+    // old (not yet >6), a 2026-07-06 match is 7 days old (due its upgrade).
+    const sixDaysOld = await seedMatch({
+      seasonId,
+      date: "2026-07-07",
+      status: "Complete",
+      homePoints: 88,
+    });
+    const sevenDaysOld = await seedMatch({
+      seasonId,
+      date: "2026-07-06",
+      status: "Complete",
+      homePoints: 44,
+    });
+    for (const matchId of [sixDaysOld, sevenDaysOld]) {
+      await seedWeatherRow({
+        matchId,
+        kind: "observed",
+        source: "historical_forecast",
+        fetchedAt: "2026-07-08T02:00:00.000Z",
+      });
+    }
+
+    const { impl, calls } = stubFetch({ modelSuffixes: true });
+    await runWeatherStage(env, impl, NOW);
+
+    expect(calls).toHaveLength(1);
+    expect((await weatherRows(sixDaysOld))[0]?.source).toBe("historical_forecast");
+    expect((await weatherRows(sevenDaysOld))[0]?.source).toBe("era5_land+era5");
   });
 
   it("writes an observed row from the archive for an old completed match that missed the fast pass", async () => {
