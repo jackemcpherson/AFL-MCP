@@ -65,7 +65,8 @@ full pipeline.
   with `src/db/schema.sql`).
 - `src/sandbox/executor.ts` — Dynamic Worker + `DbProxy` RPC bridge.
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
-- `src/sync/upserts.ts` — All DB writes for the sync pipeline.
+- `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
+  weather stage writes `match_weather` itself from `src/weather/stage.ts`).
 - `src/sync/pav.ts` — PAV recalculation.
 - `src/db/schema.sql` — D1 schema (12 tables).
 

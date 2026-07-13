@@ -19,11 +19,19 @@
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
+import { aggregateWeatherWindow, extractHourlySeries } from "./aggregate";
 import {
-  aggregateWeatherWindow,
-  extractHourlySeries,
-  OPEN_METEO_HOURLY_VARIABLES,
-} from "./aggregate";
+  ARCHIVE_API,
+  FALLBACK_LOCAL_TIME,
+  FORECAST_API,
+  HISTORICAL_FORECAST_API,
+  MATCH_WEATHER_UPSERT,
+  OBSERVED_FINAL_SOURCE,
+  openMeteoUrl,
+  type WeatherKind,
+  type WeatherSource,
+  weatherMetricValues,
+} from "./openmeteo";
 
 /** Forecasts are first fetched when a match is at most this many days out. */
 const FORECAST_HORIZON_DAYS = 7;
@@ -38,13 +46,6 @@ const ERA5_LAG_DAYS = 6;
  * script's job); the needs-work queries drain any remainder hour by hour.
  */
 const MAX_FETCHES_PER_QUERY = 25;
-/** Fallback when a legacy row has no local_time; roughly an afternoon bounce. */
-const FALLBACK_LOCAL_TIME = "13:00:00";
-
-const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
-const HISTORICAL_FORECAST_API = "https://historical-forecast-api.open-meteo.com/v1/forecast";
-const ARCHIVE_API = "https://archive-api.open-meteo.com/v1/archive";
-const OBSERVED_FINAL_SOURCE = "era5_land+era5";
 
 interface CandidateRow {
   readonly match_id: number;
@@ -57,10 +58,10 @@ interface CandidateRow {
 
 interface WeatherJob {
   readonly candidate: CandidateRow;
-  readonly kind: "observed" | "forecast";
-  readonly source: string;
+  readonly kind: WeatherKind;
+  readonly source: WeatherSource;
   readonly apiBase: string;
-  readonly dualModel: boolean;
+  readonly isDualModel: boolean;
 }
 
 /** Joins matches to canonical-venue coordinates via `canonical_venue_id`. */
@@ -82,6 +83,8 @@ export async function runWeatherStage(env: Env, fetchImpl: typeof fetch, now: Da
     const cleaned = await cleanupCancelledWeather(env);
     const jobs = await selectNeedsWork(env, now);
     let written = 0;
+    // Sequential on purpose: one in-flight request at a time keeps the
+    // stage gentle on Open-Meteo's free tier (not a Promise.all candidate).
     for (const job of jobs) {
       await fetchAndStore(env, fetchImpl, job, now);
       written++;
@@ -91,7 +94,9 @@ export async function runWeatherStage(env: Env, fetchImpl: typeof fetch, now: Da
     }
   } catch (err) {
     // Fail-soft (#127): never block match-data sync on an Open-Meteo outage.
-    await logSync(env, "sync:weather", 0, describeError(err)).catch(() => undefined);
+    await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) =>
+      console.error("weather stage: failed to record sync_log row", logErr),
+    );
   }
 }
 
@@ -115,7 +120,7 @@ async function selectNeedsWork(env: Env, now: Date): Promise<WeatherJob[]> {
         kind: "forecast",
         source: "best_match",
         apiBase: FORECAST_API,
-        dualModel: false,
+        isDualModel: false,
       }),
     ),
     ...fastObserved.map(
@@ -124,7 +129,7 @@ async function selectNeedsWork(env: Env, now: Date): Promise<WeatherJob[]> {
         kind: "observed",
         source: "historical_forecast",
         apiBase: HISTORICAL_FORECAST_API,
-        dualModel: false,
+        isDualModel: false,
       }),
     ),
     ...finalObserved.map(
@@ -133,7 +138,7 @@ async function selectNeedsWork(env: Env, now: Date): Promise<WeatherJob[]> {
         kind: "observed",
         source: OBSERVED_FINAL_SOURCE,
         apiBase: ARCHIVE_API,
-        dualModel: true,
+        isDualModel: true,
       }),
     ),
   ];
@@ -247,7 +252,7 @@ async function fetchAndStore(
   job: WeatherJob,
   now: Date,
 ): Promise<void> {
-  const url = openMeteoUrl(job);
+  const url = openMeteoUrl(job.apiBase, job.candidate, job.isDualModel);
   const response = await fetchImpl(url);
   if (!response.ok) {
     throw new Error(`Open-Meteo ${response.status} for match ${job.candidate.match_id}`);
@@ -255,53 +260,15 @@ async function fetchAndStore(
   const series = extractHourlySeries(await response.json());
   const scheduledStart = `${job.candidate.date}T${job.candidate.local_time ?? FALLBACK_LOCAL_TIME}`;
   const metrics = aggregateWeatherWindow(series, scheduledStart);
-  await env.DB.prepare(
-    `INSERT INTO match_weather (match_id, kind, temp_c, precip_mm, precip_24h_prior_mm,
-       wind_speed_kmh, wind_gust_kmh, humidity_pct, source, fetched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (match_id, kind) DO UPDATE SET
-       temp_c = excluded.temp_c,
-       precip_mm = excluded.precip_mm,
-       precip_24h_prior_mm = excluded.precip_24h_prior_mm,
-       wind_speed_kmh = excluded.wind_speed_kmh,
-       wind_gust_kmh = excluded.wind_gust_kmh,
-       humidity_pct = excluded.humidity_pct,
-       source = excluded.source,
-       fetched_at = excluded.fetched_at`,
-  )
+  await env.DB.prepare(MATCH_WEATHER_UPSERT)
     .bind(
       job.candidate.match_id,
       job.kind,
-      metrics.tempC,
-      metrics.precipMm,
-      metrics.precip24hPriorMm,
-      metrics.windSpeedKmh,
-      metrics.windGustKmh,
-      metrics.humidityPct,
+      ...weatherMetricValues(metrics),
       job.source,
       now.toISOString(),
     )
     .run();
-}
-
-/**
- * Three-day request: the prior day covers the prior-24h precipitation
- * window and the day after keeps midnight-crossing match windows complete
- * (a 22:40 start needs 00:00 on the next day). `timezone=Australia/Melbourne`
- * always, because D1 match timestamps are Melbourne-local regardless of
- * venue (#126).
- */
-function openMeteoUrl(job: WeatherJob): string {
-  const params = new URLSearchParams({
-    latitude: String(job.candidate.latitude),
-    longitude: String(job.candidate.longitude),
-    hourly: OPEN_METEO_HOURLY_VARIABLES,
-    timezone: "Australia/Melbourne",
-    start_date: addDaysToIsoDate(job.candidate.date, -1),
-    end_date: addDaysToIsoDate(job.candidate.date, 1),
-  });
-  if (job.dualModel) params.set("models", "era5_land,era5");
-  return `${job.apiBase}?${params.toString()}`;
 }
 
 function describeError(err: unknown): string {

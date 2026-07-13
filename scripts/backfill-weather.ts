@@ -13,15 +13,22 @@
  *                 inspectable before apply.
  *   3. APPLY    — per-file `wrangler d1 execute afl-stats --remote`.
  *
- * Modes:
- *   --dry-run   Eligibility counts per competition/season plus a call
- *               estimate; fetches nothing, writes nothing.
- *   --verify    Post-apply checks: observed coverage per competition/season,
- *               value-range sanity, and a 30-row fresh-API spot-check.
+ * Modes (each phase is separately inspectable and abortable):
+ *   --dry-run        Eligibility counts per competition/season plus a call
+ *                    estimate; fetches nothing, writes nothing.
+ *   --fetch-only     Phase 1 only: populate the local cache, generate and
+ *                    apply nothing.
+ *   --generate-only  Phase 2 only: build SQL artifacts from the existing
+ *                    cache for inspection; fetch and apply nothing.
+ *   --verify         Post-apply checks: observed coverage per
+ *                    competition/season, value-range sanity, and a 30-row
+ *                    fresh-API spot-check.
  *
  * Eligibility: completed matches (status 'Complete', or legacy NULL status
- * with points) that have no observed row, excluding the placeholder venue
- * 17748; coordinates resolve through venues.canonical_venue_id.
+ * with points) that have no observed row and whose canonical venue has
+ * coordinates — the NULL-geodata exclusion subsumes the 'To Be Confirmed'
+ * placeholder venue (17748). Coordinates resolve through
+ * venues.canonical_venue_id.
  */
 import { execSync } from "node:child_process";
 import {
@@ -34,13 +41,19 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { addDaysToIsoDate } from "../src/lib/time";
 import {
   aggregateWeatherWindow,
   extractHourlySeries,
-  OPEN_METEO_HOURLY_VARIABLES,
   type WeatherMetrics,
 } from "../src/weather/aggregate";
+import {
+  ARCHIVE_API,
+  FALLBACK_LOCAL_TIME,
+  matchWeatherUpsertSql,
+  OBSERVED_FINAL_SOURCE,
+  openMeteoUrl,
+  weatherMetricValues,
+} from "../src/weather/openmeteo";
 
 const SQL_DIR = join(__dirname, "..", "data", "sql-weather");
 const CACHE_DIR = join(__dirname, "..", "data", "weather-cache");
@@ -48,11 +61,8 @@ mkdirSync(SQL_DIR, { recursive: true });
 mkdirSync(CACHE_DIR, { recursive: true });
 
 const BATCH_SIZE = 200;
-const ARCHIVE_API = "https://archive-api.open-meteo.com/v1/archive";
-const SOURCE = "era5_land+era5";
 const THROTTLE_MS = 350; // ~3 req/s
 const SPOT_CHECK_ROWS = 30;
-const FALLBACK_LOCAL_TIME = "13:00:00";
 
 // ── Helpers (backfill-lineups.ts pattern) ────────────────────────────
 
@@ -123,7 +133,6 @@ const ELIGIBILITY_SELECT = `
   LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
   WHERE (m.status = 'Complete' OR (m.status IS NULL AND m.home_points IS NOT NULL))
     AND w.match_id IS NULL
-    AND v.id <> 17748
     AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL`;
 
 function loadEligibleMatches(): EligibleMatch[] {
@@ -161,27 +170,12 @@ function cachePath(matchId: number): string {
   return join(CACHE_DIR, `${matchId}.json`);
 }
 
-function archiveUrl(latitude: number, longitude: number, date: string): string {
-  const params = new URLSearchParams({
-    latitude: String(latitude),
-    longitude: String(longitude),
-    hourly: OPEN_METEO_HOURLY_VARIABLES,
-    timezone: "Australia/Melbourne",
-    // Three-day window: prior day for precip_24h_prior_mm, next day so a
-    // late-night bounce's 3h window survives crossing midnight.
-    start_date: addDaysToIsoDate(date, -1),
-    end_date: addDaysToIsoDate(date, 1),
-    models: "era5_land,era5",
-  });
-  return `${ARCHIVE_API}?${params.toString()}`;
-}
-
 async function fetchArchivePayload(match: {
   latitude: number;
   longitude: number;
   date: string;
 }): Promise<unknown> {
-  const response = await fetch(archiveUrl(match.latitude, match.longitude, match.date));
+  const response = await fetch(openMeteoUrl(ARCHIVE_API, match, true));
   if (!response.ok) throw new Error(`Open-Meteo ${response.status}`);
   return response.json();
 }
@@ -231,17 +225,14 @@ function metricsFromCache(match: EligibleMatch): { metrics: WeatherMetrics; fetc
 }
 
 function upsertStatement(matchId: number, metrics: WeatherMetrics, fetchedAt: string): string {
-  return `INSERT INTO match_weather (match_id, kind, temp_c, precip_mm, precip_24h_prior_mm, wind_speed_kmh, wind_gust_kmh, humidity_pct, source, fetched_at)
-   VALUES (${matchId}, 'observed', ${escapeSQL(metrics.tempC)}, ${escapeSQL(metrics.precipMm)}, ${escapeSQL(metrics.precip24hPriorMm)}, ${escapeSQL(metrics.windSpeedKmh)}, ${escapeSQL(metrics.windGustKmh)}, ${escapeSQL(metrics.humidityPct)}, ${escapeSQL(SOURCE)}, ${escapeSQL(fetchedAt)})
-   ON CONFLICT (match_id, kind) DO UPDATE SET
-     temp_c = excluded.temp_c,
-     precip_mm = excluded.precip_mm,
-     precip_24h_prior_mm = excluded.precip_24h_prior_mm,
-     wind_speed_kmh = excluded.wind_speed_kmh,
-     wind_gust_kmh = excluded.wind_gust_kmh,
-     humidity_pct = excluded.humidity_pct,
-     source = excluded.source,
-     fetched_at = excluded.fetched_at`;
+  const values = [
+    String(matchId),
+    escapeSQL("observed"),
+    ...weatherMetricValues(metrics).map(escapeSQL),
+    escapeSQL(OBSERVED_FINAL_SOURCE),
+    escapeSQL(fetchedAt),
+  ].join(", ");
+  return matchWeatherUpsertSql(values);
 }
 
 function generatePhase(matches: EligibleMatch[]): number {
@@ -290,7 +281,6 @@ function verifyCoverage(): void {
      JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
      WHERE (m.status = 'Complete' OR (m.status IS NULL AND m.home_points IS NOT NULL))
-       AND v.id <> 17748
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
      GROUP BY c.code, s.year
      ORDER BY c.code, s.year`,
@@ -344,7 +334,7 @@ async function verifySpotCheck(): Promise<void> {
      JOIN matches m ON m.id = w.match_id
      JOIN venues v ON v.id = m.venue_id
      JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)
-     WHERE w.kind = 'observed' AND w.source = '${SOURCE}'
+     WHERE w.kind = 'observed' AND w.source = '${OBSERVED_FINAL_SOURCE}'
      ORDER BY RANDOM() LIMIT ${SPOT_CHECK_ROWS}`,
     z.object({
       id: z.number(),
@@ -396,6 +386,8 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const verify = args.includes("--verify");
+  const fetchOnly = args.includes("--fetch-only");
+  const generateOnly = args.includes("--generate-only");
 
   if (verify) {
     console.log("Weather backfill verification\n");
@@ -405,7 +397,14 @@ async function main() {
     return;
   }
 
-  console.log(`Weather backfill${dryRun ? " (dry run)" : ""}`);
+  const mode = dryRun
+    ? " (dry run)"
+    : fetchOnly
+      ? " (fetch only)"
+      : generateOnly
+        ? " (generate only)"
+        : "";
+  console.log(`Weather backfill${mode}`);
   console.log("Loading eligible matches from D1...");
   const matches = loadEligibleMatches();
   printEligibilitySummary(matches);
@@ -415,10 +414,22 @@ async function main() {
     return;
   }
 
-  await fetchPhase(matches);
+  if (!generateOnly) await fetchPhase(matches);
+  if (fetchOnly) {
+    console.log(
+      `\nFetch-only complete. Cache in ${CACHE_DIR}; next: --generate-only or a full run.`,
+    );
+    return;
+  }
   const files = generatePhase(matches);
   if (files === 0) {
     console.log("Nothing to apply.");
+    return;
+  }
+  if (generateOnly) {
+    console.log(
+      `\nGenerate-only complete. Inspect ${SQL_DIR}, then re-run without flags to apply.`,
+    );
     return;
   }
   console.log(`\nInspect the SQL under ${SQL_DIR} if desired; applying now.`);
@@ -426,4 +437,7 @@ async function main() {
   console.log("\nDone! Run with --verify to check coverage, ranges, and a spot sample.");
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -81,7 +81,8 @@ const WIND_GUST_KEYS = ["wind_gusts_10m", "wind_gusts_10m_era5_land", "wind_gust
  *
  * @param payload - Parsed JSON body from an Open-Meteo hourly endpoint.
  * @returns The five variable series aligned to the `hourly.time` axis.
- * @throws When the payload has no `hourly.time` array (e.g. an API error body).
+ * @throws When the payload does not match {@link OpenMeteoPayloadSchema}
+ *   (e.g. an API error body or a variable that is not a nullable-number array).
  */
 export function extractHourlySeries(payload: unknown): HourlySeries {
   const parsed = OpenMeteoPayloadSchema.safeParse(payload);
@@ -123,16 +124,16 @@ export function aggregateWeatherWindow(
   for (const [i, t] of series.time.entries()) index.set(t, i);
 
   const startHour = floorHour(scheduledStart);
-  const windowIndexes = hourOffsets(startHour, 0, MATCH_WINDOW_HOURS, index);
-  const priorIndexes = hourOffsets(startHour, -PRIOR_WINDOW_HOURS, PRIOR_WINDOW_HOURS, index);
+  const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index);
+  const priorWindow = windowIndexes(startHour, -PRIOR_WINDOW_HOURS, PRIOR_WINDOW_HOURS, index);
 
   return {
-    tempC: round(mean(pick(series.temperatureC, windowIndexes)), 1),
-    precipMm: round(sum(pick(series.precipitationMm, windowIndexes)), 2),
-    precip24hPriorMm: round(sum(pick(series.precipitationMm, priorIndexes)), 2),
-    windSpeedKmh: max(pick(series.windSpeedKmh, windowIndexes)),
-    windGustKmh: max(pick(series.windGustKmh, windowIndexes)),
-    humidityPct: round(mean(pick(series.humidityPct, windowIndexes)), 1),
+    tempC: round(mean(pick(series.temperatureC, matchWindow)), 1),
+    precipMm: round(sum(pick(series.precipitationMm, matchWindow)), 2),
+    precip24hPriorMm: round(sum(pick(series.precipitationMm, priorWindow)), 2),
+    windSpeedKmh: max(pick(series.windSpeedKmh, matchWindow)),
+    windGustKmh: max(pick(series.windGustKmh, matchWindow)),
+    humidityPct: round(mean(pick(series.humidityPct, matchWindow)), 1),
   };
 }
 
@@ -166,7 +167,8 @@ function formatHour(epochMs: number): string {
   return `${new Date(epochMs).toISOString().slice(0, 13)}:00`;
 }
 
-function hourOffsets(
+/** Series array indexes for the hours of a window that are present at all. */
+function windowIndexes(
   startEpochMs: number,
   offsetHours: number,
   count: number,
