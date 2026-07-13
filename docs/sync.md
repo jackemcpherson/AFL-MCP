@@ -66,6 +66,21 @@ endpoint iterates a year range):
 Errors at any fetch step are logged to `sync_log` with `rows_affected = 0` and
 the pipeline continues to the next `(competition, year)` pair.
 
+## Weather stage
+
+After the per-competition loop, top-of-hour passes run the weather stage
+(`src/weather/stage.ts`) inside the same operation lease — no new cron, no
+new lease. Needs-work queries drive everything: upcoming matches ≤7 days out
+get an Open-Meteo forecast row (refreshed daily, hourly on match day,
+overwritten in place); completed matches get an observed row fast-written
+from the Historical Forecast API, upgraded to `era5_land+era5` archive
+provenance once the match is >6 days old; stray rows for cancelled matches
+are deleted. Coordinates resolve through `venues.canonical_venue_id` and
+every call passes `timezone=Australia/Melbourne`. The stage fails soft: any
+error is recorded in `sync_log` (`type = 'sync:weather'`) without throwing,
+and the next hourly pass self-heals. The historical bulk load is
+`scripts/backfill-weather.ts`, not this stage.
+
 ## Backfill endpoint
 
 `POST /mcp/admin/backfill` exposes the same pipeline for one-shot historical

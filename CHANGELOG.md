@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-07-13
+
+### Added
+
+- **Weather data**: new `match_weather` table (one row per match per
+  `kind` — `observed` | `forecast`) with six numeric metrics over the
+  3-hour match window (`temp_c`, `precip_mm`, `precip_24h_prior_mm`,
+  `wind_speed_kmh`, `wind_gust_kmh`, `humidity_pct`), sourced from
+  Open-Meteo (ERA5-Land for temperature/humidity/wind, ERA5 for
+  precipitation; data CC-BY 4.0). Migration `0014_weather.sql` also
+  extends `venues` with `latitude`, `longitude`, `timezone`, `roof`, and
+  `canonical_venue_id`, seeded from `data/venue-geodata.csv` (106 venues,
+  12 alias groups canonicalised).
+- **Weather sync stage**: self-gated hourly stage inside the existing
+  cron pipeline/lease — forecasts fetched from 7 days out (daily refresh,
+  hourly on match day), observed rows written fast from the Historical
+  Forecast API then upgraded to `era5_land+era5` provenance once a match
+  is more than 6 days old. Fail-soft: errors land in `sync_log` and
+  self-heal on the next hourly pass. Capped at 25 fetches per pass.
+- **Weather backfill**: local `scripts/backfill-weather.ts`
+  (fetch-with-cache → generate SQL artifacts → apply), with `--dry-run`,
+  `--fetch-only`, `--generate-only`, and `--verify` (coverage, range
+  sanity, 30-row fresh-API spot-check). Eligible: completed matches
+  without an observed row, excluding unplaceable placeholder-venue rows.
+- **MCP schema exposure**: `match_weather` and venue-geodata documentation
+  in the `schema` tool, including coverage windows, a do-not-mix warning
+  for the frozen legacy `weather_temp_c`/`weather_type` columns (fryzigg
+  daily-max semantics, AFLM 2010–2025 only), and two example queries.
+
+Design record: wayfinder map #123; spec #138; research assets under
+`docs/` (`weather-source-research.md`, `era5-validation.md`,
+`venue-geodata-notes.md`, `tbc-venue-investigation.md`).
+
 ## [3.4.0] - 2026-07-12
 
 ### Added

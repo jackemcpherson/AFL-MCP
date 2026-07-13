@@ -29,3 +29,8 @@ data/export/
 data/sql/
 data/sql-*/
 .dev.vars
+data/weather-cache/
+
+# Agent tooling
+.codex/
+HANDOFF.md
