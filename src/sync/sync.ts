@@ -2,6 +2,7 @@ import type { CompetitionCode, Match } from "fitzroy";
 import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
+import { runWeatherStage } from "../weather/stage";
 import { acquireOperationLease, releaseOperationLease } from "./lease";
 import { logSync } from "./log";
 import { type PavCompetition, recalculatePav } from "./pav";
@@ -92,6 +93,13 @@ export async function sync(
       for (const season of seasons) {
         results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
       }
+    }
+
+    // Weather rides the same lease as match data but self-gates to
+    // top-of-hour passes so the 5-minute cron adds no wasted Open-Meteo
+    // calls (#138). Fail-soft: the stage never throws.
+    if (now.getUTCMinutes() === 0) {
+      await runWeatherStage(env, fetch, now);
     }
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any

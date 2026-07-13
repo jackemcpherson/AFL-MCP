@@ -2,6 +2,7 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, beforeEach } from "vitest";
 
 const TABLES_TO_WIPE = [
+  "match_weather",
   "match_lineups",
   "player_match_stats",
   "player_season_pav",
