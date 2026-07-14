@@ -206,6 +206,13 @@ export const ANALYTICS_COLUMNS = {
     "source",
     "fetched_at",
   ],
+  match_predictions: [
+    "match_id",
+    "home_win_prob",
+    "predicted_margin",
+    "model_version",
+    "generated_at",
+  ],
 } as const;
 
 const CORE = {
@@ -236,6 +243,22 @@ const MATCH_WEATHER_BASE = {
   source: ["open-meteo"],
   notes: [],
 } as const;
+
+// Prediction semantics (home perspective, overwrite-in-place, tipper-written)
+// are documented once in the schema tool notes; per-leaf notes stay minimal.
+const MATCH_PREDICTIONS_AFLM = {
+  range: "2026..current",
+  expected: "partial",
+  source: ["tipper"],
+  notes: ["Only rounds tipper has published."],
+} as const satisfies CoverageTableExpectation;
+
+const MATCH_PREDICTIONS_ABSENT = {
+  range: "all",
+  expected: "absent",
+  source: ["tipper"],
+  notes: [],
+} as const satisfies CoverageTableExpectation;
 
 const AFLM_STAT_OVERRIDES = {
   brownlow_votes: "partial",
@@ -328,9 +351,12 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2015..current",
       expected: "partial",
-      notes: ["Known historical round gaps; absence may mean not yet published."],
+      // Absence semantics live in the schema tool notes (budget); the gap
+      // fact itself stays here (coverage design decision 37).
+      notes: ["Known historical round gaps."],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "1990..current" },
+    match_predictions: MATCH_PREDICTIONS_AFLM,
   },
   AFLW: {
     competitions: CORE,
@@ -355,9 +381,10 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2017..current",
       expected: "partial",
-      notes: ["Absence may mean not yet published."],
+      notes: [],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2017..current" },
+    match_predictions: MATCH_PREDICTIONS_ABSENT,
   },
   VFL: {
     competitions: CORE,
@@ -387,9 +414,10 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2021..current",
       expected: "best-effort",
-      notes: ["Absence may mean not yet published."],
+      notes: [],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
+    match_predictions: MATCH_PREDICTIONS_ABSENT,
   },
   VFLW: {
     competitions: CORE,
@@ -419,9 +447,10 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2021..current",
       expected: "best-effort",
-      notes: ["Absence may mean not yet published."],
+      notes: [],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
+    match_predictions: MATCH_PREDICTIONS_ABSENT,
   },
 } as const satisfies Record<CoverageCompetition, Record<TableName, CoverageTableExpectation>>;
 
@@ -637,7 +666,7 @@ export async function coverageContract(options: CoverageOptions, env?: Env) {
       if (!columnRanges) continue;
       const staticLeaf = Object.values(columnRanges)[0];
       if (!staticLeaf) continue;
-      const notes = ["Measured observation; not a historical guarantee."];
+      const notes = ["Measured; not a guarantee."];
       if (value.rows === 0) notes.push("Zero rows cannot establish field absence.");
       columnRanges[String(options.season)] = {
         expected: staticLeaf.expected,
@@ -660,7 +689,7 @@ export async function coverageContract(options: CoverageOptions, env?: Env) {
         observed: value,
         source: staticLeaf.source,
         as_of: observed.measured_at,
-        notes: ["Measured observation; not a historical guarantee."],
+        notes: ["Measured; not a guarantee."],
       };
     }
   }
