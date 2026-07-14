@@ -238,6 +238,18 @@ CREATE TABLE match_weather (
   PRIMARY KEY (match_id, kind)
 );
 
+-- Match predictions from the tipper model (migration 0015). One row per
+-- match, overwritten on regeneration. Written by tipper via the D1 REST
+-- API; this Worker only reads it.
+CREATE TABLE match_predictions (
+  match_id INTEGER NOT NULL REFERENCES matches(id),
+  home_win_prob REAL NOT NULL,        -- 0..1, home team's win probability
+  predicted_margin REAL NOT NULL,     -- positive = home favoured, one decimal
+  model_version TEXT NOT NULL,        -- tipper config id, e.g. 'predha-080 (2641f46f)'
+  generated_at TEXT NOT NULL,
+  PRIMARY KEY (match_id)
+);
+
 CREATE TABLE sync_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp TEXT NOT NULL,

@@ -5,7 +5,7 @@ migrations in [`src/db/migrations/`](../src/db/migrations). The `schema` MCP
 tool exposes a hardcoded variant of this for clients
 (`src/mcp/tools/schema.ts`); keep both in sync when adding columns.
 
-The D1 database (`afl-stats`) has 12 tables and covers four competitions:
+The D1 database (`afl-stats`) has 13 tables and covers four competitions:
 **AFLM**, **AFLW**, **VFL**, **VFLW**. Always filter queries by competition
 (join through `seasons → competitions`, then `WHERE c.code = ?`) — without
 the filter, results mix competitions silently because team rows with the
@@ -129,6 +129,17 @@ traded mid-season has separate rows per club.
 - Available for **AFLM 1998+ and AFLW 2017+ only**. VFL/VFLW have no PAV
   rows because the AFL API doesn't populate the formula's inputs. Use
   `LEFT JOIN` when combining with `player_match_stats`.
+
+### `match_predictions`
+Tipper model predictions, one row per match (PK `match_id`), overwritten on
+regeneration — only the latest prediction is kept, no history.
+- `home_win_prob` — 0..1, the home team's win probability.
+- `predicted_margin` — points, one decimal; positive = home favoured.
+- `model_version` — tipper config id (e.g. `predha-080 (2641f46f)`).
+- Written by tipper via the D1 REST API (tipper#28); this Worker only reads
+  it.
+- Coverage starts 2026 and is sparse — rows exist only for rounds tipper has
+  published. Use `LEFT JOIN` and treat absence as not-published.
 
 ## Coverage contract
 

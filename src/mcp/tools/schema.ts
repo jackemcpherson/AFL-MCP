@@ -25,6 +25,7 @@ const LEGACY_COVERAGE_PATHS = [
   ["player_match_stats.one_percenters", "player_match_stats", "one_percenters"],
   ["player_season_pav.*", "player_season_pav", "*"],
   ["match_weather.*", "match_weather", "match_id"],
+  ["match_predictions.*", "match_predictions", "match_id"],
   ["venues.geodata", "venues", "latitude"],
 ] as const;
 
@@ -36,9 +37,7 @@ function legacyCoverageEntry(ranges: Record<string, { readonly notes: readonly s
   return {
     from: parseBound(fromRaw),
     to: parseBound(toRaw),
-    notes:
-      entry?.[1].notes.join(" ") ||
-      "Deprecated compatibility summary; use database.coverage_contract for typed expectations.",
+    notes: entry?.[1].notes.join(" ") || "See database.coverage_contract.",
   };
 }
 
@@ -181,6 +180,13 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "fetched_at TEXT (UTC ISO 8601),",
           "PRIMARY KEY (match_id, kind)",
         ].join(" "),
+        match_predictions: [
+          "match_id INTEGER PRIMARY KEY REFERENCES matches(id),",
+          "home_win_prob REAL (0..1, home team's win probability),",
+          "predicted_margin REAL (points, one decimal; positive = home favoured),",
+          "model_version TEXT (tipper config id, e.g. 'predha-080 (2641f46f)'),",
+          "generated_at TEXT (UTC ISO 8601)",
+        ].join(" "),
       },
       notes: [
         // Multi-competition rules — read first
@@ -222,6 +228,8 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "DO NOT MIX legacy matches.weather_temp_c/weather_type with match_weather: they are a frozen fryzigg record (AFLM 2010-2025 only) and weather_temp_c is a DAILY-MAX, not a match-window mean. Use match_weather for weather analysis; the legacy columns remain only as the historical label record (e.g. ROOF_CLOSED).",
         "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground (self for canonical rows). Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id).",
         "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
+        // Predictions
+        "match_predictions: one row per match from the tipper model, overwritten on regeneration (latest only, no history). home_win_prob (0..1) and predicted_margin (positive = home favoured) are from the HOME team's perspective; model_version is the tipper config id. Written by tipper via the D1 REST API, not this Worker. Coverage starts 2026 and is sparse — LEFT JOIN and treat absence as not-published.",
         // Lineups
         "match_lineups represents the post-change team — the players who actually took the field. Treat absence as not-yet-published rather than canonical.",
         "match_lineups is_emergency=1 means the player is named as an emergency and may not play.",
@@ -384,6 +392,20 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "WHERE c.code = ? AND m.home_points IS NOT NULL",
           "  AND w.precip_mm >= 2.0 AND cv.roof = 'none'",
           "ORDER BY w.precip_mm DESC",
+        ].join("\n"),
+        round_predictions: [
+          "-- Model predictions for a round, with team names.",
+          "-- Bind: competition, season year, round number",
+          "SELECT m.date, m.round, ht.name AS home_team, at.name AS away_team,",
+          "  mp.home_win_prob, mp.predicted_margin, mp.model_version",
+          "FROM matches m",
+          "JOIN seasons s ON m.season_id = s.id",
+          "JOIN competitions c ON s.competition_id = c.id",
+          "JOIN teams ht ON m.home_team_id = ht.id",
+          "JOIN teams at ON m.away_team_id = at.id",
+          "LEFT JOIN match_predictions mp ON mp.match_id = m.id",
+          "WHERE c.code = ? AND s.year = ? AND m.round_number = ?",
+          "ORDER BY m.date",
         ].join("\n"),
         ladder: [
           "-- Ladder for a season (regular season only). Works for any competition.",

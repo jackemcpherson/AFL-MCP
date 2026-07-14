@@ -68,7 +68,7 @@ full pipeline.
 - `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
   weather stage writes `match_weather` itself from `src/weather/stage.ts`).
 - `src/sync/pav.ts` — PAV recalculation.
-- `src/db/schema.sql` — D1 schema (12 tables).
+- `src/db/schema.sql` — D1 schema (13 tables).
 
 ## Style-Guide Exception
 
