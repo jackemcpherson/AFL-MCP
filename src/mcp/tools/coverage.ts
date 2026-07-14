@@ -351,8 +351,9 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2015..current",
       expected: "partial",
-      // Absence semantics documented once in the schema tool notes (budget).
-      notes: [],
+      // Absence semantics live in the schema tool notes (budget); the gap
+      // fact itself stays here (coverage design decision 37).
+      notes: ["Known historical round gaps."],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "1990..current" },
     match_predictions: MATCH_PREDICTIONS_AFLM,
