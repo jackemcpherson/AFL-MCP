@@ -1,4 +1,13 @@
-import type { CompetitionCode, Lineup, LineupPlayer, Match, PlayerStats } from "fitzroy";
+import {
+  type CompetitionCode,
+  type Lineup,
+  type LineupPlayer,
+  type Match,
+  type PlayerStats,
+  roundAbbreviation,
+  roundLabel,
+  roundTypeLabel,
+} from "fitzroy";
 import { normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
@@ -65,47 +74,6 @@ export interface MatchUpsertContext {
   readonly seasonId: number;
   readonly teamMap: Map<string, number>;
   readonly venueMap: Map<string, number>;
-}
-
-/**
- * Long-form round label, mirroring R fitzRoy's `round.name` from the AFL API
- * (e.g. "Round 1", "Opening Round", "Wildcard", "Finals Week 1",
- * "Grand Final"). Falls back to a synthesised label when fitzroy's
- * `roundName` is null (non-AFL-API sources).
- */
-function deriveRound(m: Match): string {
-  if (m.roundName) return m.roundName;
-  if (m.roundNumber === 0) return "Opening Round";
-  if (m.roundType === "Finals") return `F${m.roundNumber}`;
-  return `Round ${m.roundNumber}`;
-}
-
-/**
- * Short-form round code, mirroring R fitzRoy's `round.abbreviation` from the
- * AFL API. Returns the AFL's standard short codes ("OR", "Rd N", "WC",
- * "FW1", "SF", "PF", "GF"); falls back to synthesised codes when
- * `roundName` is null.
- */
-function deriveRoundAbbreviation(m: Match): string {
-  const name = m.roundName;
-  if (name) {
-    if (name === "Opening Round") return "OR";
-    if (name === "Wildcard") return "WC";
-    if (name === "Finals Week 1") return "FW1";
-    if (name === "Semi Finals") return "SF";
-    if (name === "Preliminary Finals") return "PF";
-    if (name === "Grand Final") return "GF";
-    const m1 = /^Round (\d+)$/.exec(name);
-    if (m1) return `Rd ${m1[1]}`;
-  }
-  if (m.roundNumber === 0) return "OR";
-  if (m.roundType === "Finals") return `F${m.roundNumber}`;
-  return `Rd ${m.roundNumber}`;
-}
-
-function deriveRoundType(roundType: string): string {
-  if (roundType === "HomeAndAway") return "Regular";
-  return roundType;
 }
 
 /** Union players from stats + lineups, deduped by `playerId`. */
@@ -446,9 +414,17 @@ export const MATCH_COLUMNS = [
   { name: "external_afl_id", kind: "key", value: (r) => r.m.matchId },
   { name: "season_id", kind: "key", value: (r) => r.seasonId },
   { name: "round_number", kind: "replace", value: (r) => r.m.roundNumber },
-  { name: "round_type", kind: "replace", value: (r) => deriveRoundType(r.m.roundType) },
-  { name: "round", kind: "replace", value: (r) => deriveRound(r.m) },
-  { name: "round_abbreviation", kind: "replace", value: (r) => deriveRoundAbbreviation(r.m) },
+  { name: "round_type", kind: "replace", value: (r) => roundTypeLabel(r.m.roundType) },
+  {
+    name: "round",
+    kind: "replace",
+    value: (r) => roundLabel(r.m.roundNumber, r.m.roundName, r.m.roundType),
+  },
+  {
+    name: "round_abbreviation",
+    kind: "replace",
+    value: (r) => roundAbbreviation(r.m.roundNumber, r.m.roundName, r.m.roundType),
+  },
   { name: "date", kind: "key", value: (r) => r.dateStr },
   { name: "local_time", kind: "replace", value: (r) => r.localTime },
   { name: "venue_id", kind: "coalesce", value: (r) => r.venueId },

@@ -150,11 +150,18 @@ date, and expands grouped fields to real column names. The legacy
 `column_coverage` object is a generated, deprecated compatibility alias for
 one release.
 
+Call `schema` with one `competition` and nothing else to get the same static
+schema filtered to that competition (its `competitions` entry and
+`coverage_contract` subtree; tables and notes are competition-agnostic and
+unchanged).
+
 Call `schema` with `includeObserved: true`, one `competition`, and one integer
 `season` to overlay a bounded measurement. Stats, weather, PAV, and lineup
 presence use separate indexed aggregates; successful results are cached for
 15 minutes. A zero-row observation does not prove absence. Invalid or broad
-requests are rejected before D1 access.
+requests are rejected before D1 access with a single error stating the full
+parameter contract (no params | competition alone | competition + season +
+includeObserved:true).
 
 ## Operational
 

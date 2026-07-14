@@ -211,7 +211,29 @@ describe("handleMcpRequest", () => {
     );
     const json = await parseJson(res);
     expect(json.result?.isError).toBe(true);
-    expect(json.result?.content?.[0]?.text).toContain("requires competition and season");
+    expect(json.result?.content?.[0]?.text).toBe(
+      "Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).",
+    );
+  });
+
+  it("returns a competition-filtered base schema for competition alone", async () => {
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 53,
+        method: "tools/call",
+        params: { name: "schema", arguments: { competition: "AFLM" } },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    const json = await parseJson(res);
+    expect(json.result?.isError).toBeFalsy();
+    const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
+    expect(Object.keys(schema.database.coverage_contract.by_competition)).toEqual(["AFLM"]);
+    expect(Object.keys(schema.database.competitions)).toEqual(["AFLM"]);
+    expect(schema.database.tables).toHaveProperty("matches");
+    expect(schema.database.notes.length).toBeGreaterThan(0);
   });
 
   it("returns a bounded observed season overlay through the schema tool", async () => {

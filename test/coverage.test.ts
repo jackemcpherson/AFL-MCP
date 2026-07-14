@@ -7,7 +7,7 @@ import {
   observeCoverage,
 } from "../src/mcp/tools/coverage";
 import { getSchemaInfo } from "../src/mcp/tools/schema";
-import { SchemaToolRequestSchema } from "../src/mcp/validation";
+import { SCHEMA_TOOL_CONTRACT, SchemaToolRequestSchema } from "../src/mcp/validation";
 import type { Env } from "../src/types";
 
 function fakeCache() {
@@ -116,6 +116,29 @@ describe("coverage contract", () => {
     });
   });
 
+  it("filters the base schema to one competition when competition is passed alone", async () => {
+    const full = await getSchemaInfo();
+    const filtered = await getSchemaInfo({ competition: "AFLW" });
+
+    expect(Object.keys(filtered.database.competitions)).toEqual(["AFLW"]);
+    expect(Object.keys(filtered.database.coverage_contract.by_competition)).toEqual(["AFLW"]);
+    expect(filtered.database.coverage_contract.version).toBe(1);
+    // Tables, notes, and join examples are competition-agnostic and stay.
+    expect(filtered.database.tables).toEqual(full.database.tables);
+    expect(filtered.database.notes).toEqual(full.database.notes);
+    expect(filtered.database.common_joins).toEqual(full.database.common_joins);
+    // Filtering only ever shrinks the payload.
+    expect(JSON.stringify(filtered).length).toBeLessThan(JSON.stringify(full).length);
+    // The no-arg response is unaffected by the filtering path.
+    expect(Object.keys(full.database.coverage_contract.by_competition)).toEqual([
+      "AFLM",
+      "AFLW",
+      "VFL",
+      "VFLW",
+    ]);
+    expect(Object.keys(full.database.competitions)).toEqual(["AFLM", "AFLW", "VFL", "VFLW"]);
+  });
+
   it("keeps a fully observed schema response below 128 KiB", async () => {
     const { env } = observationEnv();
     const schema = await getSchemaInfo(
@@ -127,6 +150,7 @@ describe("coverage contract", () => {
 
   it("validates observed bounds before database access", () => {
     expect(SchemaToolRequestSchema.safeParse({}).success).toBe(true);
+    expect(SchemaToolRequestSchema.safeParse({ competition: "AFLM" }).success).toBe(true);
     expect(
       SchemaToolRequestSchema.safeParse({
         includeObserved: true,
@@ -143,6 +167,23 @@ describe("coverage contract", () => {
       { unknown: true },
     ])
       expect(SchemaToolRequestSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("returns the full parameter contract as the single message for every invalid combination", () => {
+    for (const invalid of [
+      { season: 2026 },
+      { competition: "AFLM", season: 2026 },
+      { includeObserved: false, competition: "AFLM", season: 2026 },
+      { includeObserved: true },
+      { includeObserved: true, competition: "AFLM" },
+      { includeObserved: true, season: 2026 },
+    ]) {
+      const result = SchemaToolRequestSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe(SCHEMA_TOOL_CONTRACT);
+      }
+    }
   });
 
   it("runs separate bounded aggregate statements and caches successful results for 15 minutes", async () => {

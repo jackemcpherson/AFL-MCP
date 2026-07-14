@@ -22,7 +22,22 @@ export const COMPETITION_CODE_VALUES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
 const COVERAGE_START_YEAR = { AFLM: 1990, AFLW: 2017, VFL: 2021, VFLW: 2021 } as const;
 
-/** Optional arguments accepted by the existing schema tool. */
+/**
+ * The schema tool's complete parameter contract, returned verbatim for every
+ * invalid parameter combination so one error names all valid call shapes
+ * (issue #141: the previous per-branch messages chained into a two-error loop).
+ */
+export const SCHEMA_TOOL_CONTRACT =
+  "Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).";
+
+/**
+ * Optional arguments accepted by the existing schema tool.
+ *
+ * Valid shapes: no params (full schema); `competition` alone
+ * (competition-filtered schema); `competition` + `season` +
+ * `includeObserved: true` (measured coverage). Anything else fails with
+ * {@link SCHEMA_TOOL_CONTRACT}.
+ */
 export const SchemaToolRequestSchema = z
   .object({
     includeObserved: z.boolean().optional().default(false),
@@ -32,19 +47,15 @@ export const SchemaToolRequestSchema = z
   .strict()
   .superRefine((value, context) => {
     if (!value.includeObserved) {
-      if (value.competition !== undefined || value.season !== undefined) {
-        context.addIssue({
-          code: "custom",
-          message: "competition and season require includeObserved=true",
-        });
+      // `competition` alone filters the base schema; `season` is only
+      // meaningful for measured coverage, which needs the full trio.
+      if (value.season !== undefined) {
+        context.addIssue({ code: "custom", message: SCHEMA_TOOL_CONTRACT });
       }
       return;
     }
     if (value.competition === undefined || value.season === undefined) {
-      context.addIssue({
-        code: "custom",
-        message: "observed coverage requires competition and season",
-      });
+      context.addIssue({ code: "custom", message: SCHEMA_TOOL_CONTRACT });
       return;
     }
     const currentMelbourneYear = Number(

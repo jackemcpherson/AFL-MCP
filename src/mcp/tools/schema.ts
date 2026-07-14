@@ -1,5 +1,7 @@
 import type { Env } from "../../types";
 import {
+  COVERAGE_COMPETITIONS,
+  type CoverageCompetition,
   type CoverageOptions,
   competitionYears,
   coverageContract,
@@ -41,35 +43,62 @@ function legacyCoverageEntry(ranges: Record<string, { readonly notes: readonly s
   };
 }
 
-/** Return the public database contract, optionally including one bounded observation. */
+const COMPETITION_NAMES = {
+  AFLM: "AFL Men's",
+  AFLW: "AFL Women's",
+  VFL: "Victorian Football League",
+  VFLW: "VFL Women's",
+} as const;
+
+interface CompetitionSummary {
+  readonly name: string;
+  readonly years: string;
+  readonly coverage: ReturnType<typeof legacyCompetitionCoverage>;
+}
+
+function competitionSummaries<C extends CoverageCompetition>(
+  competitions: readonly C[],
+): Record<C, CompetitionSummary> {
+  const summaries = {} as Record<C, CompetitionSummary>;
+  for (const code of competitions) {
+    summaries[code] = {
+      name: COMPETITION_NAMES[code],
+      years: competitionYears(code),
+      coverage: legacyCompetitionCoverage(code),
+    };
+  }
+  return summaries;
+}
+
+/**
+ * Return the public database contract.
+ *
+ * Three shapes, matching the schema tool's parameter contract:
+ * - No options: the full schema for all four competitions.
+ * - `competition` alone: the base schema filtered to that competition —
+ *   `database.competitions` and `coverage_contract.by_competition` contain
+ *   only that competition; tables, notes, and join examples are unchanged.
+ * - `competition` + `season` + `includeObserved: true`: the full schema with
+ *   one bounded competition-season observation overlaid.
+ *
+ * @param options - Validated options from the schema tool boundary.
+ * @param env - Worker environment; required only for observed coverage.
+ */
 export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
   const coverage = await coverageContract(options, env);
+  // `competition` without includeObserved filters the base schema (#141).
+  const baseFilter = !options.includeObserved && options.competition ? options.competition : null;
+  const coverageResponse = baseFilter
+    ? {
+        version: coverage.version,
+        by_competition: { [baseFilter]: coverage.by_competition[baseFilter] },
+      }
+    : coverage;
   return {
     database: {
       engine: "SQLite (Cloudflare D1)",
-      competitions: {
-        AFLM: {
-          name: "AFL Men's",
-          years: competitionYears("AFLM"),
-          coverage: legacyCompetitionCoverage("AFLM"),
-        },
-        AFLW: {
-          name: "AFL Women's",
-          years: competitionYears("AFLW"),
-          coverage: legacyCompetitionCoverage("AFLW"),
-        },
-        VFL: {
-          name: "Victorian Football League",
-          years: competitionYears("VFL"),
-          coverage: legacyCompetitionCoverage("VFL"),
-        },
-        VFLW: {
-          name: "VFL Women's",
-          years: competitionYears("VFLW"),
-          coverage: legacyCompetitionCoverage("VFLW"),
-        },
-      },
-      coverage_contract: coverage,
+      competitions: competitionSummaries(baseFilter ? [baseFilter] : COVERAGE_COMPETITIONS),
+      coverage_contract: coverageResponse,
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT (AFLM/AFLW/VFL/VFLW), name TEXT",
         seasons:

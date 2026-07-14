@@ -23,13 +23,27 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "schema",
     description:
-      "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code.",
+      "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code. Valid calls: no params (full schema); competition alone (schema filtered to that competition); competition + season + includeObserved:true (measured coverage for that competition-season). Any other combination is an error.",
     inputSchema: {
       type: "object",
       properties: {
-        includeObserved: { type: "boolean", default: false },
-        competition: { type: "string", enum: [...COMPETITION_CODES] },
-        season: { type: "integer" },
+        includeObserved: {
+          type: "boolean",
+          default: false,
+          description:
+            "Overlay measured coverage for one competition-season. Requires both competition and season.",
+        },
+        competition: {
+          type: "string",
+          enum: [...COMPETITION_CODES],
+          description:
+            "Alone: filter the schema response to this competition. With season + includeObserved:true: the competition to measure.",
+        },
+        season: {
+          type: "integer",
+          description:
+            "Season year to measure. Only valid together with competition and includeObserved:true.",
+        },
       },
       additionalProperties: false,
     },

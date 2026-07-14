@@ -219,44 +219,6 @@ function stageFryzigg(frame: DataFrame, players: DbPlayer[]): string[] {
 
 // ── Stage 2: AFL Tables all-time team lists ─────────────────────────
 
-/** Direct fetch + parse for teams where fitzroy's slug map is wrong (Brisbane Lions: brisbanel.html, not brisbane.html). */
-const SLUG_OVERRIDES: Record<string, string> = {
-  "Brisbane Lions": "brisbanel",
-};
-
-interface ParsedListEntry {
-  surname: string;
-  givenName: string;
-  dateOfBirth: string | null;
-  debutYear: number | null;
-}
-
-async function fetchPlayerListDirect(slug: string): Promise<ParsedListEntry[]> {
-  const url = `https://afltables.com/afl/stats/alltime/${slug}.html`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`direct fetch ${slug} ${resp.status}`);
-  const html = await resp.text();
-  const rows: ParsedListEntry[] = [];
-  const rowRe =
-    /<a href="\.\.\/players\/[^"]+">([^<,]+),\s*([^<]+)<\/a><\/td>(?:<td[^>]*>([^<]*)<\/td>)(?:<td[^>]*>[^<]*<\/td>){4}\s*<td[^>]*>([^<]*)<\/td>/g;
-  let m: RegExpExecArray | null = rowRe.exec(html);
-  while (m !== null) {
-    const surname = (m[1] ?? "").trim();
-    const givenName = (m[2] ?? "").trim();
-    const dob = (m[3] ?? "").trim();
-    const seasons = (m[4] ?? "").trim();
-    const debutMatch = seasons.match(/(\d{4})/);
-    rows.push({
-      surname,
-      givenName,
-      dateOfBirth: /^\d{4}-\d{2}-\d{2}$/.test(dob) ? dob : null,
-      debutYear: debutMatch?.[1] ? Number(debutMatch[1]) : null,
-    });
-    m = rowRe.exec(html);
-  }
-  return rows;
-}
-
 async function stageAflTables(startYear: number, endYear: number): Promise<string[]> {
   console.log("Stage 2 (AFL Tables): loading NULL-DOB players with club stints from D1...");
   const stints = queryD1<DbPlayerStint>(
@@ -288,30 +250,14 @@ async function stageAflTables(startYear: number, endYear: number): Promise<strin
 
   for (const [team, teamStints] of [...byTeam.entries()].sort()) {
     const canonical = normaliseTeamName(team);
-    let roster: ParsedListEntry[];
-    const slugOverride = SLUG_OVERRIDES[canonical];
-    if (slugOverride) {
-      try {
-        roster = await fetchPlayerListDirect(slugOverride);
-      } catch (e) {
-        console.log(`  ${team}: direct fetch FAILED: ${(e as Error).message}`);
-        continue;
-      }
-    } else {
-      const listResult = await client.fetchPlayerList(canonical);
-      if (!listResult.success) {
-        console.log(
-          `  ${team} (-> ${canonical}): fetchPlayerList FAILED: ${listResult.error.message}`,
-        );
-        continue;
-      }
-      roster = listResult.data.map((r) => ({
-        surname: r.surname,
-        givenName: r.givenName,
-        dateOfBirth: r.dateOfBirth,
-        debutYear: r.debutYear,
-      }));
+    const listResult = await client.fetchPlayerList(canonical);
+    if (!listResult.success) {
+      console.log(
+        `  ${team} (-> ${canonical}): fetchPlayerList FAILED: ${listResult.error.message}`,
+      );
+      continue;
     }
+    const roster = listResult.data;
     const byName = new Map<string, typeof roster>();
     for (const r of roster) {
       const key = `${normalizeName(r.surname)}|${normalizeName(r.givenName)}`;

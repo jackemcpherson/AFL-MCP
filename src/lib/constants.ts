@@ -1,13 +1,22 @@
 /**
  * Canonical team-name aliases applied during ingest by `normaliseTeam`.
  *
- * Kept global (not per-competition) on purpose. Two distinct blocks:
+ * NOT deletable despite fitzroy canonicalising upstream since 2.2.0
+ * (re-verified against 3.4.0's `normaliseTeamName` for issue #107):
+ * fitzroy's canonical set differs from this database's canonical names
+ * for five clubs — fitzroy emits "Adelaide Crows", "Geelong Cats",
+ * "Gold Coast Suns", "Sydney Swans", and "West Coast Eagles", while the
+ * `teams` table stores "Adelaide", "Geelong", "Gold Coast", "Sydney",
+ * and "West Coast". Those entries do live work on every sync; removing
+ * them would split each club into a novel ghost team.
+ *
+ * Kept global (not per-competition) on purpose. Remaining entries:
  *
  * 1. AFL Men's historical renames and casing/punctuation variants
- *    (Brisbane Bears → Brisbane Lions, Footscray → Western Bulldogs, etc.).
- *    Fitzroy v2.1 returns canonical names for AFLW/VFL/VFLW (verified at
- *    the AFL API level for 2017+ AFLW and 2021+ VFL/VFLW), so applying
- *    this map to those competitions is a no-op for fitzroy-sourced data.
+ *    (Brisbane Bears → Brisbane Lions, Footscray → Western Bulldogs,
+ *    etc.). Redundant for fitzroy-sourced data (fitzroy folds these
+ *    aliases into its canonical names before we see them) but retained
+ *    for non-fitzroy inputs and as regression guards.
  *
  * 2. Sir Doug Nicholls Round indigenous club names. From fitzroy 2.2.0
  *    onward these are canonicalised upstream, so the entries here are

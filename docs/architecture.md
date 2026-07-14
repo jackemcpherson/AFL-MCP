@@ -11,10 +11,16 @@ parameter on the tool surfaces the dimension to the LLM as a hint (the SQL
 must still filter explicitly) and is recorded for usage telemetry.
 
 The existing `schema` tool also accepts optional `includeObserved`,
-`competition`, and `season` arguments. Its default response is static and
-read-free. An observed request is restricted to one competition-season,
-runs separate indexed D1 aggregates for stats, weather, PAV, and lineups, and
-caches successful output for 15 minutes. This does not add a fourth tool.
+`competition`, and `season` arguments in exactly three shapes: no arguments
+(the full static, read-free schema); `competition` alone (the same base
+schema filtered to that competition's `competitions` entry and
+`coverage_contract` subtree — tables and notes are competition-agnostic and
+stay); or `competition` + `season` + `includeObserved: true` (a bounded
+observed request). Any other combination is rejected with a single error
+stating that full contract. An observed request is restricted to one
+competition-season, runs separate indexed D1 aggregates for stats, weather,
+PAV, and lineups, and caches successful output for 15 minutes. This does not
+add a fourth tool.
 
 ## Components
 
