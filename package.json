@@ -12,18 +12,18 @@
     "db:migrate": "wrangler d1 migrations apply afl-stats"
   },
   "dependencies": {
-    "fitzroy": "^3.4.0",
+    "fitzroy": "^3.5.0",
     "zod": "^4.4.3"
   },
   "overrides": {
     "undici": ">=7.28.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.9",
-    "@cloudflare/vitest-pool-workers": "^0.16.3",
+    "@biomejs/biome": "^2.5.4",
+    "@cloudflare/vitest-pool-workers": "^0.18.5",
     "@cloudflare/workers-types": "^4.20260418.1",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.4",
-    "wrangler": "^4.0.0"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.111.0"
   }
 }
