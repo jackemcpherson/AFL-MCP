@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-07-15
+
+### Added
+
+- **Match predictions**: new `match_predictions` table (migration
+  `0015_match_predictions.sql`) — one row per match, PK `match_id`,
+  overwritten on regeneration (latest prediction only, no history).
+  Columns: `home_win_prob` (0..1) and `predicted_margin` (points,
+  positive = home favoured), both from the home team's perspective,
+  plus `model_version` (tipper config id) and `generated_at` (UTC
+  ISO 8601). Rows are written by tipper over the Cloudflare D1 REST
+  API, not by this Worker. Exposed in the `schema` tool with a
+  LEFT-JOIN example query and a treat-absence-as-not-published note;
+  coverage starts 2026. (#142)
+- **Schema tool competition filter**: passing `competition` alone now
+  returns the base schema filtered to that competition —
+  `database.competitions` and `coverage_contract.by_competition` shrink
+  to the one entry; tables, notes, and join examples are unchanged and
+  the call stays read-free. (#141)
+
+### Changed
+
+- **Schema tool errors**: any invalid parameter combination now fails
+  with a single error naming all three valid call shapes (no params;
+  `competition` alone; `competition` + `season` +
+  `includeObserved: true`), replacing per-branch messages that chained
+  into a two-error loop. (#141)
+- **Round derivation**: `src/sync/upserts.ts` now uses the fitzroy 3.4
+  package-root exports `roundLabel` / `roundAbbreviation` /
+  `roundTypeLabel` instead of local derivation helpers (same semantics
+  plus QF/EF codes); all round-derivation behaviour-pin tests pass
+  unchanged. `TEAM_NAME_MAP` is retained — fitzroy's canonical names
+  differ from this database's for five clubs — with its comment
+  corrected so it is not mistaken for a deletable workaround. (#107)
+
+### Removed
+
+- `SLUG_OVERRIDES` and the raw-fetch Brisbane Lions fallback in
+  `scripts/backfill-dob.mts` — the slug bug is fixed upstream in
+  fitzroy 3.4.0. (#107)
+
 ## [3.5.0] - 2026-07-13
 
 ### Added
