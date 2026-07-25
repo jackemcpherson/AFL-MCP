@@ -108,7 +108,14 @@ export default {
       return handleMcpRequest(request, env, ctx);
     }
 
-    return new Response("Australian Football MCP Server", { status: 200 });
+    if (path === "/") {
+      return new Response("Australian Football MCP Server", { status: 200 });
+    }
+
+    // Unknown paths must 404. Claude Web probes /.well-known/oauth-* before
+    // connecting; a 200 here makes it assume OAuth exists and attempt dynamic
+    // client registration, which fails and blocks the connection entirely.
+    return new Response("Not Found", { status: 404 });
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {

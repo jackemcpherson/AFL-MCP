@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] - 2026-07-25
+
+### Fixed
+
+- **Claude Web connection**: unknown paths now return 404 instead of a
+  200 banner. Claude Web probes `/.well-known/oauth-protected-resource`
+  and `/.well-known/oauth-authorization-server` before connecting; the
+  catch-all 200 made it assume the server had OAuth configured, so it
+  attempted dynamic client registration and failed ("Couldn't register
+  with AFL MCP's sign-in service"). The banner is now served only at
+  `/`.
+
 ## [3.6.0] - 2026-07-15
 
 ### Added
