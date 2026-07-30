@@ -33,7 +33,7 @@ CREATE TABLE venues (
   longitude REAL,
   timezone TEXT,                                     -- IANA
   roof TEXT,                                         -- 'retractable' | 'none'
-  canonical_venue_id INTEGER REFERENCES venues(id)   -- alias -> physical ground
+  canonical_venue_id INTEGER REFERENCES venues(id)   -- physical ground: self for canonical rows, another row's id for sponsor-rename aliases, NULL for venues not yet classified (fresh sync inserts). Group by physical ground via COALESCE(canonical_venue_id, id).
 );
 
 CREATE TABLE players (
