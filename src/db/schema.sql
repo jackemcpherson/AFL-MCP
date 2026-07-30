@@ -71,8 +71,6 @@ CREATE TABLE matches (
   away_points INTEGER,
   margin INTEGER,
   attendance INTEGER,
-  weather_temp_c REAL,
-  weather_type TEXT,
   external_afltables_id TEXT UNIQUE,
   external_fryzigg_id TEXT UNIQUE,
   external_afl_id TEXT,

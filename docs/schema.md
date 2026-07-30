@@ -93,9 +93,9 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   `Complete` and marked the 38 score-less VFL/VFLW 2021 COVID-era matches
   `Cancelled`, so NULL scores on a `Cancelled` row mean cancelled, not
   missing data.
-- `weather_temp_c` and `weather_type` are deprecated and scheduled for
-  removal: a frozen fryzigg record (AFLM 2010 - 2025, daily-max semantics).
-  Use `match_weather` for all weather analysis.
+- The legacy `weather_temp_c` / `weather_type` columns (frozen fryzigg
+  record, AFLM 2010 - 2025, daily-max semantics) were dropped in migration
+  `0020`. Use `match_weather` for all weather analysis.
 
 ### `player_match_stats`
 
@@ -138,9 +138,9 @@ most two rows per match.
   `'historical_forecast'` (interim observed value, upgraded to reanalysis once
   the match is >6 days old), `'best_match'` (forecast rows).
 - Cancelled matches and the placeholder venue (17748) never get rows.
-- The frozen fryzigg `matches.weather_temp_c` / `weather_type` columns are
-  deprecated (daily-max values, AFLM 2010 - 2025 only) and scheduled for
-  removal. This table is the only weather source.
+- This table is the only weather source. The legacy fryzigg
+  `matches.weather_temp_c` / `weather_type` columns were dropped in
+  migration `0020`.
 
 ## Derived Data
 

@@ -57,13 +57,13 @@ the database, schema docs, and tools.
   `external_id` moves to the surviving record.
 - `players.is_retired` NULLs backfilled to 0 (migration `0019`).
 
-### Deprecated in 3.7.0
+### Removed in 3.7.0
 
 - `matches.weather_temp_c` / `matches.weather_type` (frozen fryzigg record,
-  AFLM 2010-2025, daily-max not match-window): the sync no longer writes
-  them, coverage no longer measures them, and the schema prose marks them
-  DEPRECATED with a pointer to `match_weather`. The columns will be dropped
-  in the next release (expand-contract).
+  AFLM 2010-2025, daily-max not match-window): superseded by `match_weather`
+  in v3.5.0. The sync no longer writes them, coverage no longer measures
+  them, and migration `0020_drop_legacy_weather_columns.sql` drops the
+  columns. `match_weather` is now the only weather source.
 
 ### Documentation in 3.7.0
 
