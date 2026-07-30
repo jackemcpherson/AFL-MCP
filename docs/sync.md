@@ -47,11 +47,21 @@ endpoint iterates a year range):
    completed match still lacks stats. In parallel, ask
    `selectNextRound(seasonId)` for the next round needing lineups. The backlog
    check makes the pipeline self-healing: it recovers from same-day multi-match
-   completions and from any partial write failure.
-4. **Conditionally fetch** lineups (if a next round exists) and player stats (if
-   the API has more completed matches than the database, OR a stats backlog
-   exists) - both in parallel.
-5. **Upsert** teams, venues, players, matches, stats, lineups (in dependency
+   completions and from any partial write failure. Lineup backlog is bounded:
+   cron ticks retry only rounds played in the last 14 days, because a roster
+   that never publishes upstream must not be re-fetched every tick forever.
+   Admin backfills lift the bound and sweep up to 40 lineup-less rounds per
+   season.
+4. **Conditionally fetch** lineups and player stats (if the API has more
+   completed matches than the database, OR a stats backlog exists) - both in
+   parallel. The upcoming round's lineups are fetched only once its first
+   match is within 5 days - rosters publish about the Thursday before the
+   round, so earlier fetches are guaranteed 404s. A 404 is the expected
+   not-yet-published state and does not write a `sync_log` error row.
+5. **Quarantine** placeholder finals fixtures (`isPlaceholderTeamName`:
+   "1st", "Winner of QF1", "Highest-ranked WF Winner", ...) so they never
+   become team or match rows, then **upsert** teams, venues, players,
+   matches, stats, lineups (in dependency
    order - `upserts.ts` handles the foreign-key wiring). Match upserts retain
    the AFL API's `completedQuarter` as nullable `completed_quarter` (0 - 4).
    `COALESCE` preserves the last authoritative value if the upstream clock is

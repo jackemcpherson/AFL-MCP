@@ -30,14 +30,16 @@ does not supply the required inputs for VFL or VFLW.
 
 ## MCP Tools
 
-The server exposes 3 tools via the
+The server exposes 2 tools via the
 [Model Context Protocol](https://modelcontextprotocol.io/):
 
 | Tool     | Purpose                                                                                                                          |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `schema` | Database structure, per-competition coverage, column details, join patterns, query API reference                                 |
-| `tools`  | Sandbox capabilities, constraints, and guidance                                                                                  |
 | `code`   | Execute TypeScript against D1 in an isolated sandbox. `competition` records a telemetry hint but never changes the submitted SQL |
+
+Sandbox constraints (no network, no npm, 30-second timeout, 1 MB result cap,
+60 requests per minute per IP) travel in the `code` tool's description.
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 
@@ -46,7 +48,7 @@ current completeness for exactly one competition-season, pass
 `{"includeObserved":true,"competition":"AFLM","season":2026}`. The response
 keeps typed expectations separate from measured observations and caches a
 successful measurement for 15 minutes. Zero rows never prove absence. The MCP
-surface remains three tools.
+surface remains two tools.
 
 ### Filtering by Competition
 

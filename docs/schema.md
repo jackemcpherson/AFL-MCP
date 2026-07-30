@@ -69,9 +69,12 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   no cross-competition normalisation:
   - `round` - long form (`Round 1`, `Opening Round`, `Wildcard`,
     `Finals Week 1`, `Grand Final`, plus historical `Elimination Final` /
-    `Qualifying Final` for pre-2020 AFLM).
+    `Qualifying Final` for pre-2020 AFLM, and the AFLM 2026 finals labels
+    `Wildcard Finals` / `Qualifying & Elimination Finals`).
   - `round_abbreviation` - AFL standard short codes (`Rd N`, `OR`, `WC`,
-    `FW1`, `SF`, `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM).
+    `FW1`, `SF`, `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM). Finals round
+    names without a mapped short form fall back to `F<round_number>` (AFLM
+    2026: `F25`, `F26`).
   - `round_number` - per-season ordinal, continuous through finals.
   - `round_type` - `'Regular'`, including Opening Round and Wildcard, or
     `'Finals'`. Round numbers do not align across competitions. Use
@@ -85,6 +88,14 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   is complete. `1` - `4` are the highest completed quarter. `NULL` means no AFL
   API clock was supplied or the row predates refresh. Pair it with `status`. The
   five-minute sync does not make it a live siren signal.
+- `status` is populated for every row (`Upcoming`, `Live`, `Complete`,
+  `Postponed`, `Cancelled`). Migration `0017` backfilled played matches as
+  `Complete` and marked the 38 score-less VFL/VFLW 2021 COVID-era matches
+  `Cancelled`, so NULL scores on a `Cancelled` row mean cancelled, not
+  missing data.
+- `weather_temp_c` and `weather_type` are deprecated and scheduled for
+  removal: a frozen fryzigg record (AFLM 2010 - 2025, daily-max semantics).
+  Use `match_weather` for all weather analysis.
 
 ### `player_match_stats`
 
@@ -127,8 +138,9 @@ most two rows per match.
   `'historical_forecast'` (interim observed value, upgraded to reanalysis once
   the match is >6 days old), `'best_match'` (forecast rows).
 - Cancelled matches and the placeholder venue (17748) never get rows.
-- Do not mix with the frozen fryzigg `matches.weather_temp_c` / `weather_type`
-  columns - those are daily-max values, AFLM 2010 - 2025 only.
+- The frozen fryzigg `matches.weather_temp_c` / `weather_type` columns are
+  deprecated (daily-max values, AFLM 2010 - 2025 only) and scheduled for
+  removal. This table is the only weather source.
 
 ## Derived Data
 
@@ -164,11 +176,11 @@ regeneration - only the latest prediction is kept, no history.
 ## Coverage Contract
 
 The no-argument `schema` call returns deterministic static expectations in
-`database.coverage_contract` (version 1) and performs no D1 reads. Every leaf
-separates `expected` from `observed`, records source provenance and a review
-date, and expands grouped fields to real column names. The legacy
-`column_coverage` object is a generated, deprecated compatibility alias for one
-release.
+`database.coverage_contract` (version 2) and performs no D1 reads. Each table
+declares a default (`range`, `expected`, `source`) that applies to every
+column. `columns` lists only exceptions that deviate from that default. A
+`how_to_read` key in the response explains the encoding, and a single
+`review_date` covers the whole contract.
 
 Call `schema` with one `competition` and nothing else to get the same static
 schema filtered to that competition (its `competitions` entry and
@@ -176,11 +188,12 @@ schema filtered to that competition (its `competitions` entry and
 unchanged).
 
 Call `schema` with `includeObserved: true`, one `competition`, and one integer
-`season` to overlay a bounded measurement. Stats, weather, PAV, and lineup
-presence use separate indexed aggregates. The Worker caches successful results
-for 15 minutes. A zero-row observation does not prove absence. Invalid or broad
-requests fail before D1 access with a single error stating the full parameter
-contract (no params | competition alone | competition + season +
+`season` to attach a bounded measurement as a sibling `observed` block beside
+the static contract (measurements never mutate expectations). Stats, PAV, and
+lineup presence use separate indexed aggregates. The Worker caches successful
+results for 15 minutes. A zero-row observation does not prove absence. Invalid
+or broad requests fail before D1 access with a single error stating the full
+parameter contract (no params | competition alone | competition + season +
 includeObserved:true).
 
 ## Operational

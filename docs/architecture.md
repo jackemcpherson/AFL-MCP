@@ -4,7 +4,8 @@ AFL-MCP is a Cloudflare Worker that serves Australian football data through the
 Model Context Protocol. Cloudflare D1 stores AFLM, AFLW, VFL, and VFLW data.
 
 Clients connect to `https://afl.jackemcpherson.com/mcp` through Streamable HTTP.
-The server exposes `schema`, `tools`, and `code`.
+The server exposes `schema` and `code`. Sandbox constraints travel in the
+`code` tool's description.
 
 ## Schema Contract
 
@@ -25,7 +26,7 @@ other argument combination before querying D1.
 | Entry and routing | `src/index.ts`            | Worker fetch, scheduled, and authenticated admin routes |
 | Admin operations  | `src/admin/`              | Brownlow backfill and bounded operator status           |
 | MCP protocol      | `src/mcp/protocol.ts`     | Streamable HTTP transport                               |
-| MCP tools         | `src/mcp/tools/`          | `schema`, `tools`, and `code` definitions               |
+| MCP tools         | `src/mcp/tools/`          | `schema` and `code` definitions                         |
 | Sandbox           | `src/sandbox/executor.ts` | Dynamic Worker isolation and `DbProxy` access           |
 | Sync              | `src/sync/`               | Cron orchestration, upserts, weather, and PAV           |
 | Schema            | `src/db/schema.sql`       | D1 schema documented in [Schema Reference](schema.md)   |

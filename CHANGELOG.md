@@ -5,6 +5,75 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] - Unreleased
+
+Version 3.7.0 is a data-quality and MCP-surface release from a full audit of
+the database, schema docs, and tools.
+
+### Changed in 3.7.0 (Breaking)
+
+- The `tools` MCP tool is removed. The surface is now `schema` + `code`. Its
+  content was about 80% duplicated across `schema.query_api` and the tool
+  descriptions. The unique sandbox constraints (no network, no npm, 30s
+  timeout, 1 MB result truncation, 60 req/min/IP) now live in the `code`
+  tool's description - the only surface every MCP client is guaranteed to
+  read.
+- Coverage contract v2: exceptions-only encoding. v1 materialised every
+  column for all four competitions as boilerplate leaves, so the full schema
+  response was 126 KB (about 70k tokens). Each table now declares an explicit
+  default (`range`/`expected`/`source`) and `columns` lists only deviations.
+  A `how_to_read` key makes the encoding self-describing. Observed
+  measurements attach as a sibling `observed` block instead of mutating
+  expectation leaves. The deprecated `column_coverage` alias is removed.
+  Schema response: 126 KB down to 29 KB.
+
+### Fixed in 3.7.0
+
+- Finals fixture placeholders: the AFL API publishes unresolved finals with
+  ladder-position and progression labels as team names ("1st", "Winner of
+  QF1", "Highest-ranked WF Winner"). These became 22 ghost `teams` rows and
+  11 placeholder AFLM 2026 finals matches. Sync now quarantines such matches
+  (`isPlaceholderTeamName` / `quarantinePlaceholderMatches`) instead of
+  inserting them. It self-heals rows written by pre-guard Worker versions
+  and logs a `sync:placeholder-match:<competition>` row when placeholders
+  are present. Migration `0016_remove_finals_placeholder_teams.sql` removes
+  the existing ghost rows. Real finals matches upsert normally under the
+  same `external_afl_id` once the AFL resolves the fixture.
+- `matches.status` backfilled for all rows (migration `0017`): 8,846 played
+  matches had NULL status, so `status = 'Complete'` filters silently dropped
+  pre-2026 history. Played matches become 'Complete'. The 38 score-less
+  VFL/VFLW 2021 COVID-era matches become 'Cancelled'.
+- Lineup-fetch 404 spam (20k sync_log errors in 90 days, AFLW-dominated).
+  The upcoming round's lineups now fetch only within 5 days of its first
+  match (rosters publish about the Thursday before the round). Cron backlog
+  self-heal is bounded to rounds played in the last 14 days, and 404s
+  (roster not yet published) no longer write error rows. Admin backfills
+  lift the bound and sweep up to 40 lineup-less rounds per season, so
+  `POST /mcp/admin/backfill` can load the missing AFLW 2017-2025 lineup
+  history.
+- Duplicate player merged (migration `0018`): Hewago Oea existed as both a
+  fitzroy row and an AFL API row (same name and date of birth). The
+  duplicate stat, lineup, and PAV rows are removed and the fitzroy
+  `external_id` moves to the surviving record.
+- `players.is_retired` NULLs backfilled to 0 (migration `0019`).
+
+### Deprecated in 3.7.0
+
+- `matches.weather_temp_c` / `matches.weather_type` (frozen fryzigg record,
+  AFLM 2010-2025, daily-max not match-window): the sync no longer writes
+  them, coverage no longer measures them, and the schema prose marks them
+  DEPRECATED with a pointer to `match_weather`. The columns will be dropped
+  in the next release (expand-contract).
+
+### Documentation in 3.7.0
+
+- 2026 AFLM finals round labels documented: `Wildcard Finals` /
+  `Qualifying & Elimination Finals` with `F25`/`F26` abbreviation fallback.
+- `venues.canonical_venue_id` tri-state convention (self = canonical, other
+  id = alias, NULL = not yet classified) documented. The COALESCE in join
+  examples is load-bearing and stays.
+- `matches.status` NULL semantics replaced by the backfill note above.
+
 ## [3.6.1] - 2026-07-25
 
 Version 3.6.1 includes the following changes.
