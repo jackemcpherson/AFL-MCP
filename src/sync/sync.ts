@@ -12,6 +12,7 @@ import {
   ensureSeason,
   ensureTeams,
   ensureVenues,
+  quarantinePlaceholderMatches,
   selectCompletedCount,
   selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
@@ -187,11 +188,19 @@ async function syncCompetition(
       return { competition, year: season, matches: 0, stats: 0, lineups: 0 };
     }
 
-    const teamMap = await ensureTeams(env, competitionId, competition, allMatches);
-    const venueMap = await ensureVenues(env, allMatches);
+    // Unresolved finals fixtures ("1st" vs "4th") must not become team or
+    // match rows — see quarantinePlaceholderMatches.
+    const syncableMatches = await quarantinePlaceholderMatches(
+      env,
+      competitionId,
+      competition,
+      allMatches,
+    );
+    const teamMap = await ensureTeams(env, competitionId, competition, syncableMatches);
+    const venueMap = await ensureVenues(env, syncableMatches);
     const playerMap = await upsertPlayers(env, unionPlayers(stats, lineups));
 
-    const matchesAffected = await upsertMatches(env, allMatches, {
+    const matchesAffected = await upsertMatches(env, syncableMatches, {
       seasonId,
       teamMap,
       venueMap,

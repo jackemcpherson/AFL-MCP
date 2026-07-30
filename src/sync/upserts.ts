@@ -8,7 +8,7 @@ import {
   roundLabel,
   roundTypeLabel,
 } from "fitzroy";
-import { normaliseTeam, normaliseVenue } from "../lib/normalise";
+import { isPlaceholderTeamName, normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 import {
@@ -186,6 +186,74 @@ export async function ensureTeams(
   }
 
   return new Map(existing.results.map((r) => [r.name, r.id]));
+}
+
+/**
+ * Split incoming matches into syncable and placeholder sets, self-heal any
+ * placeholder rows a pre-guard Worker version already wrote, and log one
+ * `sync:placeholder-match:<competition>` row when placeholders are present.
+ *
+ * Placeholder matches (see {@link isPlaceholderTeamName}) are the AFL API's
+ * unresolved finals fixtures ("1st" vs "4th", "Loser of QF1" vs "Winner of
+ * EF1"). They are excluded from team/venue/match upserts entirely; once the
+ * AFL resolves the fixture to real clubs, the match arrives with the same
+ * `external_afl_id` and upserts normally. Migration 0016 cleans the
+ * historical rows; the self-heal DELETE here closes the deploy-window race
+ * where an old Worker re-inserts ghosts between migration and upload.
+ */
+export async function quarantinePlaceholderMatches(
+  env: Env,
+  competitionId: number,
+  competitionCode: CompetitionCode,
+  matches: readonly Match[],
+): Promise<readonly Match[]> {
+  const placeholderNames = new Set<string>();
+  const placeholders = new Set<Match>();
+  for (const m of matches) {
+    for (const name of [normaliseTeam(m.homeTeam), normaliseTeam(m.awayTeam)]) {
+      if (isPlaceholderTeamName(name)) {
+        placeholderNames.add(name);
+        placeholders.add(m);
+      }
+    }
+  }
+  if (placeholders.size === 0) return matches;
+
+  const names = Array.from(placeholderNames);
+  const namePh = names.map(() => "?").join(", ");
+  const { results: ghostTeams } = await env.DB.prepare(
+    `SELECT id FROM teams WHERE competition_id = ? AND name IN (${namePh})`,
+  )
+    .bind(competitionId, ...names)
+    .all<{ id: number }>();
+
+  if (ghostTeams.length > 0) {
+    const ids = ghostTeams.map((r) => r.id);
+    const idPh = ids.map(() => "?").join(", ");
+    const ghostMatchIds = `SELECT id FROM matches WHERE home_team_id IN (${idPh}) OR away_team_id IN (${idPh})`;
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM match_weather WHERE match_id IN (${ghostMatchIds})`).bind(
+        ...ids,
+        ...ids,
+      ),
+      env.DB.prepare(`DELETE FROM match_predictions WHERE match_id IN (${ghostMatchIds})`).bind(
+        ...ids,
+        ...ids,
+      ),
+      env.DB.prepare(
+        `DELETE FROM matches WHERE home_team_id IN (${idPh}) OR away_team_id IN (${idPh})`,
+      ).bind(...ids, ...ids),
+      env.DB.prepare(`DELETE FROM teams WHERE id IN (${idPh})`).bind(...ids),
+    ]);
+  }
+
+  await logSync(
+    env,
+    `sync:placeholder-match:${competitionCode}`,
+    placeholders.size,
+    names.join(", "),
+  );
+  return matches.filter((m) => !placeholders.has(m));
 }
 
 /** Ensure rows exist for every venue referenced by `matches`, and return a name → id map. */
