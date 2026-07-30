@@ -79,7 +79,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         players: [
           "id INTEGER PRIMARY KEY, first_name TEXT, surname TEXT, external_id TEXT,",
           "external_afl_player_id TEXT,",
-          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER",
+          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER (0=active, 1=retired)",
         ].join(" "),
         matches: [
           "id INTEGER PRIMARY KEY, season_id INTEGER REFERENCES seasons(id),",
