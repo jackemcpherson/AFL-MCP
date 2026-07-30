@@ -1,10 +1,9 @@
 # Data Sync
 
-A single Cloudflare cron trigger drives all data updates across all four
-competitions (AFLM, AFLW, VFL, VFLW). Everything funnels through one
-orchestrator (`src/sync/sync.ts`) which decides whether to fetch, delegates
-upserts to `src/sync/upserts.ts`, and re-runs PAV when player stats have
-changed for the PAV-supported competitions (AFLM and AFLW).
+A single Cloudflare cron trigger drives updates for AFLM, AFLW, VFL, and VFLW.
+The orchestrator in `src/sync/sync.ts` decides when to fetch and delegates
+upserts to `src/sync/upserts.ts`. It recalculates PAV after AFLM or AFLW player
+statistics change.
 
 ## Cron
 
@@ -14,32 +13,32 @@ changed for the PAV-supported competitions (AFLM and AFLW).
 crons = ["*/5 * * * *"]
 ```
 
-The cron fires every five minutes and dispatches `sync(env, ["AFLM", "AFLW",
-"VFL", "VFLW"])`. There is no separate cron for full syncs or for PAV — the
-orchestrator decides what to run on each tick.
+The cron fires every five minutes and dispatches
+`sync(env, ["AFLM", "AFLW", "VFL", "VFLW"])`. There is no separate cron for full
+syncs or for PAV - the orchestrator decides what to run on each tick.
 
-## The `shouldRunNow` gate
+## The `shouldRunNow` Gate
 
 `shouldRunNow(now, env)` (in `src/sync/sync.ts`) is the only thing standing
 between the cron and a fetch:
 
-1. **Top of every hour** — always run. This guarantees a full hourly refresh
+1. **Top of every hour** - always run. This guarantees a full hourly refresh
    regardless of fixture state.
-2. **Otherwise** — run only if a match exists in the database within roughly
+2. **Otherwise** - run only if a match exists in the database within roughly
    `±3 days` of now (one day back, three days forward). The query is
    competition-agnostic, so the gate naturally covers the union of all four
    fixture windows.
 
-The gate is date-granular and lives in code rather than in cron expressions,
-so changing the polling cadence only requires touching one function.
+The gate is date-granular and lives in code rather than in cron expressions, so
+changing the polling cadence only requires touching one function.
 
 ## Pipeline (`syncCompetition`)
 
-For each `(competition, year)` pair (cron uses current year; the backfill
+For each `(competition, year)` pair (cron uses current year. The backfill
 endpoint iterates a year range):
 
 1. **Fetch matches** for the season from the `afl-api` source.
-2. **Ensure** competition + season rows exist; resolve `seasonId`. Unknown
+2. **Ensure** competition + season rows exist. resolve `seasonId`. Unknown
    competitions (e.g. VFL on first sync after a fresh deploy) are auto-upserted
    via `ensureCompetition`.
 3. **Detect new completed matches** by comparing the API's count of completed
@@ -49,172 +48,180 @@ endpoint iterates a year range):
    `selectNextRound(seasonId)` for the next round needing lineups. The backlog
    check makes the pipeline self-healing: it recovers from same-day multi-match
    completions and from any partial write failure.
-4. **Conditionally fetch** lineups (if a next round exists) and player stats
-   (if the API has more completed matches than the database, OR a stats
-   backlog exists) — both in parallel.
+4. **Conditionally fetch** lineups (if a next round exists) and player stats (if
+   the API has more completed matches than the database, OR a stats backlog
+   exists) - both in parallel.
 5. **Upsert** teams, venues, players, matches, stats, lineups (in dependency
-   order — `upserts.ts` handles the foreign-key wiring). Match upserts retain
-   the AFL API's `completedQuarter` as nullable `completed_quarter` (0–4).
+   order - `upserts.ts` handles the foreign-key wiring). Match upserts retain
+   the AFL API's `completedQuarter` as nullable `completed_quarter` (0 - 4).
    `COALESCE` preserves the last authoritative value if the upstream clock is
    transiently absent.
 6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
-   `{AFLM, AFLW}` AND `skipPav` is not set. VFL/VFLW are skipped because the
-   AFL API doesn't populate the PAV formula's required inputs
-   (`goal_assists`, `marks_inside_50`, `one_percenters`).
+   `{AFLM, AFLW}` AND `skipPav` is not set. VFL/VFLW are skipped because the AFL
+   API does not populate the PAV formula's required inputs (`goal_assists`,
+   `marks_inside_50`, `one_percenters`).
 7. **Log** to `sync_log` only when the tick produced new stats or lineup rows.
 
-Errors at any fetch step are logged to `sync_log` with `rows_affected = 0` and
-the pipeline continues to the next `(competition, year)` pair.
+The pipeline logs fetch errors to `sync_log` with `rows_affected = 0`, then
+continues to the next `(competition, year)` pair.
 
-## Weather stage
+## Weather Stage
 
-After the per-competition loop, top-of-hour passes run the weather stage
-(`src/weather/stage.ts`) inside the same operation lease — no new cron, no
-new lease. Needs-work queries drive everything: upcoming matches ≤7 days out
-get an Open-Meteo forecast row (refreshed daily, hourly on match day,
-overwritten in place); completed matches get an observed row fast-written
-from the Historical Forecast API, upgraded to `era5_land+era5` archive
-provenance once the match is >6 days old; stray rows for cancelled matches
-are deleted. Coordinates resolve through `venues.canonical_venue_id` and
-every call passes `timezone=Australia/Melbourne`. The stage fails soft: any
-error is recorded in `sync_log` (`type = 'sync:weather'`) without throwing,
-and the next hourly pass self-heals. The historical bulk load is
-`scripts/backfill-weather.ts`, not this stage.
+At the top of each hour, the same lease covers the weather stage in
+`src/weather/stage.ts`. The stage needs no separate cron or lease.
 
-## Backfill endpoint
+Upcoming matches within seven days receive an Open-Meteo forecast row. The stage
+refreshes it daily and hourly on match day. Completed matches receive an interim
+Historical Forecast row. After six days, the stage upgrades provenance to
+`era5_land+era5`.
+
+The stage removes rows for cancelled matches. It resolves coordinates through
+`venues.canonical_venue_id` and requests `timezone=Australia/Melbourne`.
+
+Weather failures add a bounded `sync:weather` row to `sync_log` without stopping
+sync. The next hourly pass retries the work. Use `scripts/backfill-weather.ts`
+for historical bulk loading.
+
+## Backfill Endpoint
 
 `POST /mcp/admin/backfill` exposes the same pipeline for one-shot historical
 loads. Body:
 
 ```json
 {
-  "competitions": ["AFLM", "AFLW", "VFL", "VFLW"],
-  "fromYear": 2021,
-  "toYear": 2025,
-  "skipShouldRunNow": true,
-  "skipPav": false
+    "competitions": ["AFLM", "AFLW", "VFL", "VFLW"],
+    "fromYear": 2021,
+    "toYear": 2025,
+    "skipShouldRunNow": true,
+    "skipPav": false
 }
 ```
 
 `skipShouldRunNow` (default `true`) bypasses the cadence gate so the backfill
 runs immediately. `skipPav` (default `false`) is useful for label-only re-syncs
-(e.g. relabelling an existing AFLM season) where stats aren't changing and PAV
-recalculation would be wasteful.
+(such as relabelling an existing AFLM season) where stats are not changing and
+PAV recalculation would be wasteful.
 
 The endpoint iterates `(competition, year)` pairs and returns per-tick results:
 
 ```json
 {
-  "status": "ok",
-  "results": [
-    { "competition": "AFLW", "year": 2024, "matches": 108, "stats": 4536, "lineups": 0 }
-  ]
+    "status": "ok",
+    "results": [
+        {
+            "competition": "AFLW",
+            "year": 2024,
+            "matches": 108,
+            "stats": 4536,
+            "lineups": 0
+        }
+    ]
 }
 ```
 
-Cloudflare Workers cap walltime at 30 seconds per request; the caller is
+Cloudflare Workers cap execution time at 30 seconds per request. The caller is
 responsible for chunking year ranges. A single year per request is safe for
-AFLM; the smaller competitions (AFLW, VFL, VFLW) can typically run a few years
+AFLM. The smaller competitions (AFLW, VFL, VFLW) can typically run a few years
 in one call.
 
-Cron, manual sync, and annual Brownlow ingestion share the single
-`sync_lease` row. Acquisition is atomic, holders expire after ten minutes,
-and release checks the holder. Contending syncs keep their established
-log-and-return behavior; Brownlow returns HTTP 409.
+Cron, manual sync, and annual Brownlow ingestion share the single `sync_lease`
+row. Acquisition is atomic, holders expire after ten minutes, and release checks
+the holder. Contending syncs keep their established log-and-return behaviour.
+Brownlow returns HTTP 409.
 
-## Round labels
+## Round Labels
 
-The AFL season includes special rounds that don't follow standard numeric
+The AFL season includes special rounds that do not follow standard numeric
 ordering. The schema mirrors R fitzRoy's design: store the AFL API's round
 labels directly, no cross-competition normalisation.
 
 Two round-string columns on `matches`:
 
-- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+,
+- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024+,
   `round_number = 0`), `Wildcard` (VFL only, before finals), and finals
   `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`.
   Pre-2020 AFLM finals retain the historical `Elimination Final` /
   `Qualifying Final` distinction the AFL collapsed in 2020.
-- `round_abbreviation` is the AFL's short form: `Rd N`, `OR`, `WC`, `FW1`,
-  `SF`, `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM. Stable across all four
-  competitions; the right column for cross-competition queries.
+- `round_abbreviation` is the AFL's short form: `Rd N`, `OR`, `WC`, `FW1`, `SF`,
+  `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM. Stable across all four
+  competitions. Use this column for cross-competition queries.
 
 `round_type` is `Regular` (home-and-away + Opening Round + Wildcard) or
-`Finals`. `round_number` is a per-season ordinal continuous through finals
-(e.g. AFLM 2024 finals are 25–28; AFLW 2025 finals are 13–16; VFL 2025 has
-Wildcard at 22 then finals 23–26). Round numbers don't align across
-competitions — AFLM R1 is March, AFLW R1 is August, VFL R1 is April.
+`Finals`. `round_number` is a per-season ordinal continuous through finals. For
+example, AFLM 2024 finals are 25 to 28, while AFLW 2025 finals are 13 to 16. VFL
+2025 has Wildcard at 22, then finals 23 to 26. Round numbers do not align across
+competitions - AFLM R1 is March, AFLW R1 is August, VFL R1 is April.
 
 ## PAV (Player Approximate Value)
 
-PAV is recomputed by `recalculatePav(env, competition, year?)`
-(`src/sync/pav.ts`) and written to the `player_season_pav` table. It is only
-triggered from inside the sync pipeline when at least one player-stat row was
-actually updated, the competition is `AFLM` or `AFLW`, and `skipPav` is not
-set.
+`recalculatePav(env, competition, year?)` in `src/sync/pav.ts` writes to
+`player_season_pav`. The sync pipeline runs it after updating player statistics
+for AFLM or AFLW, unless `skipPav` is set.
 
-Per-competition floor years are in
-`MIN_PAV_YEAR_BY_COMPETITION` (`src/lib/constants.ts`):
+Per-competition floor years are in `MIN_PAV_YEAR_BY_COMPETITION`
+(`src/lib/constants.ts`):
 
-- AFLM: 1998 — when Champion Data began tracking inside-50s, the
+- AFLM: 1998 - when Champion Data began tracking inside-50s, the
   league-normalising input the formula leans on most heavily.
-- AFLW: 2017 — the inaugural AFLW season; AFL API populates the full PAV
-  input set from the start.
+- AFLW: 2017 - the inaugural AFLW season. AFL API populates the full PAV input
+  set from the start.
 
 VFL/VFLW have no PAV rows because `goal_assists`, `marks_inside_fifty`, and
 `one_percenters` are not sufficiently complete for the formula. VFLW can have
 sparse values in these fields, so their typed coverage expectation is
 `best-effort`, not universally absent.
 
-## Match clock context
+## Match Clock Context
 
 The sync persists only the smallest authoritative clock state:
-`completed_quarter` is `NULL` or 0–4. It does not store per-period clock
+`completed_quarter` is `NULL` or 0 to 4. It does not store per-period clock
 objects or transition timestamps. Consumers must pair the value with
-`matches.status`; it reflects the five-minute sync cadence, not second-level
+`matches.status`. It reflects the five-minute sync cadence, not second-level
 match timing. `live_period_status` remains raw upstream text.
 
-`matches.local_time` remains Melbourne time (`Australia/Melbourne`) across
-all competitions, matching the AFL API ecosystem convention. Venue-native
-time and timezone are intentionally discarded.
+`matches.local_time` remains Melbourne time (`Australia/Melbourne`) across all
+competitions, matching the AFL API ecosystem convention. Venue-native time and
+timezone are intentionally discarded.
 
-## Brownlow votes
+## Brownlow Votes
 
 fitzroy 3.4 parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
 scrapes in the partial-result envelope `{ stats, failedMatchIds }`.
-[fitzroy-ts#117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117) is
-closed. Brownlow ingestion is an explicit annual operation rather than
-part of the five-minute sync: the AFL Tables season scrape is expensive and
-votes are published once after the count. `POST
-/mcp/admin/backfill-brownlow` accepts one or two AFLM seasons:
+[fitzRoy issue 117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117)
+tracks the completed parser work. Brownlow ingestion is an annual operation. The
+expensive AFL Tables scrape does not belong in the five-minute sync.
+
+`POST /mcp/admin/backfill-brownlow` accepts one or two AFLM seasons:
 
 ```json
 { "fromYear": 2025, "toYear": 2025, "dryRun": true }
 ```
 
 `dryRun` defaults to true. The operation consumes both `stats` and
-`failedMatchIds`, resolves matches by date plus canonical team, resolves
-players without choosing ambiguous candidates, and requires exactly six
-positive votes for every regular-season match. Any partial fetch, unresolved
-row, ambiguity, finals vote, or mixed/non-six total blocks all seasons before
-the first update. A wholly unpublished season performs no writes. Write mode
-uses batches of at most 100 parameterized updates guarded by
-`brownlow_votes IS NULL OR brownlow_votes = 0`; it does not recalculate PAV.
+`failedMatchIds`. It resolves matches by date and canonical team without
+choosing ambiguous player candidates. Every regular-season match must have
+exactly six positive votes.
+
+Any partial fetch, unresolved row, ambiguity, finals vote, or mixed total blocks
+all seasons before the first update. A wholly unpublished season performs no
+writes. Write mode uses batches of at most 100 parameterised updates guarded by
+`brownlow_votes IS NULL OR brownlow_votes = 0`. It does not recalculate PAV.
+
 The full contract is in
 [`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
 
 The `upsertStats` path uses `COALESCE` on `brownlow_votes`, and the annual
-backfill also writes only when the current value is NULL or zero. This
-keeps repeated runs idempotent and prevents either path from clobbering an
-existing vote.
-Brownlow votes are AFLM-only — the medal isn't awarded for AFLW/VFL/VFLW.
+backfill also writes only when the current value is NULL or zero. This keeps
+repeated runs idempotent and prevents either path from clobbering an existing
+vote. Brownlow votes are AFLM-only - the medal is not awarded for AFLW/VFL/VFLW.
 
-## Private operator status
+## Private Operator Status
 
-`GET /mcp/admin/status` returns a stable aggregate snapshot for AFLM, AFLW,
-VFL, and VFLW: independent latest whole-sync success/error ages, latest
-completed match dates, active lease age, all five integrity-view counts, and
-24-hour partial-lineup, partial-stats, and unmapped-team event counts. It uses
-nine fixed statements and a fixed window. It never returns raw log errors,
-lease holders, IDs, row samples, client data, or tokens. Public `/health` and
-`/mcp/health` retain their existing small uptime contract.
+`GET /mcp/admin/status` returns a stable aggregate snapshot for all four
+competitions. The snapshot includes whole-sync outcomes, completed match dates,
+lease age, and all five integrity-view counts. It also reports 24-hour
+partial-lineup, partial-stat, and unmapped-team event counts.
+
+The endpoint uses nine fixed statements and one fixed window. It never returns
+raw errors, lease holders, IDs, row samples, client data, or tokens. Public
+health routes retain their small uptime contract.

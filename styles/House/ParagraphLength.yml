@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Use no more than six sentences in one paragraph."
+level: error
+scope: paragraph
+max: 6
+token: '[.!?](?:\s|$)'

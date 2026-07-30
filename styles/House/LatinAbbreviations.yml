@@ -1,0 +1,10 @@
+extends: existence
+message: "Replace '%s' with complete English words."
+level: error
+ignorecase: true
+nonword: true
+scope: sentence
+tokens:
+  - '\be[.]g[.]'
+  - '\bi[.]e[.]'
+  - '\betc[.]'

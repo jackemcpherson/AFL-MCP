@@ -1,0 +1,7 @@
+extends: existence
+message: "State the correct point without the '%s' contrast."
+level: error
+ignorecase: true
+scope: sentence
+raw:
+  - '\bnot\b[^.!?\n]{0,80}\bbut\b'

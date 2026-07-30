@@ -1,0 +1,7 @@
+extends: existence
+message: "Write a noun after '%s'."
+level: error
+ignorecase: true
+scope: sentence
+raw:
+  - '\bthis\s+(?:can|did|does|had|has|is|must|was|will)\b'

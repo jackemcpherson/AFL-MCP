@@ -1,0 +1,1 @@
+\butili[sz](?:e|es|ed|ing)\b

@@ -1,0 +1,12 @@
+extends: existence
+message: "Replace '%s' with permitted ASCII punctuation."
+level: error
+nonword: true
+tokens:
+  - ';'
+  - '—'
+  - '–'
+  - '“'
+  - '”'
+  - '→'
+  - ' -- '
