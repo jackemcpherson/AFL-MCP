@@ -195,7 +195,7 @@ describe("handleMcpRequest", () => {
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
     expect(schema.database.tables).toHaveProperty("matches");
     expect(schema.database.tables).toHaveProperty("player_match_stats");
-    expect(schema.database.coverage_contract.version).toBe(1);
+    expect(schema.database.coverage_contract.version).toBe(2);
   });
 
   it("rejects invalid observed schema arguments before querying D1", async () => {
@@ -253,11 +253,14 @@ describe("handleMcpRequest", () => {
     const json = await parseJson(res);
     expect(json.result?.isError).toBeFalsy();
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
-    const observed =
-      schema.database.coverage_contract.by_competition.AFLW.player_match_stats.guernsey_number[
-        "2025"
-      ].observed;
-    expect(observed).toMatchObject({ unit: "rows", rows: 2, non_null: 2, ratio: 1 });
+    const observed = schema.database.coverage_contract.observed;
+    expect(observed).toMatchObject({ competition: "AFLW", season: 2025 });
+    expect(observed.player_match_stats.guernsey_number).toMatchObject({
+      unit: "rows",
+      rows: 2,
+      non_null: 2,
+      ratio: 1,
+    });
   });
 
   it("returns tools info content", async () => {

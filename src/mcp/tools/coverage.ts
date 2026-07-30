@@ -9,7 +9,7 @@ export type CoverageExpectation =
   | "not-applicable";
 
 /** Version included in responses and cache keys. */
-export const COVERAGE_CONTRACT_VERSION = 1;
+export const COVERAGE_CONTRACT_VERSION = 2;
 /** Date on which static source expectations were last reviewed. */
 export const COVERAGE_REVIEW_DATE = "2026-07-12";
 /** Competition codes supported by the typed contract. */
@@ -505,42 +505,67 @@ interface MatchPresenceObservation {
   readonly rows: number;
   readonly ratio: number | null;
 }
-type Observation = RowObservation | TableRowsObservation | MatchPresenceObservation;
-
-interface CoverageLeaf {
-  readonly expected: CoverageExpectation;
-  readonly observed: Observation | null;
-  readonly source: readonly string[];
-  readonly as_of: string;
-  readonly notes: readonly string[];
+/** Column-level deviation from a table default; only deviating keys are present. */
+interface ColumnException {
+  expected?: CoverageExpectation;
+  range?: string;
 }
 
-type MaterializedCoverage = Record<string, Record<string, Record<string, CoverageLeaf>>>;
+/** Wire shape for one competition-table: a default plus exception columns. */
+interface TableContract {
+  readonly range: string;
+  readonly expected: CoverageExpectation;
+  readonly source: readonly string[];
+  readonly notes?: readonly string[];
+  readonly columns?: Readonly<Record<string, ColumnException>>;
+}
+
+type ContractCoverage = Record<string, TableContract>;
+
+/**
+ * One-paragraph reading key emitted with every contract response, so the
+ * exceptions-only encoding is self-describing to an LLM consumer.
+ */
+export const COVERAGE_HOW_TO_READ =
+  "Each table declares a default: `range` (inclusive season span; 'current' = latest season), " +
+  "`expected` (complete | partial | best-effort | absent | not-applicable), and `source`. " +
+  "The default applies to every column of that table. `columns` lists ONLY exceptions — a column " +
+  "appears there when its `expected` or `range` deviates from the table default; any column not " +
+  "listed has exactly the default coverage.";
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator === 0 ? null : Math.round((numerator / denominator) * 1_000_000) / 1_000_000;
 }
 
-/** Expand table defaults so omission never implies complete coverage. */
-export function materializeCoverage(): Record<CoverageCompetition, MaterializedCoverage> {
-  const output = {} as Record<CoverageCompetition, MaterializedCoverage>;
+/**
+ * Project the canonical manifest into the exceptions-only wire shape.
+ *
+ * Contract v1 materialized every declared column so that omission could
+ * never imply complete coverage; that made the response ~100 KB of
+ * boilerplate leaves. v2 keeps the same guarantee by making omission
+ * well-defined instead: the table default is explicit and `columns`
+ * carries only deviations (see {@link COVERAGE_HOW_TO_READ}).
+ */
+export function contractCoverage(): Record<CoverageCompetition, ContractCoverage> {
+  const output = {} as Record<CoverageCompetition, ContractCoverage>;
   for (const competition of COVERAGE_COMPETITIONS) {
-    const tables: MaterializedCoverage = {};
-    for (const [table, columns] of Object.entries(ANALYTICS_COLUMNS)) {
-      const spec: CoverageTableExpectation = COVERAGE_EXPECTATIONS[competition][table as TableName];
-      const materializedColumns: Record<string, Record<string, CoverageLeaf>> = {};
-      for (const column of columns) {
-        materializedColumns[column] = {
-          [spec.ranges?.[column] ?? spec.range]: {
-            expected: spec.overrides?.[column] ?? spec.expected,
-            observed: null,
-            source: spec.source,
-            as_of: COVERAGE_REVIEW_DATE,
-            notes: spec.notes,
-          },
-        };
+    const tables: ContractCoverage = {};
+    for (const table of Object.keys(ANALYTICS_COLUMNS) as TableName[]) {
+      const spec: CoverageTableExpectation = COVERAGE_EXPECTATIONS[competition][table];
+      const columns: Record<string, ColumnException> = {};
+      for (const [column, expected] of Object.entries(spec.overrides ?? {})) {
+        if (expected !== spec.expected) columns[column] = { expected };
       }
-      tables[table] = materializedColumns;
+      for (const [column, range] of Object.entries(spec.ranges ?? {})) {
+        if (range !== spec.range) columns[column] = { ...columns[column], range };
+      }
+      tables[table] = {
+        range: spec.range,
+        expected: spec.expected,
+        source: spec.source,
+        ...(spec.notes.length > 0 && { notes: spec.notes }),
+        ...(Object.keys(columns).length > 0 && { columns }),
+      };
     }
     output[competition] = tables;
   }
@@ -650,48 +675,52 @@ export async function observeCoverage(
   return result;
 }
 
-/** Overlay a measured season without changing any static expectation leaf. */
+/** Measured coverage for one competition-season, attached beside the static contract. */
+interface ObservedBlock {
+  readonly competition: CoverageCompetition;
+  readonly season: number;
+  readonly measured_at: string;
+  readonly notes: readonly string[];
+  readonly matches: Readonly<Record<string, RowObservation>>;
+  readonly player_match_stats: Readonly<Record<string, RowObservation>>;
+  readonly player_season_pav: TableRowsObservation;
+  readonly match_lineups: MatchPresenceObservation;
+}
+
+/**
+ * Return the static contract, optionally with one bounded competition-season
+ * observation attached as a sibling `observed` block. Measurements never
+ * mutate the static expectations — they are reported side by side.
+ */
 export async function coverageContract(options: CoverageOptions, env?: Env) {
-  const byCompetition = materializeCoverage();
+  const byCompetition = contractCoverage();
+  let observed: ObservedBlock | undefined;
   if (options.includeObserved && options.competition && options.season !== undefined) {
     if (!env) throw new Error("Database environment is required for observed coverage");
-    const observed = await observeCoverage(env, options.competition, options.season);
-    const tables = byCompetition[options.competition];
-    for (const [column, value] of Object.entries(observed.scalar)) {
-      const [qualifiedTable, qualifiedColumn] = column.split(".");
-      const table = qualifiedColumn ? qualifiedTable : "player_match_stats";
-      const field = qualifiedColumn ?? column;
-      if (!table || !field) continue;
-      const columnRanges = tables[table]?.[field];
-      if (!columnRanges) continue;
-      const staticLeaf = Object.values(columnRanges)[0];
-      if (!staticLeaf) continue;
-      const notes = ["Measured; not a guarantee."];
-      if (value.rows === 0) notes.push("Zero rows cannot establish field absence.");
-      columnRanges[String(options.season)] = {
-        expected: staticLeaf.expected,
-        observed: value,
-        source: staticLeaf.source,
-        as_of: observed.measured_at,
-        notes,
-      };
+    const measured = await observeCoverage(env, options.competition, options.season);
+    const matchColumns: Record<string, RowObservation> = {};
+    const statColumns: Record<string, RowObservation> = {};
+    for (const [key, value] of Object.entries(measured.scalar)) {
+      const [qualifiedTable, qualifiedColumn] = key.split(".");
+      if (qualifiedColumn && qualifiedTable === "matches") matchColumns[qualifiedColumn] = value;
+      else statColumns[key] = value;
     }
-    for (const [table, value] of [
-      ["player_season_pav", observed.pav],
-      ["match_lineups", observed.lineups],
-    ] as const) {
-      const columnRanges = tables[table]?.["*"];
-      if (!columnRanges) continue;
-      const staticLeaf = Object.values(columnRanges)[0];
-      if (!staticLeaf) continue;
-      columnRanges[String(options.season)] = {
-        expected: staticLeaf.expected,
-        observed: value,
-        source: staticLeaf.source,
-        as_of: observed.measured_at,
-        notes: ["Measured; not a guarantee."],
-      };
-    }
+    observed = {
+      competition: options.competition,
+      season: options.season,
+      measured_at: measured.measured_at,
+      notes: ["Measured; not a guarantee.", "Zero non-null counts cannot establish field absence."],
+      matches: matchColumns,
+      player_match_stats: statColumns,
+      player_season_pav: measured.pav,
+      match_lineups: measured.lineups,
+    };
   }
-  return { version: COVERAGE_CONTRACT_VERSION, by_competition: byCompetition };
+  return {
+    version: COVERAGE_CONTRACT_VERSION,
+    review_date: COVERAGE_REVIEW_DATE,
+    how_to_read: COVERAGE_HOW_TO_READ,
+    by_competition: byCompetition,
+    ...(observed && { observed }),
+  };
 }

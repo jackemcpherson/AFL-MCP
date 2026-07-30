@@ -3,7 +3,7 @@ import {
   ANALYTICS_COLUMNS,
   COVERAGE_COMPETITIONS,
   COVERAGE_EXPECTATIONS,
-  materializeCoverage,
+  contractCoverage,
   observeCoverage,
 } from "../src/mcp/tools/coverage";
 import { getSchemaInfo } from "../src/mcp/tools/schema";
@@ -55,59 +55,73 @@ function observationEnv() {
 }
 
 describe("coverage contract", () => {
-  it("materializes every declared analytics column for every competition", () => {
-    const coverage = materializeCoverage();
+  it("emits a default for every table and only well-formed exception columns", () => {
+    const coverage = contractCoverage();
     for (const competition of COVERAGE_COMPETITIONS) {
       for (const [table, columns] of Object.entries(ANALYTICS_COLUMNS)) {
         expect(COVERAGE_EXPECTATIONS[competition]).toHaveProperty(table);
-        for (const column of columns) {
-          const ranges = coverage[competition][table]?.[column];
-          expect(Object.keys(ranges ?? {})).toHaveLength(1);
-          const leaf = Object.values(ranges ?? {})[0];
-          expect(leaf?.observed).toBeNull();
-          expect(leaf?.source.length).toBeGreaterThan(0);
-          expect(leaf?.as_of).toBe("2026-07-12");
+        const contract = coverage[competition][table];
+        expect(contract?.range.length).toBeGreaterThan(0);
+        expect(contract?.expected).toBeDefined();
+        expect(contract?.source.length).toBeGreaterThan(0);
+        // notes only present when non-empty (payload budget).
+        if (contract?.notes) expect(contract.notes.length).toBeGreaterThan(0);
+        for (const [column, exception] of Object.entries(contract?.columns ?? {})) {
+          // Every exception names a real declared column...
+          expect(columns as readonly string[]).toContain(column);
+          // ...and genuinely deviates from the table default.
+          expect(
+            exception.expected !== undefined || exception.range !== undefined,
+            `${competition}.${table}.${column} is a no-op exception`,
+          ).toBe(true);
+          if (exception.expected !== undefined)
+            expect(exception.expected).not.toBe(contract?.expected);
+          if (exception.range !== undefined) expect(exception.range).not.toBe(contract?.range);
         }
       }
     }
   });
 
-  it("marks measured VFLW counterexample fields best-effort", () => {
-    const stats = materializeCoverage().VFLW.player_match_stats;
+  it("marks measured VFLW counterexample fields best-effort via the table default", () => {
+    const stats = contractCoverage().VFLW.player_match_stats;
+    // These columns are best-effort — same as the VFLW table default, so in
+    // the v2 exceptions-only encoding they must NOT appear as exceptions.
+    expect(stats?.expected).toBe("best-effort");
     for (const column of ["goal_assists", "marks_inside_fifty", "one_percenters"]) {
-      expect(Object.values(stats?.[column] ?? {})[0]?.expected).toBe("best-effort");
+      expect(stats?.columns?.[column]).toBeUndefined();
     }
+    // Genuine deviations from the default remain listed.
+    expect(stats?.columns?.brownlow_votes?.expected).toBe("not-applicable");
+    expect(stats?.columns?.supercoach_score?.expected).toBe("absent");
   });
 
-  it("expands quarter fields and keeps exact ranges and Melbourne-time coverage canonical", () => {
-    const coverage = materializeCoverage();
-    expect(coverage.AFLM.matches?.weather_temp_c).toHaveProperty("2010..2025");
-    expect(coverage.AFLM.matches?.attendance).toHaveProperty("1990..2019");
-    expect(coverage.AFLM.player_match_stats?.brownlow_votes).toHaveProperty("1990..2025");
+  it("keeps exact ranges and Melbourne-time coverage canonical as exceptions", () => {
+    const coverage = contractCoverage();
+    expect(coverage.AFLM.matches?.columns?.weather_temp_c?.range).toBe("2010..2025");
+    expect(coverage.AFLM.matches?.columns?.attendance?.range).toBe("1990..2019");
+    expect(coverage.AFLM.player_match_stats?.columns?.brownlow_votes?.range).toBe("1990..2025");
     for (const competition of COVERAGE_COMPETITIONS) {
-      expect(Object.values(coverage[competition].matches?.local_time ?? {})[0]?.expected).toBe(
-        "complete",
-      );
+      expect(coverage[competition].matches?.columns?.local_time?.expected).toBe("complete");
     }
     for (const side of ["home", "away"]) {
       for (const quarter of [1, 2, 3, 4]) {
         for (const score of ["goals", "behinds"]) {
-          expect(coverage.AFLM.matches).toHaveProperty(`${side}_q${quarter}_${score}`);
+          expect(coverage.AFLM.matches?.columns?.[`${side}_q${quarter}_${score}`]?.range).toBe(
+            "2020..current",
+          );
         }
       }
     }
   });
 
-  it("keeps default schema deterministic, database-free, and below 128 KiB", async () => {
+  it("keeps default schema deterministic, database-free, and below 40 KiB", async () => {
     const schema = await getSchemaInfo();
     const serialized = JSON.stringify(schema);
-    expect(serialized.length).toBeLessThan(128 * 1024);
-    expect(schema.database.coverage_contract.version).toBe(1);
-    expect(schema.database.column_coverage.deprecated).toBe(true);
-    expect(schema.database.column_coverage.columns["matches.weather_temp_c"]).toMatchObject({
-      from: 2010,
-      to: 2025,
-    });
+    expect(serialized.length).toBeLessThan(40 * 1024);
+    expect(schema.database.coverage_contract.version).toBe(2);
+    expect(schema.database.coverage_contract.review_date).toBe("2026-07-12");
+    expect(schema.database.coverage_contract.how_to_read).toContain("exceptions");
+    expect(schema.database).not.toHaveProperty("column_coverage");
     expect(schema.database.competitions.AFLM.coverage).toEqual({
       matches: true,
       stats: true,
@@ -122,7 +136,9 @@ describe("coverage contract", () => {
 
     expect(Object.keys(filtered.database.competitions)).toEqual(["AFLW"]);
     expect(Object.keys(filtered.database.coverage_contract.by_competition)).toEqual(["AFLW"]);
-    expect(filtered.database.coverage_contract.version).toBe(1);
+    expect(filtered.database.coverage_contract.version).toBe(2);
+    // The reading key survives the filter path.
+    expect(filtered.database.coverage_contract.how_to_read).toContain("exceptions");
     // Tables, notes, and join examples are competition-agnostic and stay.
     expect(filtered.database.tables).toEqual(full.database.tables);
     expect(filtered.database.notes).toEqual(full.database.notes);
@@ -139,13 +155,22 @@ describe("coverage contract", () => {
     expect(Object.keys(full.database.competitions)).toEqual(["AFLM", "AFLW", "VFL", "VFLW"]);
   });
 
-  it("keeps a fully observed schema response below 128 KiB", async () => {
+  it("attaches an observed block beside the static contract and stays below 64 KiB", async () => {
     const { env } = observationEnv();
     const schema = await getSchemaInfo(
       { includeObserved: true, competition: "AFLW", season: 2025 },
       env,
     );
-    expect(JSON.stringify(schema).length).toBeLessThan(128 * 1024);
+    expect(JSON.stringify(schema).length).toBeLessThan(64 * 1024);
+    const observed = schema.database.coverage_contract.observed;
+    expect(observed?.competition).toBe("AFLW");
+    expect(observed?.season).toBe(2025);
+    expect(observed?.matches.weather_temp_c?.unit).toBe("rows");
+    expect(observed?.player_match_stats.kicks?.unit).toBe("rows");
+    expect(observed?.player_season_pav.unit).toBe("table_rows");
+    expect(observed?.match_lineups.unit).toBe("match_presence");
+    // Static expectations are never mutated by a measurement.
+    expect(schema.database.coverage_contract.by_competition.AFLW).toEqual(contractCoverage().AFLW);
   });
 
   it("validates observed bounds before database access", () => {

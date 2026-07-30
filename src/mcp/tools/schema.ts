@@ -8,41 +8,6 @@ import {
   legacyCompetitionCoverage,
 } from "./coverage";
 
-const LEGACY_COVERAGE_PATHS = [
-  ["matches.attendance", "matches", "attendance"],
-  ["matches.weather_temp_c", "matches", "weather_temp_c"],
-  ["matches.weather_type", "matches", "weather_type"],
-  ["matches.home_q1_goals_through_away_q4_behinds", "matches", "home_q1_goals"],
-  ["player_match_stats.brownlow_votes", "player_match_stats", "brownlow_votes"],
-  ["player_match_stats.supercoach_score", "player_match_stats", "supercoach_score"],
-  ["player_match_stats.afl_fantasy_score", "player_match_stats", "afl_fantasy_score"],
-  ["player_match_stats.subbed", "player_match_stats", "subbed"],
-  ["player_match_stats.disposal_efficiency_pct", "player_match_stats", "disposal_efficiency_pct"],
-  ["player_match_stats.score_involvements", "player_match_stats", "score_involvements"],
-  ["player_match_stats.metres_gained", "player_match_stats", "metres_gained"],
-  ["player_match_stats.intercepts", "player_match_stats", "intercepts"],
-  ["player_match_stats.pressure_acts", "player_match_stats", "pressure_acts"],
-  ["player_match_stats.goal_assists", "player_match_stats", "goal_assists"],
-  ["player_match_stats.marks_inside_fifty", "player_match_stats", "marks_inside_fifty"],
-  ["player_match_stats.one_percenters", "player_match_stats", "one_percenters"],
-  ["player_season_pav.*", "player_season_pav", "*"],
-  ["match_weather.*", "match_weather", "match_id"],
-  ["match_predictions.*", "match_predictions", "match_id"],
-  ["venues.geodata", "venues", "latitude"],
-] as const;
-
-function legacyCoverageEntry(ranges: Record<string, { readonly notes: readonly string[] }>) {
-  const entry = Object.entries(ranges)[0];
-  const [fromRaw = "all", toRaw = fromRaw] = (entry?.[0] ?? "all").split("..");
-  const parseBound = (value: string): number | string =>
-    /^\d{4}$/.test(value) ? Number(value) : value;
-  return {
-    from: parseBound(fromRaw),
-    to: parseBound(toRaw),
-    notes: entry?.[1].notes.join(" ") || "See database.coverage_contract.",
-  };
-}
-
 const COMPETITION_NAMES = {
   AFLM: "AFL Men's",
   AFLW: "AFL Women's",
@@ -90,7 +55,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
   const baseFilter = !options.includeObserved && options.competition ? options.competition : null;
   const coverageResponse = baseFilter
     ? {
-        version: coverage.version,
+        ...coverage,
         by_competition: { [baseFilter]: coverage.by_competition[baseFilter] },
       }
     : coverage;
@@ -268,17 +233,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds.",
         "seasons.is_complete: 1 when every match in the season has been played (home_points NOT NULL for all rows). 0 for in-progress and not-started seasons.",
       ],
-      column_coverage: {
-        deprecated: true,
-        description:
-          "Compatibility alias for one release. Use database.coverage_contract; values below are generated from its AFLM expectations.",
-        columns: Object.fromEntries(
-          LEGACY_COVERAGE_PATHS.map(([alias, table, column]) => [
-            alias,
-            legacyCoverageEntry(coverage.by_competition.AFLM[table]?.[column] ?? {}),
-          ]),
-        ),
-      },
       common_joins: {
         // Always filter by competition — first bound parameter in every example.
         multi_comp_summary: [
