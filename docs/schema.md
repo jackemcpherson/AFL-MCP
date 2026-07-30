@@ -117,10 +117,11 @@ publish on Thursday, before stats exist.
 
 - `(match_id, player_id)` UNIQUE.
 - `is_emergency`, `is_substitute` flags.
-- AFLM 2015+ via AFL API. AFLW 2017+. VFL/VFLW best-effort (fitzroy may return
-  empty for some rounds). 2021 - 2022 AFLM are derived from `player_match_stats`
-  because the AFL API only publishes the Thursday-night announced team for those
-  seasons.
+- AFLM 2015+ via AFL API. AFLW, VFL, and VFLW 2023+ (best-effort for the VFL
+  competitions - fitzroy may return empty for some rounds). The AFL API only
+  publishes the Thursday-night announced team for pre-2023 seasons, so the
+  sync's `MIN_LINEUP_SYNC_YEAR` guard excludes them. 2021 - 2022 AFLM rows are
+  instead derived from `player_match_stats`.
 
 ### `match_weather`
 

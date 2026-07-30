@@ -374,7 +374,9 @@ export const COVERAGE_EXPECTATIONS = {
     player_season_pav: { ...CORE, range: "2017..current", source: ["derived-pav"] },
     match_lineups: {
       ...CORE,
-      range: "2017..current",
+      // Pre-2023 AFL API rosters are announced teams, not who played, so
+      // the sync's MIN_LINEUP_SYNC_YEAR guard excludes them by design.
+      range: "2023..current",
       expected: "partial",
       notes: [],
     },
@@ -407,7 +409,9 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_lineups: {
       ...CORE,
-      range: "2021..current",
+      // Pre-2023 rosters are announced teams (see AFLW note); excluded by
+      // the sync's MIN_LINEUP_SYNC_YEAR guard.
+      range: "2023..current",
       expected: "best-effort",
       notes: [],
     },
@@ -440,7 +444,9 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_lineups: {
       ...CORE,
-      range: "2021..current",
+      // Pre-2023 rosters are announced teams (see AFLW note); excluded by
+      // the sync's MIN_LINEUP_SYNC_YEAR guard.
+      range: "2023..current",
       expected: "best-effort",
       notes: [],
     },
