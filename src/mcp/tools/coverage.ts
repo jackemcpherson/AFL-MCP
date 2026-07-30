@@ -327,12 +327,11 @@ export const COVERAGE_EXPECTATIONS = {
       range: "1990..current",
       source: ["afl-api", "fryzigg", "afl-tables"],
       expected: "partial",
-      overrides: { local_time: "complete" },
+      overrides: { local_time: "complete", status: "complete" },
       ranges: {
         attendance: "1990..2019",
         weather_temp_c: "2010..2025",
         weather_type: "2010..2025",
-        status: "2026..current",
         live_period_status: "2026..current",
         completed_quarter: "2026..current",
         ...QUARTER_SCORE_RANGES,
@@ -368,7 +367,7 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2017..current",
       expected: "partial",
-      overrides: { local_time: "complete" },
+      overrides: { local_time: "complete", status: "complete" },
     },
     player_match_stats: {
       ...CORE,
@@ -396,7 +395,7 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2021..current",
       expected: "partial",
-      overrides: { local_time: "complete" },
+      overrides: { local_time: "complete", status: "complete" },
     },
     player_match_stats: {
       ...CORE,
@@ -429,7 +428,7 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2021..current",
       expected: "partial",
-      overrides: { local_time: "complete" },
+      overrides: { local_time: "complete", status: "complete" },
     },
     player_match_stats: {
       ...CORE,

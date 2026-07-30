@@ -212,7 +212,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
         "subbed values are 'Not Subbed' and 'Subbed'.",
         "local_time is Melbourne local time (AEST/AEDT) as HH:MM:SS for every competition; venue-native time is intentionally not stored.",
-        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'.",
+        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'. Populated for every row: historical played matches are 'Complete', and the 38 unscored VFL/VFLW 2021 COVID-era matches are 'Cancelled' (NULL scores there mean cancelled, not missing data).",
         "matches.live_period_status is opaque raw AFL API text; observed values include 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', and 'FULL_TIME'.",
         "matches.completed_quarter is the highest fully completed quarter from the AFL API match clock: 0 means play has not completed a quarter, 1-4 identify the last completed quarter, and NULL means no clock was supplied or the row predates refresh. Pair it with status; it is five-minute-sync context, not a live siren SLA.",
         // Weather
