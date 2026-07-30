@@ -2,8 +2,8 @@
 
 ## Architecture (TL;DR)
 
-AFL-MCP is a Cloudflare Worker serving an MCP server with 3 Code Mode tools
-(`schema`, `tools`, `code`). The `code` tool runs LLM-written TypeScript in
+AFL-MCP is a Cloudflare Worker serving an MCP server with 2 Code Mode tools
+(`schema`, `code`). The `code` tool runs LLM-written TypeScript in
 sandboxed Dynamic Worker isolates against a D1 (SQLite) database
 (`afl-stats`).
 

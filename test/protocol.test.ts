@@ -137,7 +137,7 @@ describe("handleMcpRequest", () => {
 
     const json = await parseJson(res);
     const toolNames = json.result?.tools?.map((t) => t.name);
-    expect(toolNames).toEqual(["schema", "tools", "code"]);
+    expect(toolNames).toEqual(["schema", "code"]);
     const schemaTool = json.result?.tools?.find((tool) => tool.name === "schema") as
       | { inputSchema?: { properties?: Record<string, unknown> } }
       | undefined;
@@ -263,7 +263,7 @@ describe("handleMcpRequest", () => {
     });
   });
 
-  it("returns tools info content", async () => {
+  it("rejects the removed tools tool as unknown", async () => {
     const res = await handleMcpRequest(
       makeRequest({
         jsonrpc: "2.0",
@@ -276,9 +276,7 @@ describe("handleMcpRequest", () => {
     );
 
     const json = await parseJson(res);
-    const tools = JSON.parse(json.result?.content?.[0]?.text ?? "");
-    expect(tools.environment.db.type).toBe("D1Database");
-    expect(tools.constraints).toBeInstanceOf(Array);
+    expect(json.error?.message ?? json.result?.content?.[0]?.text).toMatch(/unknown tool/i);
   });
 
   it("returns error for missing tool name", async () => {

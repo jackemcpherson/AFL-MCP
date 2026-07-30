@@ -2,7 +2,6 @@ import pkg from "../../package.json";
 import { executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
-import { getToolsInfo } from "./tools/tools";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
 import { type JsonRpcRequest, JsonRpcRequestSchema, SchemaToolRequestSchema } from "./validation";
 
@@ -49,19 +48,9 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: "tools",
-    description:
-      "Get sandbox capabilities, constraints, and guidance for writing code that runs against the Australian football statistics database (AFLM, AFLW, VFL, VFLW).",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
     name: "code",
     description:
-      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure.",
+      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
     inputSchema: {
       type: "object",
       properties: {
@@ -128,13 +117,10 @@ async function handleToolCall(
       return mcpContent(await getSchemaInfo(parsed.data, env));
     }
 
-    case "tools":
-      return mcpContent(getToolsInfo());
-
     case "code": {
       if (env.CODE_TOOL_DISABLED === "true") {
         return mcpError(
-          "The code tool is temporarily disabled by the operator. The schema and tools endpoints remain available.",
+          "The code tool is temporarily disabled by the operator. The schema endpoint remains available.",
         );
       }
       const code = args.code;
