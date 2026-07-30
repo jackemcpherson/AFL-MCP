@@ -1,0 +1,5 @@
+extends: spelling
+message: "Check the Australian English spelling of '%s'."
+level: error
+dictionaries:
+  - en_AU

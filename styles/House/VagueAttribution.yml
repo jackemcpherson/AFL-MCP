@@ -1,0 +1,12 @@
+extends: existence
+message: "Name the source for '%s'."
+level: error
+ignorecase: true
+tokens:
+  - experts agree
+  - experts argue
+  - experts say
+  - industry reports
+  - observers say
+  - research shows
+  - sources say

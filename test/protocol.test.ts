@@ -47,7 +47,6 @@ function observedSchemaEnv(): import("../src/types").Env {
   const rows = [
     { id: 77 },
     { row_count: 2, n0: 2 },
-    { row_count: 3, temperature_count: 0, type_count: 1 },
     { row_count: 4 },
     { row_count: 5, match_count: 2 },
     { row_count: 3 },
@@ -137,7 +136,7 @@ describe("handleMcpRequest", () => {
 
     const json = await parseJson(res);
     const toolNames = json.result?.tools?.map((t) => t.name);
-    expect(toolNames).toEqual(["schema", "tools", "code"]);
+    expect(toolNames).toEqual(["schema", "code"]);
     const schemaTool = json.result?.tools?.find((tool) => tool.name === "schema") as
       | { inputSchema?: { properties?: Record<string, unknown> } }
       | undefined;
@@ -195,7 +194,7 @@ describe("handleMcpRequest", () => {
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
     expect(schema.database.tables).toHaveProperty("matches");
     expect(schema.database.tables).toHaveProperty("player_match_stats");
-    expect(schema.database.coverage_contract.version).toBe(1);
+    expect(schema.database.coverage_contract.version).toBe(2);
   });
 
   it("rejects invalid observed schema arguments before querying D1", async () => {
@@ -253,14 +252,17 @@ describe("handleMcpRequest", () => {
     const json = await parseJson(res);
     expect(json.result?.isError).toBeFalsy();
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
-    const observed =
-      schema.database.coverage_contract.by_competition.AFLW.player_match_stats.guernsey_number[
-        "2025"
-      ].observed;
-    expect(observed).toMatchObject({ unit: "rows", rows: 2, non_null: 2, ratio: 1 });
+    const observed = schema.database.coverage_contract.observed;
+    expect(observed).toMatchObject({ competition: "AFLW", season: 2025 });
+    expect(observed.player_match_stats.guernsey_number).toMatchObject({
+      unit: "rows",
+      rows: 2,
+      non_null: 2,
+      ratio: 1,
+    });
   });
 
-  it("returns tools info content", async () => {
+  it("rejects the removed tools tool as unknown", async () => {
     const res = await handleMcpRequest(
       makeRequest({
         jsonrpc: "2.0",
@@ -273,9 +275,7 @@ describe("handleMcpRequest", () => {
     );
 
     const json = await parseJson(res);
-    const tools = JSON.parse(json.result?.content?.[0]?.text ?? "");
-    expect(tools.environment.db.type).toBe("D1Database");
-    expect(tools.constraints).toBeInstanceOf(Array);
+    expect(json.error?.message ?? json.result?.content?.[0]?.text).toMatch(/unknown tool/i);
   });
 
   it("returns error for missing tool name", async () => {

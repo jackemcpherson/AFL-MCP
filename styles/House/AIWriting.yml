@@ -1,0 +1,76 @@
+extends: existence
+message: "Replace '%s' with direct technical prose."
+level: error
+ignorecase: true
+tokens:
+  - arguably
+  - certainly
+  - crucial
+  - deeply
+  - delve
+  - furthermore
+  - fundamentally
+  - fundamental
+  - foster
+  - fostering
+  - harness
+  - here is the kicker
+  - here is the thing
+  - here is the deal
+  - here is the starting point
+  - here is what most people miss
+  - here is where it gets interesting
+  - here's the kicker
+  - here's the thing
+  - here's the deal
+  - here's the starting point
+  - here's what most people miss
+  - here's where it gets interesting
+  - imagine a world
+  - importantly
+  - in conclusion
+  - in summary
+  - interestingly
+  - intricate
+  - it bears mentioning
+  - it is worth noting
+  - journey
+  - landscape
+  - let us break this down
+  - let us explore
+  - let us unpack
+  - let's break this down
+  - let's explore
+  - let's unpack
+  - leverage
+  - meticulous
+  - moreover
+  - navigate
+  - navigating
+  - notably
+  - no-regrets
+  - paradigm
+  - pivotal
+  - quietly
+  - realm
+  - remarkable
+  - remarkably
+  - robust
+  - seamless
+  - serves as
+  - stands as
+  - streamline
+  - synergy
+  - tapestry
+  - testament
+  - the truth is
+  - the real story
+  - the reality is
+  - think of it as
+  - to sum up
+  - utilize
+  - utilise
+  - vibrant
+  - watch this space
+  - despite these challenges
+  - despite its

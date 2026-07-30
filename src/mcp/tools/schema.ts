@@ -8,41 +8,6 @@ import {
   legacyCompetitionCoverage,
 } from "./coverage";
 
-const LEGACY_COVERAGE_PATHS = [
-  ["matches.attendance", "matches", "attendance"],
-  ["matches.weather_temp_c", "matches", "weather_temp_c"],
-  ["matches.weather_type", "matches", "weather_type"],
-  ["matches.home_q1_goals_through_away_q4_behinds", "matches", "home_q1_goals"],
-  ["player_match_stats.brownlow_votes", "player_match_stats", "brownlow_votes"],
-  ["player_match_stats.supercoach_score", "player_match_stats", "supercoach_score"],
-  ["player_match_stats.afl_fantasy_score", "player_match_stats", "afl_fantasy_score"],
-  ["player_match_stats.subbed", "player_match_stats", "subbed"],
-  ["player_match_stats.disposal_efficiency_pct", "player_match_stats", "disposal_efficiency_pct"],
-  ["player_match_stats.score_involvements", "player_match_stats", "score_involvements"],
-  ["player_match_stats.metres_gained", "player_match_stats", "metres_gained"],
-  ["player_match_stats.intercepts", "player_match_stats", "intercepts"],
-  ["player_match_stats.pressure_acts", "player_match_stats", "pressure_acts"],
-  ["player_match_stats.goal_assists", "player_match_stats", "goal_assists"],
-  ["player_match_stats.marks_inside_fifty", "player_match_stats", "marks_inside_fifty"],
-  ["player_match_stats.one_percenters", "player_match_stats", "one_percenters"],
-  ["player_season_pav.*", "player_season_pav", "*"],
-  ["match_weather.*", "match_weather", "match_id"],
-  ["match_predictions.*", "match_predictions", "match_id"],
-  ["venues.geodata", "venues", "latitude"],
-] as const;
-
-function legacyCoverageEntry(ranges: Record<string, { readonly notes: readonly string[] }>) {
-  const entry = Object.entries(ranges)[0];
-  const [fromRaw = "all", toRaw = fromRaw] = (entry?.[0] ?? "all").split("..");
-  const parseBound = (value: string): number | string =>
-    /^\d{4}$/.test(value) ? Number(value) : value;
-  return {
-    from: parseBound(fromRaw),
-    to: parseBound(toRaw),
-    notes: entry?.[1].notes.join(" ") || "See database.coverage_contract.",
-  };
-}
-
 const COMPETITION_NAMES = {
   AFLM: "AFL Men's",
   AFLW: "AFL Women's",
@@ -90,7 +55,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
   const baseFilter = !options.includeObserved && options.competition ? options.competition : null;
   const coverageResponse = baseFilter
     ? {
-        version: coverage.version,
+        ...coverage,
         by_competition: { [baseFilter]: coverage.by_competition[baseFilter] },
       }
     : coverage;
@@ -114,7 +79,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         players: [
           "id INTEGER PRIMARY KEY, first_name TEXT, surname TEXT, external_id TEXT,",
           "external_afl_player_id TEXT,",
-          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER",
+          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER (0=active, 1=retired)",
         ].join(" "),
         matches: [
           "id INTEGER PRIMARY KEY, season_id INTEGER REFERENCES seasons(id),",
@@ -126,7 +91,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "home_goals INTEGER, home_behinds INTEGER, home_points INTEGER,",
           "away_goals INTEGER, away_behinds INTEGER, away_points INTEGER,",
           "margin INTEGER, attendance INTEGER,",
-          "weather_temp_c REAL, weather_type TEXT,",
           "external_afltables_id TEXT, external_fryzigg_id TEXT,",
           "external_afl_id TEXT,",
           "home_rushed_behinds INTEGER, away_rushed_behinds INTEGER,",
@@ -223,8 +187,8 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "Coverage expectations, exact ranges, sources, and review dates are canonical in database.coverage_contract. Descriptive notes never override that typed contract.",
         // Round labels — competition-specific
         "Round labels: matches has TWO round-string columns mirroring the AFL API directly (same approach as the R fitzRoy package — no cross-competition normalisation):",
-        "- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+, round_number=0), `Wildcard` (VFL only, before finals), and finals `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`.",
-        "- `round_abbreviation` is the AFL's short form: `Rd 1`–`Rd N`, `OR`, `WC`, `FW1`, `SF`, `PF`, `GF`. Stable across all four competitions; useful for compact display and abbreviation-based filters.",
+        "- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+, round_number=0), `Wildcard` (VFL only, before finals), and finals `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`. The AFLM 2026 finals format adds `Wildcard Finals` and `Qualifying & Elimination Finals`.",
+        "- `round_abbreviation` is the AFL's short form: `Rd 1`–`Rd N`, `OR`, `WC`, `FW1`, `SF`, `PF`, `GF`. Finals round names without a mapped short form fall back to `F<round_number>` (e.g. AFLM 2026 `Wildcard Finals` = `F25`, `Qualifying & Elimination Finals` = `F26`). Stable across all four competitions; useful for compact display and abbreviation-based filters.",
         "- `round_number` is a per-season ordinal: continuous through regular and finals (e.g. AFLM 2024 finals are 25–28; AFLW 2025 finals are 13–16; VFL 2025 has Wildcard at 22 then finals 23–26). Round numbers don't align across competitions — AFLM R1 is March, AFLW R1 is August, VFL R1 is April.",
         "- `round_type` is `Regular` (home-and-away + Opening Round + Wildcard) or `Finals`.",
         "Pre-v3.0.0 historical data may still have legacy `EF`/`QF`/`SF`/`PF`/`GF` strings in `round` for AFLM finals 2012–2025; these get rewritten to the long form on the next backfill.",
@@ -247,15 +211,14 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
         "subbed values are 'Not Subbed' and 'Subbed'.",
         "local_time is Melbourne local time (AEST/AEDT) as HH:MM:SS for every competition; venue-native time is intentionally not stored.",
-        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'.",
+        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'. Populated for every row: historical played matches are 'Complete', and the 38 unscored VFL/VFLW 2021 COVID-era matches are 'Cancelled' (NULL scores there mean cancelled, not missing data).",
         "matches.live_period_status is opaque raw AFL API text; observed values include 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', and 'FULL_TIME'.",
         "matches.completed_quarter is the highest fully completed quarter from the AFL API match clock: 0 means play has not completed a quarter, 1-4 identify the last completed quarter, and NULL means no clock was supplied or the row predates refresh. Pair it with status; it is five-minute-sync context, not a live siren SLA.",
         // Weather
         "match_weather: up to two rows per match, keyed (match_id, kind). kind='forecast' is the pre-match Open-Meteo forecast, overwritten in place per refresh and KEPT after the match (compare with observed for forecast error); kind='observed' is the post-match value.",
         "match_weather window: metrics cover the 3h from scheduled start — temp_c/humidity_pct are means, precip_mm a total, wind_speed_kmh/wind_gust_kmh maxima. precip_24h_prior_mm is rainfall in the 24h BEFORE the window (ground condition, separate from in-game rain).",
         "match_weather.source: 'era5_land+era5' = final reanalysis (temp/humidity/wind from ERA5-Land, precipitation from ERA5); 'historical_forecast' = interim observed value, upgraded to reanalysis within ~a week; 'best_match' = forecast rows. Data from Open-Meteo (CC-BY 4.0).",
-        "DO NOT MIX legacy matches.weather_temp_c/weather_type with match_weather: they are a frozen fryzigg record (AFLM 2010-2025 only) and weather_temp_c is a DAILY-MAX, not a match-window mean. Use match_weather for weather analysis; the legacy columns remain only as the historical label record (e.g. ROOF_CLOSED).",
-        "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground (self for canonical rows). Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id).",
+        "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground — self for canonical rows, NULL for venues the sync has inserted but not yet classified. Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id) (the COALESCE covers the unclassified-NULL case).",
         "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
         // Predictions
         "match_predictions: one row per match from the tipper model, overwritten on regeneration (latest only, no history). home_win_prob (0..1) and predicted_margin (positive = home favoured) are from the HOME team's perspective; model_version is the tipper config id. Written by tipper via the D1 REST API, not this Worker. Coverage starts 2026 and is sparse — LEFT JOIN and treat absence as not-published.",
@@ -268,17 +231,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds.",
         "seasons.is_complete: 1 when every match in the season has been played (home_points NOT NULL for all rows). 0 for in-progress and not-started seasons.",
       ],
-      column_coverage: {
-        deprecated: true,
-        description:
-          "Compatibility alias for one release. Use database.coverage_contract; values below are generated from its AFLM expectations.",
-        columns: Object.fromEntries(
-          LEGACY_COVERAGE_PATHS.map(([alias, table, column]) => [
-            alias,
-            legacyCoverageEntry(coverage.by_competition.AFLM[table]?.[column] ?? {}),
-          ]),
-        ),
-      },
       common_joins: {
         // Always filter by competition — first bound parameter in every example.
         multi_comp_summary: [

@@ -1,0 +1,90 @@
+[global]
+flavor = "gfm"
+line-length = 80
+respect-gitignore = true
+# Project exception: public-documentation checks exclude internal agent files,
+# plans, immutable source snapshots, and generated artefacts.
+exclude = [
+  "vendor/**",
+  "generated/**",
+  ".venv/**",
+  "venv/**",
+  "node_modules/**",
+  ".terraform/**",
+  "**/.terraform/**",
+  ".pytest_cache/**",
+  ".mypy_cache/**",
+  ".ruff_cache/**",
+  ".obsidian/**",
+  ".worktrees/**",
+  ".wrangler/**",
+  ".playwright-mcp/**",
+  ".clinerules/**",
+  ".cursor/**",
+  ".opencode/**",
+  ".windsurf/**",
+  "htmlcov/**",
+  "dist/**",
+  "build/**",
+  "coverage/**",
+  "archive/**",
+  "**/archive/**",
+  ".scratch/**",
+  ".claude/**",
+  ".agents/**",
+  ".github/instructions/**",
+  ".github/copilot-instructions.md",
+  "plans/**",
+  "analysis/**",
+  "sources/**",
+  "logs/**",
+  "skills/**",
+  "docs/agents/**",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CONTEXT.md",
+  "HANDOFF.md",
+  "SECRETS.md",
+  "DEBUGGING_LOG.md",
+  "README_AGENTS.md",
+  "SPEC.md",
+  "TEST_SPEC.md",
+  "**/*-spec.md",
+  "**/SKILL.md",
+  "**/SKILL_TEMPLATE.md",
+  "**/REVIEWER_TEMPLATE.md",
+  "documentation/PRD.md",
+  "documentation/DESIGN.md",
+  "documentation/IMPLEMENTATION.md",
+]
+extend-enable = ["MD060", "MD063", "MD080", "MD082", "MD083", "MD084"]
+
+[MD003]
+style = "atx"
+
+[MD004]
+style = "dash"
+
+[MD013]
+line-length = 80
+code_blocks = false
+headings = false
+tables = false
+
+[MD033]
+allowed_elements = []
+
+[MD035]
+style = "---"
+
+[MD046]
+style = "fenced"
+
+[MD048]
+style = "backtick"
+
+[MD060]
+style = "aligned"
+
+[MD063]
+style = "title-case"

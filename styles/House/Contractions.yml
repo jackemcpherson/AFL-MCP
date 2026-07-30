@@ -1,0 +1,24 @@
+extends: existence
+message: "Do not use the contraction '%s'."
+level: error
+ignorecase: true
+tokens:
+  - aren't
+  - can't
+  - couldn't
+  - didn't
+  - doesn't
+  - don't
+  - hadn't
+  - hasn't
+  - haven't
+  - isn't
+  - it's
+  - shouldn't
+  - that's
+  - they're
+  - wasn't
+  - weren't
+  - won't
+  - wouldn't
+  - you're

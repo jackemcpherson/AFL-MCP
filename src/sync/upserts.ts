@@ -8,7 +8,7 @@ import {
   roundLabel,
   roundTypeLabel,
 } from "fitzroy";
-import { normaliseTeam, normaliseVenue } from "../lib/normalise";
+import { isPlaceholderTeamName, normaliseTeam, normaliseVenue } from "../lib/normalise";
 import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 import {
@@ -188,6 +188,74 @@ export async function ensureTeams(
   return new Map(existing.results.map((r) => [r.name, r.id]));
 }
 
+/**
+ * Split incoming matches into syncable and placeholder sets, self-heal any
+ * placeholder rows a pre-guard Worker version already wrote, and log one
+ * `sync:placeholder-match:<competition>` row when placeholders are present.
+ *
+ * Placeholder matches (see {@link isPlaceholderTeamName}) are the AFL API's
+ * unresolved finals fixtures ("1st" vs "4th", "Loser of QF1" vs "Winner of
+ * EF1"). They are excluded from team/venue/match upserts entirely; once the
+ * AFL resolves the fixture to real clubs, the match arrives with the same
+ * `external_afl_id` and upserts normally. Migration 0016 cleans the
+ * historical rows; the self-heal DELETE here closes the deploy-window race
+ * where an old Worker re-inserts ghosts between migration and upload.
+ */
+export async function quarantinePlaceholderMatches(
+  env: Env,
+  competitionId: number,
+  competitionCode: CompetitionCode,
+  matches: readonly Match[],
+): Promise<readonly Match[]> {
+  const placeholderNames = new Set<string>();
+  const placeholders = new Set<Match>();
+  for (const m of matches) {
+    for (const name of [normaliseTeam(m.homeTeam), normaliseTeam(m.awayTeam)]) {
+      if (isPlaceholderTeamName(name)) {
+        placeholderNames.add(name);
+        placeholders.add(m);
+      }
+    }
+  }
+  if (placeholders.size === 0) return matches;
+
+  const names = Array.from(placeholderNames);
+  const namePh = names.map(() => "?").join(", ");
+  const { results: ghostTeams } = await env.DB.prepare(
+    `SELECT id FROM teams WHERE competition_id = ? AND name IN (${namePh})`,
+  )
+    .bind(competitionId, ...names)
+    .all<{ id: number }>();
+
+  if (ghostTeams.length > 0) {
+    const ids = ghostTeams.map((r) => r.id);
+    const idPh = ids.map(() => "?").join(", ");
+    const ghostMatchIds = `SELECT id FROM matches WHERE home_team_id IN (${idPh}) OR away_team_id IN (${idPh})`;
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM match_weather WHERE match_id IN (${ghostMatchIds})`).bind(
+        ...ids,
+        ...ids,
+      ),
+      env.DB.prepare(`DELETE FROM match_predictions WHERE match_id IN (${ghostMatchIds})`).bind(
+        ...ids,
+        ...ids,
+      ),
+      env.DB.prepare(
+        `DELETE FROM matches WHERE home_team_id IN (${idPh}) OR away_team_id IN (${idPh})`,
+      ).bind(...ids, ...ids),
+      env.DB.prepare(`DELETE FROM teams WHERE id IN (${idPh})`).bind(...ids),
+    ]);
+  }
+
+  await logSync(
+    env,
+    `sync:placeholder-match:${competitionCode}`,
+    placeholders.size,
+    names.join(", "),
+  );
+  return matches.filter((m) => !placeholders.has(m));
+}
+
 /** Ensure rows exist for every venue referenced by `matches`, and return a name → id map. */
 export async function ensureVenues(
   env: Env,
@@ -247,23 +315,49 @@ export async function selectHasCompletedMatchWithoutStats(
  * whose Thursday-night release window the sync missed (e.g. an upstream
  * error blocked the lineup fetch). Capped via `limit` so historical
  * seasons that legitimately have no lineups don't refetch on every tick.
+ *
+ * `maxAgeDays` bounds the look-back by match date: rounds whose matches all
+ * finished more than that many days ago stop being retried on cron ticks —
+ * a permanently-404 round (roster never published upstream) must not burn a
+ * subrequest plus a sync_log error every 5 minutes forever, which is how
+ * AFLW lineups produced 20k log rows in 90 days. Pass `null` (admin
+ * backfills) to lift the recency bound and re-fetch any historical gap.
  */
 export async function selectCompletedRoundsWithoutLineups(
   env: Env,
   seasonId: number,
   limit: number,
+  maxAgeDays: number | null,
 ): Promise<number[]> {
-  const { results } = await env.DB.prepare(
+  const recencyFilter = maxAgeDays === null ? "" : "AND m.date >= date('now', ?)";
+  const stmt = env.DB.prepare(
     `SELECT DISTINCT m.round_number FROM matches m
      WHERE m.season_id = ?
        AND m.home_points IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
+       ${recencyFilter}
      ORDER BY m.round_number DESC
      LIMIT ?`,
-  )
-    .bind(seasonId, limit)
-    .all<{ round_number: number }>();
+  );
+  const { results } = await (maxAgeDays === null
+    ? stmt.bind(seasonId, limit)
+    : stmt.bind(seasonId, `-${maxAgeDays} days`, limit)
+  ).all<{ round_number: number }>();
   return results.map((r) => r.round_number);
+}
+
+/** Earliest match date (ISO `YYYY-MM-DD`) in the given round, or null if the round has no matches. */
+export async function selectRoundFirstDate(
+  env: Env,
+  seasonId: number,
+  round: number,
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT MIN(date) AS first FROM matches WHERE season_id = ? AND round_number = ?",
+  )
+    .bind(seasonId, round)
+    .first<{ first: string | null }>();
+  return row?.first ?? null;
 }
 
 /** Whether any match in the given round already has lineup rows stored. */
@@ -458,8 +552,6 @@ export const MATCH_COLUMNS = [
   { name: "away_q3_behinds", kind: "coalesce", value: (r) => r.m.q3Away?.behinds ?? null },
   { name: "away_q4_goals", kind: "coalesce", value: (r) => r.m.q4Away?.goals ?? null },
   { name: "away_q4_behinds", kind: "coalesce", value: (r) => r.m.q4Away?.behinds ?? null },
-  { name: "weather_temp_c", kind: "coalesce", value: (r) => r.m.weatherTempCelsius },
-  { name: "weather_type", kind: "coalesce", value: (r) => r.m.weatherType },
   { name: "status", kind: "coalesce", value: (r) => r.m.status },
   { name: "live_period_status", kind: "coalesce", value: (r) => r.m.livePeriodStatus },
   { name: "completed_quarter", kind: "coalesce", value: (r) => r.m.completedQuarter },

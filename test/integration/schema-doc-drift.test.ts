@@ -37,7 +37,7 @@ describe("schema tool vs live D1 schema", () => {
     }
   });
 
-  it("assigns every live analytics column a coverage expectation for every competition", async () => {
+  it("covers every live analytics table with a default and only real columns as exceptions", async () => {
     const schema = await getSchemaInfo();
     const contract = schema.database.coverage_contract.by_competition;
     const tables = await (env as Env).DB.prepare(
@@ -50,12 +50,21 @@ describe("schema tool vs live D1 schema", () => {
       const columns = await (env as Env).DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
       }>();
+      const liveColumns = new Set(columns.results.map((c) => c.name));
       for (const competition of ["AFLM", "AFLW", "VFL", "VFLW"] as const) {
-        for (const column of columns.results) {
+        // v2 contract: a table default covers every column; exceptions
+        // must name real columns so stale entries fail CI.
+        const tableContract = contract[competition][table];
+        expect(
+          tableContract?.expected,
+          `coverage contract is missing a ${competition}.${table} default`,
+        ).toBeDefined();
+        expect(tableContract?.range, `${competition}.${table} default has no range`).toBeDefined();
+        for (const exception of Object.keys(tableContract?.columns ?? {})) {
           expect(
-            contract[competition][table]?.[column.name],
-            `coverage contract is missing ${competition}.${table}.${column.name}`,
-          ).toBeDefined();
+            liveColumns.has(exception),
+            `coverage exception ${competition}.${table}.${exception} names a column not in the live schema`,
+          ).toBe(true);
         }
       }
     }

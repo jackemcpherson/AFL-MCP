@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normaliseTeam, normaliseVenue } from "../src/lib/normalise";
+import { isPlaceholderTeamName, normaliseTeam, normaliseVenue } from "../src/lib/normalise";
 
 describe("normaliseTeam", () => {
   it("maps known aliases to canonical names", () => {
@@ -50,5 +50,40 @@ describe("normaliseVenue", () => {
 
   it("trims whitespace", () => {
     expect(normaliseVenue("  M.C.G.  ")).toBe("MCG");
+  });
+});
+
+describe("isPlaceholderTeamName", () => {
+  it("matches ladder-position ordinals", () => {
+    expect(isPlaceholderTeamName("1st")).toBe(true);
+    expect(isPlaceholderTeamName("2nd")).toBe(true);
+    expect(isPlaceholderTeamName("3rd")).toBe(true);
+    expect(isPlaceholderTeamName("10th")).toBe(true);
+    expect(isPlaceholderTeamName("18th")).toBe(true);
+  });
+
+  it("matches finals progression labels", () => {
+    expect(isPlaceholderTeamName("Winner of QF1")).toBe(true);
+    expect(isPlaceholderTeamName("Winner of PF2")).toBe(true);
+    expect(isPlaceholderTeamName("Loser of QF2")).toBe(true);
+    expect(isPlaceholderTeamName("Highest-ranked WF Winner")).toBe(true);
+    expect(isPlaceholderTeamName("Lowest-ranked WF Winner")).toBe(true);
+  });
+
+  it("matches bare TBC/TBA markers", () => {
+    expect(isPlaceholderTeamName("TBC")).toBe(true);
+    expect(isPlaceholderTeamName("TBA")).toBe(true);
+    expect(isPlaceholderTeamName("To Be Confirmed")).toBe(true);
+  });
+
+  it("does not match real club names", () => {
+    expect(isPlaceholderTeamName("Carlton")).toBe(false);
+    expect(isPlaceholderTeamName("GWS Giants")).toBe(false);
+    expect(isPlaceholderTeamName("Western Bulldogs")).toBe(false);
+    expect(isPlaceholderTeamName("Kuwarna")).toBe(false);
+    // Hypothetical future clubs must not be swallowed by the guard.
+    expect(isPlaceholderTeamName("Tasmania Devils")).toBe(false);
+    // Contains a progression word but is not a progression label.
+    expect(isPlaceholderTeamName("Winners Circle FC")).toBe(false);
   });
 });

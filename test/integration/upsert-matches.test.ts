@@ -7,8 +7,10 @@ import {
   ensureTeams,
   ensureVenues,
   selectCompletedCount,
+  selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
   selectNextRound,
+  selectRoundFirstDate,
   upsertMatches,
   upsertPlayers,
   upsertStats,
@@ -504,5 +506,60 @@ describe("selectNextRound", () => {
     await upsertMatches(env, [opening], { seasonId, teamMap, venueMap });
 
     expect(await selectNextRound(env, seasonId)).toBe(0);
+  });
+});
+
+describe("selectRoundFirstDate", () => {
+  it("returns the earliest match date in the round, and null for an empty round", async () => {
+    const { competitionId, seasonId } = await setup();
+    const later = makeMatch({
+      matchId: "M-1",
+      roundNumber: 5,
+      date: new Date("2026-06-07T04:00:00Z"),
+    });
+    const earlier = makeMatch({
+      matchId: "M-2",
+      roundNumber: 5,
+      homeTeam: "Geelong",
+      awayTeam: "Sydney",
+      date: new Date("2026-06-05T09:00:00Z"),
+    });
+    const matches = [later, earlier];
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", matches);
+    const venueMap = await ensureVenues(env, matches);
+    await upsertMatches(env, matches, { seasonId, teamMap, venueMap });
+
+    expect(await selectRoundFirstDate(env, seasonId, 5)).toBe("2026-06-05");
+    expect(await selectRoundFirstDate(env, seasonId, 6)).toBeNull();
+  });
+});
+
+describe("selectCompletedRoundsWithoutLineups recency bound", () => {
+  async function seedCompletedRound(
+    competitionId: number,
+    seasonId: number,
+    round: number,
+    date: string,
+  ) {
+    const match = makeMatch({
+      matchId: `M-R${round}`,
+      roundNumber: round,
+      date: new Date(`${date}T04:00:00Z`),
+    });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
+    const venueMap = await ensureVenues(env, [match]);
+    await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+  }
+
+  it("drops rounds older than maxAgeDays but keeps them when the bound is lifted", async () => {
+    const { competitionId, seasonId } = await setup();
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    await seedCompletedRound(competitionId, seasonId, 1, "2026-03-20");
+    await seedCompletedRound(competitionId, seasonId, 2, recent);
+
+    // Cron path: only the recent round is retried.
+    expect(await selectCompletedRoundsWithoutLineups(env, seasonId, 10, 14)).toEqual([2]);
+    // Backfill path: the recency bound is lifted and both rounds return.
+    expect(await selectCompletedRoundsWithoutLineups(env, seasonId, 10, null)).toEqual([2, 1]);
   });
 });

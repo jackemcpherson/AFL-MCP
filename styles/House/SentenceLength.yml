@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Use no more than 25 words in a descriptive sentence."
+level: error
+scope: sentence
+max: 25
+token: '\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?\b'

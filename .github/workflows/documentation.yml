@@ -1,0 +1,57 @@
+name: Documentation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - development
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUMDL_VERSION: 0.2.43
+  VALE_GLOB: "!{vendor/**,generated/**,.venv/**,venv/**,node_modules/**,.terraform/**,**/.terraform/**,.pytest_cache/**,.mypy_cache/**,.ruff_cache/**,.obsidian/**,.worktrees/**,.wrangler/**,.playwright-mcp/**,.clinerules/**,.cursor/**,.opencode/**,.windsurf/**,htmlcov/**,dist/**,build/**,coverage/**,archive/**,**/archive/**,.scratch/**,.claude/**,.agents/**,.github/instructions/**,.github/copilot-instructions.md,plans/**,analysis/**,sources/**,logs/**,skills/**,docs/agents/**,AGENTS.md,CLAUDE.md,CONTEXT.md,HANDOFF.md,SECRETS.md,DEBUGGING_LOG.md,README_AGENTS.md,SPEC.md,TEST_SPEC.md,**/*-spec.md,**/SKILL.md,**/SKILL_TEMPLATE.md,**/REVIEWER_TEMPLATE.md,documentation/PRD.md,documentation/DESIGN.md,documentation/IMPLEMENTATION.md}"
+
+jobs:
+  lint:
+    name: Lint Markdown and prose
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      - name: Install rumdl
+        run: uv tool install "rumdl==${RUMDL_VERSION}"
+
+      - name: Install Vale
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/vale-cli/vale/releases/download/v3.15.2/vale_3.15.2_Linux_64-bit.tar.gz \
+            --output "$RUNNER_TEMP/vale.tar.gz"
+          printf '%s  %s\n' \
+            'fc72e64454d6bd7af91905d4faebbf411bae3eec17bb572f4101311212bc0d9e' \
+            "$RUNNER_TEMP/vale.tar.gz" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/vale"
+          tar -xzf "$RUNNER_TEMP/vale.tar.gz" -C "$RUNNER_TEMP/vale"
+          printf '%s\n' "$RUNNER_TEMP/vale" >> "$GITHUB_PATH"
+
+      - name: Check Markdown structure
+        run: rumdl check --deny-config-warnings .
+
+      - name: Check prose
+        run: vale --no-global --glob="$VALE_GLOB" .
