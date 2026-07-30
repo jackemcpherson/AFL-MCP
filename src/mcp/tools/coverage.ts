@@ -48,8 +48,6 @@ const MATCH_COLUMNS = [
   "away_points",
   "margin",
   "attendance",
-  "weather_temp_c",
-  "weather_type",
   "external_afltables_id",
   "external_fryzigg_id",
   "external_afl_id",
@@ -330,8 +328,6 @@ export const COVERAGE_EXPECTATIONS = {
       overrides: { local_time: "complete", status: "complete" },
       ranges: {
         attendance: "1990..2019",
-        weather_temp_c: "2010..2025",
-        weather_type: "2010..2025",
         live_period_status: "2026..current",
         completed_quarter: "2026..current",
         ...QUARTER_SCORE_RANGES,
@@ -593,11 +589,6 @@ async function queryObservation(env: Env, competition: CoverageCompetition, seas
   )
     .bind(seasonRow.id)
     .first<NumericRow>();
-  const weather = await env.DB.prepare(
-    "SELECT COUNT(*) AS row_count, COUNT(weather_temp_c) AS temperature_count, COUNT(weather_type) AS type_count FROM matches WHERE season_id = ?",
-  )
-    .bind(seasonRow.id)
-    .first<NumericRow>();
   const pav = await env.DB.prepare(
     "SELECT COUNT(*) AS row_count FROM player_season_pav WHERE season_id = ?",
   )
@@ -624,20 +615,6 @@ async function queryObservation(env: Env, competition: CoverageCompetition, seas
       non_null: nonNull,
       null: rows - nonNull,
       ratio: ratio(nonNull, rows),
-    };
-  }
-  const matchRows = weather?.row_count ?? 0;
-  for (const [column, countKey] of [
-    ["weather_temp_c", "temperature_count"],
-    ["weather_type", "type_count"],
-  ] as const) {
-    const nonNull = weather?.[countKey] ?? 0;
-    scalar[`matches.${column}`] = {
-      unit: "rows",
-      rows: matchRows,
-      non_null: nonNull,
-      null: matchRows - nonNull,
-      ratio: ratio(nonNull, matchRows),
     };
   }
   return {
@@ -680,7 +657,6 @@ interface ObservedBlock {
   readonly season: number;
   readonly measured_at: string;
   readonly notes: readonly string[];
-  readonly matches: Readonly<Record<string, RowObservation>>;
   readonly player_match_stats: Readonly<Record<string, RowObservation>>;
   readonly player_season_pav: TableRowsObservation;
   readonly match_lineups: MatchPresenceObservation;
@@ -697,20 +673,12 @@ export async function coverageContract(options: CoverageOptions, env?: Env) {
   if (options.includeObserved && options.competition && options.season !== undefined) {
     if (!env) throw new Error("Database environment is required for observed coverage");
     const measured = await observeCoverage(env, options.competition, options.season);
-    const matchColumns: Record<string, RowObservation> = {};
-    const statColumns: Record<string, RowObservation> = {};
-    for (const [key, value] of Object.entries(measured.scalar)) {
-      const [qualifiedTable, qualifiedColumn] = key.split(".");
-      if (qualifiedColumn && qualifiedTable === "matches") matchColumns[qualifiedColumn] = value;
-      else statColumns[key] = value;
-    }
     observed = {
       competition: options.competition,
       season: options.season,
       measured_at: measured.measured_at,
       notes: ["Measured; not a guarantee.", "Zero non-null counts cannot establish field absence."],
-      matches: matchColumns,
-      player_match_stats: statColumns,
+      player_match_stats: measured.scalar,
       player_season_pav: measured.pav,
       match_lineups: measured.lineups,
     };

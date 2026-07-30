@@ -91,7 +91,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "home_goals INTEGER, home_behinds INTEGER, home_points INTEGER,",
           "away_goals INTEGER, away_behinds INTEGER, away_points INTEGER,",
           "margin INTEGER, attendance INTEGER,",
-          "weather_temp_c REAL, weather_type TEXT,",
+          "weather_temp_c REAL (DEPRECATED - use match_weather), weather_type TEXT (DEPRECATED - use match_weather),",
           "external_afltables_id TEXT, external_fryzigg_id TEXT,",
           "external_afl_id TEXT,",
           "home_rushed_behinds INTEGER, away_rushed_behinds INTEGER,",
@@ -219,7 +219,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "match_weather: up to two rows per match, keyed (match_id, kind). kind='forecast' is the pre-match Open-Meteo forecast, overwritten in place per refresh and KEPT after the match (compare with observed for forecast error); kind='observed' is the post-match value.",
         "match_weather window: metrics cover the 3h from scheduled start — temp_c/humidity_pct are means, precip_mm a total, wind_speed_kmh/wind_gust_kmh maxima. precip_24h_prior_mm is rainfall in the 24h BEFORE the window (ground condition, separate from in-game rain).",
         "match_weather.source: 'era5_land+era5' = final reanalysis (temp/humidity/wind from ERA5-Land, precipitation from ERA5); 'historical_forecast' = interim observed value, upgraded to reanalysis within ~a week; 'best_match' = forecast rows. Data from Open-Meteo (CC-BY 4.0).",
-        "DO NOT MIX legacy matches.weather_temp_c/weather_type with match_weather: they are a frozen fryzigg record (AFLM 2010-2025 only) and weather_temp_c is a DAILY-MAX, not a match-window mean. Use match_weather for weather analysis; the legacy columns remain only as the historical label record (e.g. ROOF_CLOSED).",
+        "matches.weather_temp_c and matches.weather_type are DEPRECATED and scheduled for removal: a frozen fryzigg record (AFLM 2010-2025 only) where weather_temp_c is a daily max, not a match-window value. Use match_weather for all weather analysis.",
         "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground (self for canonical rows). Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id).",
         "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
         // Predictions

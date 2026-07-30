@@ -47,7 +47,6 @@ function observedSchemaEnv(): import("../src/types").Env {
   const rows = [
     { id: 77 },
     { row_count: 2, n0: 2 },
-    { row_count: 3, temperature_count: 0, type_count: 1 },
     { row_count: 4 },
     { row_count: 5, match_count: 2 },
     { row_count: 3 },

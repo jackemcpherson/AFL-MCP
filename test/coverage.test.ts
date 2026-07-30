@@ -31,7 +31,6 @@ function observationEnv() {
   const rows = [
     { id: 77 },
     { row_count: 2, n0: 2, n1: 1 },
-    { row_count: 3, temperature_count: 0, type_count: 1 },
     { row_count: 4 },
     { row_count: 5, match_count: 2 },
     { row_count: 3 },
@@ -97,7 +96,6 @@ describe("coverage contract", () => {
 
   it("keeps exact ranges and Melbourne-time coverage canonical as exceptions", () => {
     const coverage = contractCoverage();
-    expect(coverage.AFLM.matches?.columns?.weather_temp_c?.range).toBe("2010..2025");
     expect(coverage.AFLM.matches?.columns?.attendance?.range).toBe("1990..2019");
     expect(coverage.AFLM.player_match_stats?.columns?.brownlow_votes?.range).toBe("1990..2025");
     for (const competition of COVERAGE_COMPETITIONS) {
@@ -165,7 +163,6 @@ describe("coverage contract", () => {
     const observed = schema.database.coverage_contract.observed;
     expect(observed?.competition).toBe("AFLW");
     expect(observed?.season).toBe(2025);
-    expect(observed?.matches.weather_temp_c?.unit).toBe("rows");
     expect(observed?.player_match_stats.kicks?.unit).toBe("rows");
     expect(observed?.player_season_pav.unit).toBe("table_rows");
     expect(observed?.match_lineups.unit).toBe("match_presence");
@@ -215,12 +212,12 @@ describe("coverage contract", () => {
     const { env, calls } = observationEnv();
     const { cache, entries } = fakeCache();
     const first = await observeCoverage(env, "VFLW", 2026, cache);
-    expect(first.scalar["matches.weather_temp_c"]).toEqual({
+    expect(first.scalar.guernsey_number).toEqual({
       unit: "rows",
-      rows: 3,
-      non_null: 0,
-      null: 3,
-      ratio: 0,
+      rows: 2,
+      non_null: 2,
+      null: 0,
+      ratio: 1,
     });
     expect(first.pav).toEqual({ unit: "table_rows", rows: 4 });
     expect(first.lineups).toEqual({
@@ -230,20 +227,20 @@ describe("coverage contract", () => {
       rows: 5,
       ratio: 0.666667,
     });
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(5);
     expect(calls[0]?.bindings).toEqual(["VFLW", 2026]);
     expect(
       calls.slice(1).every((call) => call.bindings.length === 1 && call.bindings[0] === 77),
     ).toBe(true);
     expect(calls[1]?.sql).toContain("match_id IN (SELECT id FROM matches WHERE season_id = ?)");
-    expect(calls[2]?.sql).toContain("FROM matches WHERE season_id = ?");
-    expect(calls[3]?.sql).toContain("FROM player_season_pav WHERE season_id = ?");
-    expect(calls[4]?.sql).toContain("COUNT(DISTINCT match_id)");
+    expect(calls[2]?.sql).toContain("FROM player_season_pav WHERE season_id = ?");
+    expect(calls[3]?.sql).toContain("COUNT(DISTINCT match_id)");
+    expect(calls[4]?.sql).toContain("FROM matches WHERE season_id = ?");
     expect(entries.size).toBe(1);
     expect(entries.values().next().value?.headers.get("Cache-Control")).toBe("max-age=900");
 
     await observeCoverage(env, "VFLW", 2026, cache);
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(5);
   });
 
   it("does not cache query errors", async () => {
