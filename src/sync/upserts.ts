@@ -315,23 +315,49 @@ export async function selectHasCompletedMatchWithoutStats(
  * whose Thursday-night release window the sync missed (e.g. an upstream
  * error blocked the lineup fetch). Capped via `limit` so historical
  * seasons that legitimately have no lineups don't refetch on every tick.
+ *
+ * `maxAgeDays` bounds the look-back by match date: rounds whose matches all
+ * finished more than that many days ago stop being retried on cron ticks —
+ * a permanently-404 round (roster never published upstream) must not burn a
+ * subrequest plus a sync_log error every 5 minutes forever, which is how
+ * AFLW lineups produced 20k log rows in 90 days. Pass `null` (admin
+ * backfills) to lift the recency bound and re-fetch any historical gap.
  */
 export async function selectCompletedRoundsWithoutLineups(
   env: Env,
   seasonId: number,
   limit: number,
+  maxAgeDays: number | null,
 ): Promise<number[]> {
-  const { results } = await env.DB.prepare(
+  const recencyFilter = maxAgeDays === null ? "" : "AND m.date >= date('now', ?)";
+  const stmt = env.DB.prepare(
     `SELECT DISTINCT m.round_number FROM matches m
      WHERE m.season_id = ?
        AND m.home_points IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
+       ${recencyFilter}
      ORDER BY m.round_number DESC
      LIMIT ?`,
-  )
-    .bind(seasonId, limit)
-    .all<{ round_number: number }>();
+  );
+  const { results } = await (maxAgeDays === null
+    ? stmt.bind(seasonId, limit)
+    : stmt.bind(seasonId, `-${maxAgeDays} days`, limit)
+  ).all<{ round_number: number }>();
   return results.map((r) => r.round_number);
+}
+
+/** Earliest match date (ISO `YYYY-MM-DD`) in the given round, or null if the round has no matches. */
+export async function selectRoundFirstDate(
+  env: Env,
+  seasonId: number,
+  round: number,
+): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT MIN(date) AS first FROM matches WHERE season_id = ? AND round_number = ?",
+  )
+    .bind(seasonId, round)
+    .first<{ first: string | null }>();
+  return row?.first ?? null;
 }
 
 /** Whether any match in the given round already has lineup rows stored. */

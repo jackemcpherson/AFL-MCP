@@ -17,6 +17,7 @@ import {
   selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
   selectNextRound,
+  selectRoundFirstDate,
   selectRoundHasAnyLineups,
   unionPlayers,
   updateSeasonCompleteness,
@@ -29,6 +30,15 @@ import {
 const FORWARD_DAYS = 3;
 const BACKWARD_DAYS = 1;
 const SOURCE = "afl-api" as const;
+
+/** Cron ticks retry lineup-less completed rounds this many days after the match; older gaps are backfill territory. */
+const LINEUP_BACKLOG_MAX_AGE_DAYS = 14;
+/** Cron ticks look back at most this many completed rounds for missing lineups. */
+const LINEUP_BACKLOG_LIMIT = 3;
+/** Admin backfills sweep a whole season's worth of lineup-less rounds. */
+const BACKFILL_LINEUP_BACKLOG_LIMIT = 40;
+/** Fetch the upcoming round's lineups only this close to its first match — rosters publish ~Thursday before the round, so earlier fetches are guaranteed 404s. */
+const LINEUP_LOOKAHEAD_DAYS = 5;
 
 const PAV_COMPETITIONS: ReadonlySet<CompetitionCode> = new Set<CompetitionCode>(["AFLM", "AFLW"]);
 
@@ -89,10 +99,13 @@ export async function sync(
         ? rangeInclusive(options.fromYear, options.toYear)
         : [now.getUTCFullYear()];
 
+    const isBackfill = options?.fromYear !== undefined && options.toYear !== undefined;
     const results: BackfillResult[] = [];
     for (const competition of competitions) {
       for (const season of seasons) {
-        results.push(await syncCompetition(env, competition, season, options?.skipPav ?? false));
+        results.push(
+          await syncCompetition(env, competition, season, options?.skipPav ?? false, isBackfill),
+        );
       }
     }
 
@@ -138,6 +151,7 @@ async function syncCompetition(
   competition: CompetitionCode,
   season: number,
   skipPav: boolean,
+  isBackfill: boolean,
 ): Promise<BackfillResult> {
   try {
     const matchResult = await fetchMatches({ source: SOURCE, season, competition });
@@ -156,9 +170,16 @@ async function syncCompetition(
       selectCompletedCount(env, seasonId),
       selectHasCompletedMatchWithoutStats(env, seasonId),
       selectNextRound(env, seasonId),
-      // Look back up to 3 completed rounds for any that have no lineups yet,
-      // so the lineup fetch self-heals after a missed release window.
-      selectCompletedRoundsWithoutLineups(env, seasonId, 3),
+      // Cron: look back a few recently-completed rounds so the lineup fetch
+      // self-heals after a missed release window, but give up on rounds
+      // older than the recency bound (a roster that never published upstream
+      // must not be retried every tick forever). Backfill: sweep the season.
+      selectCompletedRoundsWithoutLineups(
+        env,
+        seasonId,
+        isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
+        isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
+      ),
     ]);
     // Fetch stats when the API has more completed matches than we've recorded,
     // OR when any previously-completed match still lacks stats (self-heals same-day
@@ -167,13 +188,24 @@ async function syncCompetition(
 
     const lineupRounds = new Set<number>(lineupBacklogRounds);
     if (nextRound !== null) {
-      // Once the upcoming round has lineups stored, refresh on a 15-minute
-      // cadence instead of every 5-minute tick (OPT-03): a 3x cut in
-      // upstream lineup calls while still catching late team changes
-      // within 15 minutes. First acquisition never waits for the cadence.
-      const hasAny = await selectRoundHasAnyLineups(env, seasonId, nextRound);
-      const onCadence = new Date().getUTCMinutes() % 15 < 5;
-      if (!hasAny || onCadence) lineupRounds.add(nextRound);
+      // Rosters publish ~Thursday before a round; fetching earlier is a
+      // guaranteed 404 per match (months of them during the off-season, the
+      // other half of the AFLW 20k-error incident). Only start asking once
+      // the round's first match is inside the lookahead window.
+      const firstDate = await selectRoundFirstDate(env, seasonId, nextRound);
+      const withinLookahead =
+        firstDate !== null &&
+        Date.parse(`${firstDate}T00:00:00Z`) - Date.now() <=
+          LINEUP_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000;
+      if (withinLookahead) {
+        // Once the upcoming round has lineups stored, refresh on a 15-minute
+        // cadence instead of every 5-minute tick (OPT-03): a 3x cut in
+        // upstream lineup calls while still catching late team changes
+        // within 15 minutes. First acquisition never waits for the cadence.
+        const hasAny = await selectRoundHasAnyLineups(env, seasonId, nextRound);
+        const onCadence = new Date().getUTCMinutes() % 15 < 5;
+        if (!hasAny || onCadence) lineupRounds.add(nextRound);
+      }
     }
 
     const [lineupBatches, stats] = await Promise.all([
@@ -263,12 +295,13 @@ async function fetchLineupsSafe(
 ) {
   const result = await fetchLineup({ source: SOURCE, season, round, competition });
   if (!result.success) {
-    await logSync(
-      env,
-      `sync:${competition}:lineups`,
-      0,
-      `fetchLineup failed: ${describeError(result.error)}`,
-    );
+    const message = describeError(result.error);
+    // A 404 means the roster is not published yet (or never will be for
+    // this round) — the expected pre-release state, not an error worth a
+    // sync_log row. Real failures (5xx, timeouts, parse errors) still log.
+    if (!message.includes("404")) {
+      await logSync(env, `sync:${competition}:lineups`, 0, `fetchLineup failed: ${message}`);
+    }
     return [];
   }
   return result.data;
