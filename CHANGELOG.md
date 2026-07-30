@@ -5,7 +5,7 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.7.0] - Unreleased
+## [3.7.0] - 2026-07-30
 
 Version 3.7.0 is a data-quality and MCP-surface release from a full audit of
 the database, schema docs, and tools.
