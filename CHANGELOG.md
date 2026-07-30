@@ -5,6 +5,20 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.1] - 2026-07-30
+
+Version 3.7.1 trues up lineup coverage after the v3.7.0 backfills.
+
+### Changed in 3.7.1
+
+- Lineup coverage contract: AFLW, VFL, and VFLW `match_lineups` ranges are
+  now `2023..current` (previously claimed from each competition's first
+  season). The v3.7.0 admin backfills loaded every available season -
+  roughly 54k rows across AFLW 2023-2025 and VFL/VFLW 2023-2025. The AFL
+  API only publishes announced teams for earlier seasons, which the sync's
+  `MIN_LINEUP_SYNC_YEAR` guard excludes to keep the table's
+  post-change-team semantics.
+
 ## [3.7.0] - 2026-07-30
 
 Version 3.7.0 is a data-quality and MCP-surface release from a full audit of
