@@ -12,7 +12,7 @@
     "db:migrate": "wrangler d1 migrations apply afl-stats"
   },
   "dependencies": {
-    "fitzroy": "^3.4.0",
+    "fitzroy": "^4.0.0",
     "zod": "^4.4.3"
   },
   "overrides": {
