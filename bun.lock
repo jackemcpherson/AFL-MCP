@@ -5,7 +5,7 @@
     "": {
       "name": "afl-mcp",
       "dependencies": {
-        "fitzroy": "^3.4.0",
+        "fitzroy": "^4.0.0",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -330,7 +330,7 @@
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
 
-    "fitzroy": ["fitzroy@3.5.0", "", { "dependencies": { "@jackemcpherson/rds-js": "^0.3.0", "cheerio": "^1.0.0", "parse5": "8.0.1", "parse5-htmlparser2-tree-adapter": "8.0.1", "zod": "^4.3.6" }, "bin": { "fitzroy": "dist/cli.js" } }, "sha512-ij1jkKZU3qK99Usw0HUF5Icx1rVeGDjKWA8qxkEk/NypF9z051bYiMM+/1ACwnPcQXfd4b1N5caXQY4WDpCtjg=="],
+    "fitzroy": ["fitzroy@4.0.0", "", { "dependencies": { "@jackemcpherson/rds-js": "^0.3.0", "cheerio": "^1.0.0", "parse5": "8.0.1", "parse5-htmlparser2-tree-adapter": "8.0.1", "zod": "^4.4.3" }, "bin": { "fitzroy": "dist/cli.js" } }, "sha512-9OKfupZcoRZFdROC/U2YY1Ap5kzZbNjdjBfaCSKaRbVkC/E/LISfN8ddn1/TUvuU9HSxSMSXp2k6hMqx+J3oxg=="],
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
