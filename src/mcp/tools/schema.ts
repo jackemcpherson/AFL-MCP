@@ -84,7 +84,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         matches: [
           "id INTEGER PRIMARY KEY, season_id INTEGER REFERENCES seasons(id),",
           "round TEXT, round_abbreviation TEXT, round_number INTEGER, round_type TEXT,",
-          "date TEXT, local_time TEXT,",
+          "date TEXT, local_time TEXT, kickoff_at TEXT (nullable canonical UTC source instant), lineups_observed_at TEXT (nullable UTC lineup observation),",
           "venue_id INTEGER REFERENCES venues(id),",
           "home_team_id INTEGER REFERENCES teams(id),",
           "away_team_id INTEGER REFERENCES teams(id),",
@@ -175,7 +175,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         ].join(" "),
         match_predictions: [
           "match_id INTEGER PRIMARY KEY REFERENCES matches(id),",
-          "home_win_prob REAL (0..1, home team's win probability),",
+          "tipper_run_id INTEGER (nullable reference to prospective capture run), home_win_prob REAL (0..1, home team's win probability),",
           "predicted_margin REAL (points, one decimal; positive = home favoured),",
           "model_version TEXT (tipper config id, e.g. 'predha-080 (2641f46f)'),",
           "generated_at TEXT (UTC ISO 8601)",
@@ -221,7 +221,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground — self for canonical rows, NULL for venues the sync has inserted but not yet classified. Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id) (the COALESCE covers the unclassified-NULL case).",
         "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
         // Predictions
-        "match_predictions: one row per match from the tipper model, overwritten on regeneration (latest only, no history). home_win_prob (0..1) and predicted_margin (positive = home favoured) are from the HOME team's perspective; model_version is the tipper config id. Written by tipper via the D1 REST API, not this Worker. Coverage starts 2026 and is sparse — LEFT JOIN and treat absence as not-published.",
+        "match_predictions: one row per match from the tipper model, overwritten on regeneration (latest only, no history). home_win_prob (0..1) and predicted_margin (positive = home favoured) are from the HOME team's perspective; model_version records the production model and full source revision. Written by the Tipper Worker via native D1, not this Worker. Coverage starts 2026 and is sparse — LEFT JOIN and treat absence as not-published.",
         // Lineups
         "match_lineups represents the post-change team — the players who actually took the field. Treat absence as not-yet-published rather than canonical.",
         "match_lineups is_emergency=1 means the player is named as an emergency and may not play.",

@@ -11,7 +11,17 @@ import type { Env } from "../../src/types";
  */
 
 /** Operational tables not part of the documented analytics surface. */
-const INTERNAL_TABLES = new Set(["d1_migrations", "sync_lease", "sync_log", "_cf_KV"]);
+const INTERNAL_TABLES = new Set([
+  "d1_migrations",
+  "sync_lease",
+  "sync_log",
+  "_cf_KV",
+  "tipper_runs",
+  "tipper_predictions",
+  "tipper_game_ids",
+  "tipper_reports",
+  "tipper_status",
+]);
 
 describe("schema tool vs live D1 schema", () => {
   it("documents every analytics table and column", async () => {

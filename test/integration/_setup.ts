@@ -3,6 +3,11 @@ import { beforeAll, beforeEach } from "vitest";
 
 const TABLES_TO_WIPE = [
   "match_predictions",
+  "tipper_predictions",
+  "tipper_runs",
+  "tipper_game_ids",
+  "tipper_reports",
+  "tipper_status",
   "match_weather",
   "match_lineups",
   "player_match_stats",
