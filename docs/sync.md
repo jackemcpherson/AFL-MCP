@@ -39,24 +39,24 @@ endpoint iterates a year range):
 
 1. **Fetch matches** for the season from the `afl-api` source.
 2. **Ensure** competition + season rows exist. resolve `seasonId`. Unknown
-   competitions (e.g. VFL on first sync after a fresh deploy) are auto-upserted
+   competitions (such as VFL on first sync after a fresh deploy) are auto-upserted
    via `ensureCompetition`.
 3. **Detect new completed matches** by comparing the API's count of completed
    matches against `selectCompletedCount(seasonId)`, and asking
    `selectHasCompletedMatchWithoutStats(seasonId)` whether any previously
-   completed match still lacks stats. In parallel, ask
-   `selectNextRound(seasonId)` for the next round needing lineups. The backlog
+   completed match still lacks stats. The backlog
    check makes the pipeline self-healing: it recovers from same-day multi-match
-   completions and from any partial write failure. Lineup backlog is bounded:
-   cron ticks retry only rounds played in the last 14 days, because a roster
-   that never publishes upstream must not be re-fetched every tick forever.
+   completions and from any partial write failure. Cron ticks limit lineup
+   retries to rounds played in the last 14 days. This prevents repeated fetches
+   for rosters that never publish upstream.
    Admin backfills lift the bound and sweep up to 40 lineup-less rounds per
    season.
 4. **Conditionally fetch** lineups and player stats (if the API has more
    completed matches than the database, OR a stats backlog exists) - both in
-   parallel. The upcoming round's lineups are fetched only once its first
-   match is within 5 days - rosters publish about the Thursday before the
-   round, so earlier fetches are guaranteed 404s. A 404 is the expected
+   parallel. Select lineup rounds from freshly fetched upcoming fixtures
+   within five days, including later matches in rounds already underway.
+   Refresh every fifteen minutes, increasing to every five minutes within
+   ninety minutes of an upcoming kickoff. A 404 is the expected
    not-yet-published state and does not write a `sync_log` error row.
 5. **Quarantine** placeholder finals fixtures (`isPlaceholderTeamName`:
    "1st", "Winner of QF1", "Highest-ranked WF Winner", ...) so they never
@@ -67,13 +67,43 @@ endpoint iterates a year range):
    `COALESCE` preserves the last authoritative value if the upstream clock is
    transiently absent.
 6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
-   `{AFLM, AFLW}` AND `skipPav` is not set. VFL/VFLW are skipped because the AFL
+   `{AFLM, AFLW}` AND `skipPav` is not set. Skip VFL/VFLW because the AFL
    API does not populate the PAV formula's required inputs (`goal_assists`,
    `marks_inside_50`, `one_percenters`).
 7. **Log** to `sync_log` only when the tick produced new stats or lineup rows.
 
 The pipeline logs fetch errors to `sync_log` with `rows_affected = 0`, then
 continues to the next `(competition, year)` pair.
+
+## Publication Inputs
+
+Match refresh stores `matches.kickoff_at` directly from the source match
+instant as a canonical UTC timestamp. Unknown kickoff times remain `NULL`.
+Never construct a deadline by joining the UTC `date` with Melbourne
+`local_time`. Migration `0021` leaves legacy deadlines unavailable until a
+source fixture refresh supplies them.
+
+For AFLM and AFLW, a lineup replacement requires both complete team selections.
+Validation checks resolved players, unique player identities, fixture ownership,
+and the non-emergency team size: 23 for AFLM and 21 for AFLW. Interchange and
+substitute players count toward those totals. Review the sizes against the
+published 2027 rules before launch.
+
+Each valid match snapshot replaces its lineup rows in one native D1 batch.
+The replacement removes omitted players and records `matches.lineups_observed_at`
+in UTC. Invalid, incomplete, or failed upstream responses preserve the previous
+valid snapshot. The pre-2023 historical lineup guard remains in place.
+
+Fixture identity, venue, or kickoff changes atomically invalidate current
+`match_predictions` and Squiggle mappings, and clear lineup observation metadata.
+Historical Tipper captures remain intact. Tipper owns its recorded kickoff locks.
+A source correction cannot reopen a prediction after its recorded deadline.
+
+AFL-MCP owns the additive publication migrations. Apply them before activating
+the new Tipper Worker, then refresh forthcoming AFLM and AFLW fixtures. Tipper
+writes through its native D1 binding and preserves the current prediction fields
+used by AFL-MCP and FootyBot. See [the schema reference](./schema.md#match_predictions)
+for the capture link and source revision identity.
 
 ## Weather Stage
 

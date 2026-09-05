@@ -16,9 +16,6 @@ import {
   selectCompletedCount,
   selectCompletedRoundsWithoutLineups,
   selectHasCompletedMatchWithoutStats,
-  selectNextRound,
-  selectRoundFirstDate,
-  selectRoundHasAnyLineups,
   unionPlayers,
   updateSeasonCompleteness,
   upsertLineups,
@@ -166,10 +163,9 @@ async function syncCompetition(
     const seasonId = await ensureSeason(env, competitionId, season);
 
     const apiCompletedCount = countCompleted(allMatches);
-    const [dbCompletedCount, hasStatsBacklog, nextRound, lineupBacklogRounds] = await Promise.all([
+    const [dbCompletedCount, hasStatsBacklog, lineupBacklogRounds] = await Promise.all([
       selectCompletedCount(env, seasonId),
       selectHasCompletedMatchWithoutStats(env, seasonId),
-      selectNextRound(env, seasonId),
       // Cron: look back a few recently-completed rounds so the lineup fetch
       // self-heals after a missed release window, but give up on rounds
       // older than the recency bound (a roster that never published upstream
@@ -187,25 +183,27 @@ async function syncCompetition(
     const shouldFetchStats = apiCompletedCount > dbCompletedCount || hasStatsBacklog;
 
     const lineupRounds = new Set<number>(lineupBacklogRounds);
-    if (nextRound !== null) {
-      // Rosters publish ~Thursday before a round; fetching earlier is a
-      // guaranteed 404 per match (months of them during the off-season, the
-      // other half of the AFLW 20k-error incident). Only start asking once
-      // the round's first match is inside the lookahead window.
-      const firstDate = await selectRoundFirstDate(env, seasonId, nextRound);
-      const withinLookahead =
-        firstDate !== null &&
-        Date.parse(`${firstDate}T00:00:00Z`) - Date.now() <=
-          LINEUP_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000;
-      if (withinLookahead) {
-        // Once the upcoming round has lineups stored, refresh on a 15-minute
-        // cadence instead of every 5-minute tick (OPT-03): a 3x cut in
-        // upstream lineup calls while still catching late team changes
-        // within 15 minutes. First acquisition never waits for the cadence.
-        const hasAny = await selectRoundHasAnyLineups(env, seasonId, nextRound);
-        const onCadence = new Date().getUTCMinutes() % 15 < 5;
-        if (!hasAny || onCadence) lineupRounds.add(nextRound);
-      }
+    const locked =
+      await env.DB.prepare(`SELECT m.external_afl_id FROM matches m JOIN tipper_predictions p ON p.match_id=m.id
+      WHERE m.season_id=? AND p.run_id=(SELECT MAX(q.run_id) FROM tipper_predictions q WHERE q.match_id=m.id)
+      AND julianday(p.kickoff_at)<=julianday('now')`)
+        .bind(seasonId)
+        .all<{ external_afl_id: string }>();
+    const lockedIds = new Set(locked.results.map((m) => m.external_afl_id));
+    const now = Date.now();
+    for (const match of allMatches) {
+      const remaining = match.date.getTime() - now;
+      if (
+        lockedIds.has(match.matchId) ||
+        match.status !== "Upcoming" ||
+        remaining <= 0 ||
+        remaining > LINEUP_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000
+      )
+        continue;
+      // Include later fixtures in rounds already underway. Every five-minute tick
+      // refreshes the last 90 minutes; earlier snapshots refresh each 15 minutes.
+      if (remaining <= 90 * 60 * 1000 || new Date(now).getUTCMinutes() % 15 < 5)
+        lineupRounds.add(match.roundNumber);
     }
 
     const [lineupBatches, stats] = await Promise.all([

@@ -5,7 +5,7 @@ migrations in [`src/db/migrations/`](../src/db/migrations). The `schema` MCP
 tool exposes the client contract from `src/mcp/tools/schema.ts`. Update both
 sources when adding columns.
 
-The D1 database (`afl-stats`) has 13 tables and covers four competitions:
+The D1 database (`afl-stats`) covers four competitions:
 **AFLM**, **AFLW**, **VFL**, **VFLW**. Always filter queries by competition
 (join `seasons` to `competitions`, then use `WHERE c.code = ?`). Without the
 filter, results mix competitions silently because team rows with the same name
@@ -28,7 +28,7 @@ sync.
 One row per `(competition, year)`.
 
 - `(competition_id, year)` UNIQUE.
-- `is_complete` (0/1) - set when every match in the season has been played.
+- `is_complete` (0/1) - set when every match in the season has finished.
 
 ### `teams`
 
@@ -42,7 +42,7 @@ One row per `(competition, year)`.
   `longitude`, `timezone` (IANA), `roof` (`'retractable'` - Marvel Stadium
   only - or `'none'`), and `canonical_venue_id` pointing sponsor-renamed aliases
   at the physical ground (self-referencing for canonical rows). All NULL (except
-  `canonical_venue_id`) for the 'To Be Confirmed' placeholder venue (id 17748).
+  `canonical_venue_id`) for the `To Be Confirmed` placeholder venue (id 17748).
 
 ### `players`
 
@@ -64,7 +64,7 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
 
 - Identity: `(date, home_team_id, away_team_id)` UNIQUE, plus three external IDs
   (`external_afltables_id`, `external_fryzigg_id`, `external_afl_id`).
-  Cross-competition collisions are prevented by team-id scoping.
+  Team-id scoping prevents cross-competition collisions.
 - Round columns mirror R fitzRoy's design - store the AFL API's labels directly,
   no cross-competition normalisation:
   - `round` - long form (`Round 1`, `Opening Round`, `Wildcard`,
@@ -84,18 +84,24 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
 - See [`sync.md`](./sync.md#round-labels) for the full label rules.
 - `local_time` is always Melbourne local time (`Australia/Melbourne`, AEST/AEDT)
   for every competition. Venue-native time is intentionally not stored.
+- `kickoff_at` is nullable canonical UTC from the source match instant. Use it
+  for publication deadlines. Unknown times remain `NULL`. Never combine `date`
+  and `local_time` to infer a deadline. Migration `0021` requires source refresh
+  to populate forthcoming fixtures.
+- `lineups_observed_at` is the UTC observation time of the last valid complete
+  lineup replacement. Legacy lineups without this metadata are not evidence
+  of an observed announced selection.
 - `completed_quarter` is nullable and constrained to 0 - 4. `0` means no quarter
-  is complete. `1` - `4` are the highest completed quarter. `NULL` means no AFL
-  API clock was supplied or the row predates refresh. Pair it with `status`. The
+  is complete. `1` - `4` are the highest completed quarter. `NULL` means the AFL
+  API supplied no clock or the row predates refresh. Pair it with `status`. The
   five-minute sync does not make it a live siren signal.
-- `status` is populated for every row (`Upcoming`, `Live`, `Complete`,
+- Every row has a `status` (`Upcoming`, `Live`, `Complete`,
   `Postponed`, `Cancelled`). Migration `0017` backfilled played matches as
-  `Complete` and marked the 38 score-less VFL/VFLW 2021 COVID-era matches
-  `Cancelled`, so NULL scores on a `Cancelled` row mean cancelled, not
-  missing data.
-- The legacy `weather_temp_c` / `weather_type` columns (frozen fryzigg
-  record, AFLM 2010 - 2025, daily-max semantics) were dropped in migration
-  `0020`. Use `match_weather` for all weather analysis.
+  `Complete`. It marked the 38 score-less VFL/VFLW 2021 COVID-era matches
+  `Cancelled`. NULL scores on a `Cancelled` row indicate cancellation.
+- Migration `0020` dropped the legacy `weather_temp_c` / `weather_type` columns.
+  These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
+  Use `match_weather` for all weather analysis.
 
 ### `player_match_stats`
 
@@ -112,11 +118,20 @@ universally absent. `brownlow_votes` is AFLM-only.
 
 ### `match_lineups`
 
-Pre-match selected squads. Distinct from `player_match_stats` because lineups
-publish on Thursday, before stats exist.
+Current selected squads, observed before player statistics exist and refreshed
+when late team changes arrive.
 
 - `(match_id, player_id)` UNIQUE.
 - `is_emergency`, `is_substitute` flags.
+- AFLM and AFLW replacements require both complete team selections, unique
+  players, resolved player identities, and matching fixture ownership.
+  Non-emergency sizes are 23 for AFLM and 21 for AFLW, including interchange and
+  substitute players. Review these sizes against published 2027 rules.
+- A valid replacement deletes omitted players and updates
+  `matches.lineups_observed_at` in the same D1 transaction. Invalid or incomplete
+  responses preserve the previous snapshot. Later upcoming matches in rounds
+  already underway continue refreshing, every five minutes in the final ninety
+  minutes before kickoff.
 - AFLM 2015+ via AFL API. AFLW, VFL, and VFLW 2023+ (best-effort for the VFL
   competitions - fitzroy may return empty for some rounds). The AFL API only
   publishes the Thursday-night announced team for pre-2023 seasons, so the
@@ -134,14 +149,13 @@ most two rows per match.
   are means, `precip_mm` a total, `wind_speed_kmh` and `wind_gust_kmh` maxima.
   `precip_24h_prior_mm` totals the 24 hours before the window (ground
   condition).
-- `source` records provenance: `'era5_land+era5'` (final reanalysis -
-  temp/humidity/wind from ERA5-Land, precipitation from ERA5),
-  `'historical_forecast'` (interim observed value, upgraded to reanalysis once
-  the match is >6 days old), `'best_match'` (forecast rows).
+- `source` records provenance. `'era5_land+era5'` provides final reanalysis,
+  with temperature, humidity, and wind from ERA5-Land and precipitation from ERA5.
+  `'historical_forecast'` provides interim observations until six days after the
+  match. `'best_match'` identifies forecast rows.
 - Cancelled matches and the placeholder venue (17748) never get rows.
-- This table is the only weather source. The legacy fryzigg
-  `matches.weather_temp_c` / `weather_type` columns were dropped in
-  migration `0020`.
+- This table is the only weather source. Migration `0020` dropped the legacy
+  fryzigg `matches.weather_temp_c` / `weather_type` columns.
 
 ## Derived Data
 
@@ -162,17 +176,48 @@ mid-season has separate rows per club.
 
 ### `match_predictions`
 
-Tipper model predictions, one row per match (PK `match_id`), overwritten on
-regeneration - only the latest prediction is kept, no history.
+Current Tipper predictions, one row per match with primary key `match_id`.
+Unlocked matches can refresh. Append-only captures retain publication history.
 
 - `home_win_prob` - 0..1, the home team's win probability.
 - `predicted_margin` - points, one decimal. Positive means the home team is
   favoured.
-- `model_version` - tipper configuration ID, such as `predha-080 (2641f46f)`.
-- Tipper writes through the D1 REST API under tipper issue 28. This Worker only
-  reads the row.
-- Coverage starts 2026 and is sparse - rows exist only for rounds tipper has
-  published. Use `LEFT JOIN` and treat absence as not-published.
+- `model_version` records the issued model identity and complete build source
+  revision. Use the recorded identity when reading older predictions.
+- `generated_at` is the UTC publication timestamp.
+- Nullable `tipper_run_id` links new rows to `tipper_runs` and the matching
+  `(run_id, match_id)` capture in `tipper_predictions`. Legacy rows retain a
+  null link and are not prospective captures.
+- The Tipper Worker writes through its native D1 binding. AFL-MCP and FootyBot
+  retain direct reads of these five existing prediction fields.
+- Fixture identity, venue, or kickoff changes atomically remove the current
+  projection and Squiggle mapping. Captures remain available. A later schedule
+  correction cannot reopen a prediction after its recorded kickoff.
+- Use `LEFT JOIN` and treat absence as not published. Prospective coverage starts
+  at `tipper_status.activated_at`. Older research gaps are outside that window.
+
+### Tipper Publication Records
+
+Migration `0021` adds these records under AFL-MCP schema ownership. Apply the
+migration before activating the new publisher. Existing archives remain separate.
+
+| Table                | Retained Evidence                                                          |
+| -------------------- | -------------------------------------------------------------------------- |
+| `tipper_runs`        | Ordered attempts, round identity, source revision, model identity, result. |
+| `tipper_predictions` | Append-only captures keyed by run and match.                               |
+| `tipper_game_ids`    | Validated local-to-Squiggle match and ordered team identities.             |
+| `tipper_reports`     | Weekly scoring attempts, input observations, results, and failures.        |
+| `tipper_status`      | One activation timestamp and scheduler/reporting heartbeats.               |
+
+Each capture stores fixture identity, UTC kickoff, full-precision margin and
+probability, issued output, winner, provisional status, rating and lineup
+evidence, and observation/publication times. Captures record what Tipper issued.
+They are not complete historical database snapshots.
+
+Tipper commits captures, current projections, and checked run finalisation in one
+native D1 transaction. A failure preserves the previous committed set. Each match
+locks at its own recorded kickoff, while later matches in the round can refresh.
+Weekly reports score stored captures and retain missing predictions as missing.
 
 ## Coverage Contract
 
@@ -219,9 +264,10 @@ returns the holder.
 
 ## Conventions
 
-- All dates are ISO `YYYY-MM-DD` strings.
+- Calendar dates use ISO `YYYY-MM-DD`. Kickoff and observation timestamps use
+  canonical ISO 8601 UTC strings.
 - Boolean-ish flags are `INTEGER` (0/1) - SQLite has no native boolean.
 - Timestamps in `sync_log` are ISO 8601 strings in UTC.
-- Foreign keys are declared but SQLite enforcement requires
+- The schema declares foreign keys, but SQLite enforcement requires
   `PRAGMA foreign_keys = ON`. Assume integrity comes from the upsert helpers,
   not the engine.

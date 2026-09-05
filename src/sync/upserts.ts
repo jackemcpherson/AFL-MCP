@@ -1,7 +1,6 @@
 import {
   type CompetitionCode,
   type Lineup,
-  type LineupPlayer,
   type Match,
   type PlayerStats,
   roundAbbreviation,
@@ -475,7 +474,13 @@ export async function upsertMatches(
   matches: readonly Match[],
   ctx: MatchUpsertContext,
 ): Promise<number> {
-  const stmts = matches.map((m) => buildMatchUpsert(env, m, ctx));
+  const stmts = matches.map((m) =>
+    Number.isFinite(m.date.getTime())
+      ? buildMatchUpsert(env, m, ctx)
+      : env.DB.prepare("UPDATE matches SET kickoff_at=NULL WHERE external_afl_id=?").bind(
+          m.matchId,
+        ),
+  );
   return await batchAndCountChanges(env, stmts);
 }
 
@@ -488,6 +493,7 @@ interface MatchRow {
   readonly awayTeamId: number | null;
   readonly dateStr: string;
   readonly localTime: string;
+  readonly kickoffAt: string;
 }
 
 /**
@@ -521,6 +527,11 @@ export const MATCH_COLUMNS = [
   },
   { name: "date", kind: "key", value: (r) => r.dateStr },
   { name: "local_time", kind: "replace", value: (r) => r.localTime },
+  {
+    name: "kickoff_at",
+    kind: "replace",
+    value: (r) => r.kickoffAt,
+  },
   { name: "venue_id", kind: "coalesce", value: (r) => r.venueId },
   { name: "home_team_id", kind: "key", value: (r) => r.homeTeamId },
   { name: "away_team_id", kind: "key", value: (r) => r.awayTeamId },
@@ -598,6 +609,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
     awayTeamId: ctx.teamMap.get(awayTeam) ?? null,
     dateStr: toIsoDate(m.date),
     localTime: toMelbourneTime(m.date),
+    kickoffAt: m.date.toISOString(),
   };
 
   return env.DB.prepare(
@@ -786,50 +798,66 @@ export async function upsertLineups(
   playerMap: Map<string, number>,
   teamMap: Map<string, number>,
 ): Promise<number> {
-  const stmts: D1PreparedStatement[] = [];
+  let changes = 0;
   for (const lineup of lineups) {
     if (lineup.season < MIN_LINEUP_SYNC_YEAR) continue;
     const matchId = matchMap.get(lineup.matchId);
-    if (!matchId) continue;
-    const homeTeamId = teamMap.get(normaliseTeam(lineup.homeTeam));
-    const awayTeamId = teamMap.get(normaliseTeam(lineup.awayTeam));
-    const sides: Array<{ players: readonly LineupPlayer[]; teamId: number | undefined }> = [
-      { players: lineup.homePlayers, teamId: homeTeamId },
-      { players: lineup.awayPlayers, teamId: awayTeamId },
+    const home = teamMap.get(normaliseTeam(lineup.homeTeam));
+    const away = teamMap.get(normaliseTeam(lineup.awayTeam));
+    if (!matchId || !home || !away || home === away) continue;
+    const size = lineup.competition === "AFLM" ? 23 : lineup.competition === "AFLW" ? 21 : null;
+    const sides = [
+      { players: lineup.homePlayers, team: home },
+      { players: lineup.awayPlayers, team: away },
     ];
-    for (const { players, teamId } of sides) {
-      if (!teamId) continue;
-      for (const p of players) {
-        const playerId = playerMap.get(p.playerId);
-        if (!playerId) continue;
-        stmts.push(
-          env.DB.prepare(
-            `INSERT INTO match_lineups (match_id, player_id, team_id, guernsey_number, position, is_emergency, is_substitute)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (match_id, player_id) DO UPDATE SET
-               team_id = excluded.team_id,
-               guernsey_number = excluded.guernsey_number,
-               position = excluded.position,
-               is_emergency = excluded.is_emergency,
-               is_substitute = excluded.is_substitute
-             WHERE
-               match_lineups.team_id IS NOT excluded.team_id OR
-               match_lineups.guernsey_number IS NOT excluded.guernsey_number OR
-               match_lineups.position IS NOT excluded.position OR
-               match_lineups.is_emergency IS NOT excluded.is_emergency OR
-               match_lineups.is_substitute IS NOT excluded.is_substitute`,
-          ).bind(
-            matchId,
-            playerId,
-            teamId,
-            p.jumperNumber,
-            p.matchPosition,
-            p.isEmergency ? 1 : 0,
-            p.isSubstitute ? 1 : 0,
-          ),
-        );
-      }
+    const players = sides.flatMap((side) =>
+      side.players.map((p) => ({
+        player_id: playerMap.get(p.playerId),
+        team_id: side.team,
+        guernsey_number: p.jumperNumber,
+        position: p.matchPosition,
+        is_emergency: p.isEmergency ? 1 : 0,
+        is_substitute: p.isSubstitute ? 1 : 0,
+      })),
+    );
+    if (
+      sides.some((side) =>
+        size === null
+          ? side.players.length === 0
+          : side.players.filter((p) => !p.isEmergency).length !== size,
+      ) ||
+      players.some((p) => !p.player_id) ||
+      new Set(players.map((p) => p.player_id)).size !== players.length
+    ) {
+      await logSync(
+        env,
+        "sync:lineups:invalid",
+        0,
+        `Rejected incomplete or duplicate lineup for ${matchId}`,
+      );
+      continue;
     }
+    // Each snapshot replaces exactly one fixture in one native transaction. The fixture
+    // guard is repeated so a concurrent identity change cannot attach the old lineup.
+    const guard = `id=? AND home_team_id=? AND away_team_id=? AND external_afl_id=?`;
+    const args = [matchId, home, away, lineup.matchId];
+    const result = await env.DB.batch([
+      env.DB.prepare(
+        `DELETE FROM match_lineups WHERE match_id IN (SELECT id FROM matches WHERE ${guard})`,
+      ).bind(...args),
+      env.DB.prepare(`INSERT INTO match_lineups(match_id,player_id,team_id,guernsey_number,position,is_emergency,is_substitute)
+        SELECT m.id,json_extract(j.value,'$.player_id'),json_extract(j.value,'$.team_id'),
+          json_extract(j.value,'$.guernsey_number'),json_extract(j.value,'$.position'),
+          json_extract(j.value,'$.is_emergency'),json_extract(j.value,'$.is_substitute')
+        FROM matches m,json_each(?) j WHERE ${guard.replace("id=?", "m.id=?")}`).bind(
+        JSON.stringify(players),
+        ...args,
+      ),
+      env.DB.prepare(
+        `UPDATE matches SET lineups_observed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE ${guard}`,
+      ).bind(...args),
+    ]);
+    changes += result[1]?.meta.changes ?? 0;
   }
-  return await batchAndCountChanges(env, stmts);
+  return changes;
 }

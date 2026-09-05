@@ -24,127 +24,70 @@ async function setup() {
   return { matchMap, teamMap };
 }
 
-describe("upsertLineups", () => {
-  it("inserts one row per player per match, marking emergencies and substitutes", async () => {
+function completeLineup() {
+  return makeLineup({
+    homePlayers: Array.from({ length: 23 }, (_, i) => makeLineupPlayer({ playerId: `H-${i}` })),
+    awayPlayers: Array.from({ length: 23 }, (_, i) => makeLineupPlayer({ playerId: `A-${i}` })),
+  });
+}
+describe("atomic lineup replacement", () => {
+  it("removes departed players and records observation time", async () => {
     const { matchMap, teamMap } = await setup();
-    const lineup = makeLineup({
-      homePlayers: [
-        makeLineupPlayer({ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }),
-        makeLineupPlayer({
-          playerId: "P-2",
-          givenName: "Sam",
-          surname: "Walsh",
-          isEmergency: true,
-        }),
-      ],
-      awayPlayers: [
-        makeLineupPlayer({
-          playerId: "P-3",
-          givenName: "Dustin",
-          surname: "Martin",
-          isSubstitute: true,
-        }),
-      ],
-    });
-    const playerMap = await upsertPlayers(env, unionPlayers([], [lineup]));
-
-    await upsertLineups(env, [lineup], matchMap, playerMap, teamMap);
-
+    const initial = completeLineup();
+    const replacement = {
+      ...completeLineup(),
+      homePlayers: [makeLineupPlayer({ playerId: "NEW" }), ...initial.homePlayers.slice(1)],
+    };
+    const players = await upsertPlayers(env, unionPlayers([], [initial, replacement]));
+    expect(await upsertLineups(env, [initial], matchMap, players, teamMap)).toBe(46);
+    expect(await upsertLineups(env, [replacement], matchMap, players, teamMap)).toBe(46);
     const rows = await env.DB.prepare(
-      "SELECT p.external_afl_player_id, ml.is_emergency, ml.is_substitute FROM match_lineups ml JOIN players p ON ml.player_id = p.id ORDER BY p.external_afl_player_id",
-    ).all<{ external_afl_player_id: string; is_emergency: number; is_substitute: number }>();
-
-    expect(rows.results).toHaveLength(3);
-    expect(rows.results).toEqual([
-      { external_afl_player_id: "P-1", is_emergency: 0, is_substitute: 0 },
-      { external_afl_player_id: "P-2", is_emergency: 1, is_substitute: 0 },
-      { external_afl_player_id: "P-3", is_emergency: 0, is_substitute: 1 },
-    ]);
+      "SELECT p.external_afl_player_id FROM match_lineups ml JOIN players p ON p.id=ml.player_id",
+    ).all<{ external_afl_player_id: string }>();
+    expect(rows.results.map((r) => r.external_afl_player_id)).toContain("NEW");
+    expect(rows.results.map((r) => r.external_afl_player_id)).not.toContain("H-0");
+    expect(await env.DB.prepare("SELECT lineups_observed_at FROM matches").first()).toMatchObject({
+      lineups_observed_at: expect.any(String),
+    });
   });
-
-  it("upserts an emergency-flag change on re-fetch (substitute confirmed at T-60)", async () => {
+  it("preserves valid snapshots on incomplete, duplicate or misowned responses", async () => {
     const { matchMap, teamMap } = await setup();
-    const initial = makeLineup({
-      homePlayers: [
-        makeLineupPlayer({ playerId: "P-1" }),
-        makeLineupPlayer({ playerId: "P-2", isEmergency: true }),
-      ],
-    });
-    const playerMap = await upsertPlayers(env, unionPlayers([], [initial]));
-    await upsertLineups(env, [initial], matchMap, playerMap, teamMap);
-
-    // Re-fetch: P-2 promoted from emergency to substitute (the AFL T-60 reveal)
-    const updated = makeLineup({
-      homePlayers: [
-        makeLineupPlayer({ playerId: "P-1" }),
-        makeLineupPlayer({ playerId: "P-2", isEmergency: false, isSubstitute: true }),
-      ],
-    });
-    await upsertLineups(env, [updated], matchMap, playerMap, teamMap);
-
-    const row = await env.DB.prepare(
-      "SELECT is_emergency, is_substitute FROM match_lineups ml JOIN players p ON ml.player_id = p.id WHERE p.external_afl_player_id = 'P-2'",
-    ).first<{ is_emergency: number; is_substitute: number }>();
-    expect(row).toEqual({ is_emergency: 0, is_substitute: 1 });
+    const initial = completeLineup();
+    const players = await upsertPlayers(env, unionPlayers([], [initial]));
+    await upsertLineups(env, [initial], matchMap, players, teamMap);
+    for (const kind of ["partial", "duplicate", "ownership"]) {
+      const base = completeLineup();
+      const invalid =
+        kind === "partial"
+          ? { ...base, homePlayers: base.homePlayers.slice(1) }
+          : kind === "duplicate"
+            ? {
+                ...base,
+                awayPlayers: [makeLineupPlayer({ playerId: "H-0" }), ...base.awayPlayers.slice(1)],
+              }
+            : { ...base, homeTeam: base.awayTeam, awayTeam: base.homeTeam };
+      expect(await upsertLineups(env, [invalid], matchMap, players, teamMap)).toBe(0);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM match_lineups").first()).toEqual({
+        n: 46,
+      });
+    }
   });
-
-  it("returns the change count: real inserts, then 0 on identical re-upsert, then >0 when a flag flips", async () => {
+  it("rolls back deletion if replacement insertion fails", async () => {
     const { matchMap, teamMap } = await setup();
-    const lineup = makeLineup({
-      homePlayers: [
-        makeLineupPlayer({ playerId: "P-1" }),
-        makeLineupPlayer({ playerId: "P-2", isEmergency: true }),
-      ],
-    });
-    const playerMap = await upsertPlayers(env, unionPlayers([], [lineup]));
-
-    const firstChanges = await upsertLineups(env, [lineup], matchMap, playerMap, teamMap);
-    expect(firstChanges).toBe(2);
-
-    const idempotentChanges = await upsertLineups(env, [lineup], matchMap, playerMap, teamMap);
-    expect(idempotentChanges).toBe(0);
-
-    const flipped = makeLineup({
-      homePlayers: [
-        makeLineupPlayer({ playerId: "P-1" }),
-        makeLineupPlayer({ playerId: "P-2", isEmergency: false, isSubstitute: true }),
-      ],
-    });
-    const flipChanges = await upsertLineups(env, [flipped], matchMap, playerMap, teamMap);
-    expect(flipChanges).toBe(1);
-  });
-
-  it("skips lineups for seasons before MIN_LINEUP_SYNC_YEAR (historically derived)", async () => {
-    const { matchMap, teamMap } = await setup();
-    const lineup2022 = makeLineup({
-      season: 2022,
-      homePlayers: [makeLineupPlayer({ playerId: "P-1" })],
-    });
-    const playerMap = await upsertPlayers(env, unionPlayers([], [lineup2022]));
-
-    const changes = await upsertLineups(env, [lineup2022], matchMap, playerMap, teamMap);
-    expect(changes).toBe(0);
-
-    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM match_lineups").first<{
-      n: number;
-    }>();
-    expect(count?.n).toBe(0);
-  });
-
-  it("skips silently when matchId is unknown to the match map", async () => {
-    const { matchMap, teamMap } = await setup();
-    const orphaned = makeLineup({
-      matchId: "M-DOES-NOT-EXIST",
-      homePlayers: [makeLineupPlayer({ playerId: "P-1" })],
-    });
-    const playerMap = await upsertPlayers(env, unionPlayers([], [orphaned]));
-
-    await upsertLineups(env, [orphaned], matchMap, playerMap, teamMap);
-
-    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM match_lineups").first<{
-      n: number;
-    }>();
-    expect(count?.n).toBe(0);
+    const initial = completeLineup();
+    const players = await upsertPlayers(env, unionPlayers([], [initial]));
+    await upsertLineups(env, [initial], matchMap, players, teamMap);
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_lineup BEFORE INSERT ON match_lineups BEGIN SELECT RAISE(ABORT,'injected'); END",
+    ).run();
+    try {
+      await expect(upsertLineups(env, [initial], matchMap, players, teamMap)).rejects.toThrow();
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM match_lineups").first()).toEqual({
+        n: 46,
+      });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER fail_lineup").run();
+    }
   });
 });
 
