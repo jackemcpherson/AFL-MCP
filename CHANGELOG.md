@@ -752,3 +752,10 @@ Version 0.1.0 includes the following changes.
 - Integration test suite (10 tests) for live database verification
 - CI pipeline: ruff lint/format, pytest, build verification, pyright typecheck
 - Dependabot configuration for pip and GitHub Actions
+
+## Unreleased, 2026-09-05
+
+- Add the prospective tipper prediction archive in migration `0021`.
+  The additive table retains model outputs, named lineups, rating inputs,
+  and per-game Squiggle field snapshots. Existing prediction consumers keep
+  using `match_predictions`. Tipper skips archiving until migration applies.

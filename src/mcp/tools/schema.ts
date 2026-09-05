@@ -173,6 +173,14 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "fetched_at TEXT (UTC ISO 8601),",
           "PRIMARY KEY (match_id, kind)",
         ].join(" "),
+        prediction_archive: [
+          "match_id INTEGER REFERENCES matches(id), model_version TEXT, captured_at TEXT (UTC ISO 8601),",
+          "competition TEXT, season_year INTEGER, round_number INTEGER,",
+          "round_first_kickoff TEXT, match_kickoff TEXT (Melbourne wall time),",
+          "is_primary INTEGER (0 or 1), home_win_prob REAL (0..1), predicted_margin REAL (home perspective),",
+          "lineups_json TEXT, inputs_json TEXT, field_json TEXT (nullable), field_captured_at TEXT (nullable UTC),",
+          "PRIMARY KEY (match_id, model_version, captured_at)",
+        ].join(" "),
         match_predictions: [
           "match_id INTEGER PRIMARY KEY REFERENCES matches(id),",
           "home_win_prob REAL (0..1, home team's win probability),",
@@ -221,6 +229,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground — self for canonical rows, NULL for venues the sync has inserted but not yet classified. Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id) (the COALESCE covers the unclassified-NULL case).",
         "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
         // Predictions
+        "prediction_archive: append-only tipper captures, including shadows. One row per match, model and capture. lineups_json records the exact named squads read by prediction, with emergency/substitute flags. inputs_json records unrounded predictions, ratings, PAV zones, config hash and sigma. field_json records all available Squiggle sources for this game from the captured round response; NULL means fetch failure. Select the last capture strictly before both archived match_kickoff and round_first_kickoff, projected into Melbourne wall time. Shadows never write match_predictions. Join retained forecast weather on match_id and kind='forecast'; fetched_at must precede lock for deadline analysis.",
         "match_predictions: one row per match from the tipper model, overwritten on regeneration (latest only, no history). home_win_prob (0..1) and predicted_margin (positive = home favoured) are from the HOME team's perspective; model_version is the tipper config id. Written by tipper via the D1 REST API, not this Worker. Coverage starts 2026 and is sparse — LEFT JOIN and treat absence as not-published.",
         // Lineups
         "match_lineups represents the post-change team — the players who actually took the field. Treat absence as not-yet-published rather than canonical.",

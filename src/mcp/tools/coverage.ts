@@ -204,6 +204,23 @@ export const ANALYTICS_COLUMNS = {
     "source",
     "fetched_at",
   ],
+  prediction_archive: [
+    "match_id",
+    "model_version",
+    "captured_at",
+    "competition",
+    "season_year",
+    "round_number",
+    "round_first_kickoff",
+    "match_kickoff",
+    "is_primary",
+    "home_win_prob",
+    "predicted_margin",
+    "lineups_json",
+    "inputs_json",
+    "field_json",
+    "field_captured_at",
+  ],
   match_predictions: [
     "match_id",
     "home_win_prob",
@@ -352,6 +369,7 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "1990..current" },
     match_predictions: MATCH_PREDICTIONS_AFLM,
+    prediction_archive: MATCH_PREDICTIONS_AFLM,
   },
   AFLW: {
     competitions: CORE,
@@ -382,6 +400,7 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2017..current" },
     match_predictions: MATCH_PREDICTIONS_ABSENT,
+    prediction_archive: MATCH_PREDICTIONS_AFLM,
   },
   VFL: {
     competitions: CORE,
@@ -417,6 +436,7 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
     match_predictions: MATCH_PREDICTIONS_ABSENT,
+    prediction_archive: MATCH_PREDICTIONS_ABSENT,
   },
   VFLW: {
     competitions: CORE,
@@ -452,6 +472,7 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
     match_predictions: MATCH_PREDICTIONS_ABSENT,
+    prediction_archive: MATCH_PREDICTIONS_ABSENT,
   },
 } as const satisfies Record<CoverageCompetition, Record<TableName, CoverageTableExpectation>>;
 

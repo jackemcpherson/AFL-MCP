@@ -225,3 +225,32 @@ returns the holder.
 - Foreign keys are declared but SQLite enforcement requires
   `PRAGMA foreign_keys = ON`. Assume integrity comes from the upsert helpers,
   not the engine.
+
+## Prediction Archive, 2026-09-05
+
+Migration `0021_prediction_archive.sql` adds tipper's prospective archive.
+It is additive and safe with the previous Worker. Tipper skips archiving
+with a warning until the operator applies the migration.
+
+`prediction_archive` has one row per match, model version, and capture instant.
+Tipper only inserts rows. Duplicate keys cannot replace earlier evidence.
+The primary still writes `match_predictions`. Shadows write only the archive.
+
+Each row records competition, season, round, and both match and first-round
+kickoff in Melbourne wall time. Unknown kickoff times use midnight.
+`captured_at` is a UTC instant after prediction completes. At-lock analysis
+selects the final capture strictly before both archived kickoff times.
+
+`home_win_prob` and `predicted_margin` preserve published home orientation
+and precision. `lineups_json` contains the named squads consumed by prediction,
+including player IDs and emergency/substitute flags. `inputs_json` contains
+full-precision predictions, team ratings, Elo, PAV zone sums, config hash, and sigma.
+
+`field_json` contains all available Squiggle sources for this game from the
+round response. Splitting the response across match rows keeps captures small.
+`field_captured_at` records the fetch instant. Both fields are NULL on failure.
+A missing field snapshot prevents field-dependent analysis for that capture.
+
+Weather remains in `match_weather`. Join on `match_id` and `kind='forecast'`.
+Use its `source` and `fetched_at` provenance. A forecast fetched after lock
+cannot establish what the model could know before lock.
