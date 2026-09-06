@@ -117,7 +117,7 @@ describe("coverage contract", () => {
     const serialized = JSON.stringify(schema);
     expect(serialized.length).toBeLessThan(40 * 1024);
     expect(schema.database.coverage_contract.version).toBe(2);
-    expect(schema.database.coverage_contract.review_date).toBe("2026-07-12");
+    expect(schema.database.coverage_contract.review_date).toBe("2026-09-06");
     expect(schema.database.coverage_contract.how_to_read).toContain("exceptions");
     expect(schema.database).not.toHaveProperty("column_coverage");
     expect(schema.database.competitions.AFLM.coverage).toEqual({

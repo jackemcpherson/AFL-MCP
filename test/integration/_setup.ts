@@ -2,8 +2,6 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, beforeEach } from "vitest";
 
 const TABLES_TO_WIPE = [
-  "tipper_reconstructions",
-  "tipper_reconstruction_batches",
   "match_predictions",
   "tipper_predictions",
   "tipper_runs",
