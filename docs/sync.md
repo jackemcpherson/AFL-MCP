@@ -265,3 +265,8 @@ partial-lineup, partial-stat, and unmapped-team event counts.
 The endpoint uses nine fixed statements and one fixed window. It never returns
 raw errors, lease holders, IDs, row samples, client data, or tokens. Public
 health routes retain their small uptime contract.
+
+Public health clears a competition-level error after a later successful sync
+for that competition. Success in another competition or a lineup/stat sub-task
+does not clear it. Error records remain in `sync_log`; fatal errors retain the
+three-hour alert window.

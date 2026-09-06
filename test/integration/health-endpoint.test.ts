@@ -88,6 +88,36 @@ describe("GET /mcp/health (OPS-02)", () => {
     expect(body.stale).toBe(true);
   });
 
+  it("recovers after a successful retry without deleting the failure record", async () => {
+    await seedSyncLog(new Date().toISOString(), "D1 import in progress", "sync:AFLW");
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLW");
+    expect((await getHealth()).status).toBe(200);
+    const failure = await (env as Env).DB.prepare(
+      "SELECT error FROM sync_log WHERE error IS NOT NULL",
+    ).first<{ error: string }>();
+    expect(failure?.error).toBe("D1 import in progress");
+  });
+
+  it("does not clear another competition's failure or accept sub-task recovery", async () => {
+    await seedSyncLog(new Date().toISOString(), "failed", "sync:AFLW");
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLM");
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLW:lineups");
+    expect((await getHealth()).status).toBe(503);
+  });
+
+  it("keeps an unresolved failure visible after another competition recovers", async () => {
+    await seedSyncLog(new Date().toISOString(), "failed", "sync:AFLM");
+    await seedSyncLog(new Date().toISOString(), "failed", "sync:AFLW");
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLW");
+    expect((await getHealth()).status).toBe(503);
+  });
+
+  it("does not clear fatal errors after a competition succeeds", async () => {
+    await seedSyncLog(new Date().toISOString(), "fatal", "sync:fatal");
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLW");
+    expect((await getHealth()).status).toBe(503);
+  });
+
   it("recovers to 200 once a critical error ages out of the window", async () => {
     await seedSyncLog(
       new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
