@@ -219,6 +219,42 @@ native D1 transaction. A failure preserves the previous committed set. Each matc
 locks at its own recorded kickoff, while later matches in the round can refresh.
 Weekly reports score stored captures and retain missing predictions as missing.
 
+### Tipper 2026 Reconstructions
+
+Migration `0022` adds `tipper_reconstruction_batches` and
+`tipper_reconstructions` for a one-time replay of completed 2026 AFLM and AFLW
+matches before Tipper's activation. These operational evidence tables remain
+separate from `match_predictions`, issued captures, feeds, and weekly reports.
+
+A batch records the model and source revision, policy, actual extraction and
+creation times, expected count, and completion time.
+Its JSON manifest retains input and output checksums.
+
+Each match row retains fixture identity and a simulated
+pre-kickoff cutoff. It also records full and rounded outputs, winner,
+provisional status, and JSON evidence. Read only batches whose `completed_at`
+is not null. A database
+trigger rejects finalisation when the row count differs from the expected count
+and rejects inserts into completed batches. The replay writer only appends rows.
+
+The replay uses current source matchday rosters as historical lineup proxies.
+It records their actual observation times and labels simulated availability.
+Only completed results from earlier Melbourne calendar days enter ratings.
+The replay excludes same-day games because completion timestamps are unavailable.
+Extracted scores, statistics, previous-season priors, and fixtures can contain
+later corrections. These records cannot establish an exact historical tip or
+fill a missed prospective prediction.
+
+For example, read a reconstruction's model identity through its own batch:
+
+```sql
+SELECT r.match_id, r.competition, r.margin, r.home_probability,
+       r.winner, b.model_version, b.policy, b.created_at
+FROM tipper_reconstructions r
+JOIN tipper_reconstruction_batches b ON b.id = r.batch_id
+WHERE b.completed_at IS NOT NULL AND b.season = 2026;
+```
+
 ## Coverage Contract
 
 The no-argument `schema` call returns deterministic static expectations in
