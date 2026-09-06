@@ -61,7 +61,7 @@ export default {
         // failure. Fatal errors still require the existing expiry window.
         env.DB.prepare(
           `SELECT failure.timestamp, failure.type, failure.error FROM sync_log failure
-           WHERE failure.error IS NOT NULL
+           WHERE failure.error IS NOT NULL AND failure.timestamp >= ?
              AND (failure.type = 'sync:fatal' OR failure.type IN ('sync:AFLM','sync:AFLW','sync:VFL','sync:VFLW'))
              AND NOT EXISTS (
                SELECT 1 FROM sync_log recovery
@@ -69,7 +69,9 @@ export default {
                  AND recovery.error IS NULL
              )
            ORDER BY failure.id DESC LIMIT 1`,
-        ).first(),
+        )
+          .bind(new Date(Date.now() - SYNC_STALE_AFTER_MS).toISOString())
+          .first(),
       ]);
       // The cadence gate always lets the hourly tick through and every
       // synced competition writes a sync_log row, so a quiet log means the

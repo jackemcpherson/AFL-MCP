@@ -123,7 +123,7 @@ describe("GET /mcp/health (OPS-02)", () => {
       new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
       "fetchMatches failed: boom",
     );
-    await seedSyncLog(new Date().toISOString(), null);
+    await seedSyncLog(new Date().toISOString(), null, "sync:AFLW");
     const res = await getHealth();
     expect(res.status).toBe(200);
   });
