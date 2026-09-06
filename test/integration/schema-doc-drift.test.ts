@@ -21,8 +21,6 @@ const INTERNAL_TABLES = new Set([
   "tipper_game_ids",
   "tipper_reports",
   "tipper_status",
-  "tipper_reconstruction_batches",
-  "tipper_reconstructions",
 ]);
 
 describe("schema tool vs live D1 schema", () => {

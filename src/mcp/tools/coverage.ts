@@ -11,7 +11,7 @@ export type CoverageExpectation =
 /** Version included in responses and cache keys. */
 export const COVERAGE_CONTRACT_VERSION = 2;
 /** Date on which static source expectations were last reviewed. */
-export const COVERAGE_REVIEW_DATE = "2026-07-12";
+export const COVERAGE_REVIEW_DATE = "2026-09-06";
 /** Competition codes supported by the typed contract. */
 export const COVERAGE_COMPETITIONS = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 /** Supported competition code for a coverage request. */
@@ -37,6 +37,8 @@ const MATCH_COLUMNS = [
   "round_type",
   "date",
   "local_time",
+  "kickoff_at",
+  "lineups_observed_at",
   "venue_id",
   "home_team_id",
   "away_team_id",
@@ -210,6 +212,7 @@ export const ANALYTICS_COLUMNS = {
     "predicted_margin",
     "model_version",
     "generated_at",
+    "tipper_run_id",
   ],
 } as const;
 
@@ -242,14 +245,19 @@ const MATCH_WEATHER_BASE = {
   notes: [],
 } as const;
 
-// Prediction semantics (home perspective, overwrite-in-place, tipper-written)
+// Prediction semantics (home perspective, retained backfill and live tips)
 // are documented once in the schema tool notes; per-leaf notes stay minimal.
-const MATCH_PREDICTIONS_AFLM = {
+const MATCH_PREDICTIONS = {
   range: "2026..current",
   expected: "partial",
   source: ["tipper"],
-  notes: ["Only rounds tipper has published."],
+  notes: ["Retained historical backfill and real-time predictions; missing rows remain possible."],
 } as const satisfies CoverageTableExpectation;
+
+const PUBLICATION_MATCH_RANGES = {
+  kickoff_at: "2026..current",
+  lineups_observed_at: "2026..current",
+} as const;
 
 const MATCH_PREDICTIONS_ABSENT = {
   range: "all",
@@ -330,6 +338,7 @@ export const COVERAGE_EXPECTATIONS = {
         attendance: "1990..2019",
         live_period_status: "2026..current",
         completed_quarter: "2026..current",
+        ...PUBLICATION_MATCH_RANGES,
         ...QUARTER_SCORE_RANGES,
       },
     },
@@ -351,7 +360,7 @@ export const COVERAGE_EXPECTATIONS = {
       notes: ["Known historical round gaps."],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "1990..current" },
-    match_predictions: MATCH_PREDICTIONS_AFLM,
+    match_predictions: MATCH_PREDICTIONS,
   },
   AFLW: {
     competitions: CORE,
@@ -364,6 +373,7 @@ export const COVERAGE_EXPECTATIONS = {
       range: "2017..current",
       expected: "partial",
       overrides: { local_time: "complete", status: "complete" },
+      ranges: PUBLICATION_MATCH_RANGES,
     },
     player_match_stats: {
       ...CORE,
@@ -381,7 +391,7 @@ export const COVERAGE_EXPECTATIONS = {
       notes: [],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2017..current" },
-    match_predictions: MATCH_PREDICTIONS_ABSENT,
+    match_predictions: MATCH_PREDICTIONS,
   },
   VFL: {
     competitions: CORE,
@@ -394,6 +404,7 @@ export const COVERAGE_EXPECTATIONS = {
       range: "2021..current",
       expected: "partial",
       overrides: { local_time: "complete", status: "complete" },
+      ranges: PUBLICATION_MATCH_RANGES,
     },
     player_match_stats: {
       ...CORE,
@@ -429,6 +440,7 @@ export const COVERAGE_EXPECTATIONS = {
       range: "2021..current",
       expected: "partial",
       overrides: { local_time: "complete", status: "complete" },
+      ranges: PUBLICATION_MATCH_RANGES,
     },
     player_match_stats: {
       ...CORE,
