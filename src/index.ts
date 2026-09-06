@@ -57,12 +57,18 @@ export default {
         ).first(),
         // Sub-task rows (sync:*:lineups, sync:*:stats) record routine
         // degradations — e.g. lineup 404s before teams are announced — and
-        // must not page. Only whole-competition failures or sync:fatal count.
+        // must not page. A successful retry clears only its own competition
+        // failure. Fatal errors still require the existing expiry window.
         env.DB.prepare(
-          `SELECT timestamp, type, error FROM sync_log
-           WHERE error IS NOT NULL
-             AND (type = 'sync:fatal' OR type IN ('sync:AFLM','sync:AFLW','sync:VFL','sync:VFLW'))
-           ORDER BY id DESC LIMIT 1`,
+          `SELECT failure.timestamp, failure.type, failure.error FROM sync_log failure
+           WHERE failure.error IS NOT NULL
+             AND (failure.type = 'sync:fatal' OR failure.type IN ('sync:AFLM','sync:AFLW','sync:VFL','sync:VFLW'))
+             AND NOT EXISTS (
+               SELECT 1 FROM sync_log recovery
+               WHERE recovery.type = failure.type AND recovery.id > failure.id
+                 AND recovery.error IS NULL
+             )
+           ORDER BY failure.id DESC LIMIT 1`,
         ).first(),
       ]);
       // The cadence gate always lets the hourly tick through and every
