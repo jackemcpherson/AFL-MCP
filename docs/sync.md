@@ -268,5 +268,5 @@ health routes retain their small uptime contract.
 
 Public health clears a competition-level error after a later successful sync
 for that competition. Success in another competition or a lineup/stat sub-task
-does not clear it. Error records remain in `sync_log`; fatal errors retain the
+does not clear it. Error records remain in `sync_log`. Fatal errors retain the
 three-hour alert window.
