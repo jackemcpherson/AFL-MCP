@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../types";
 import { assertReadOnlySql } from "./sql-guard";
+import { AGENT_FUNCTION_NAME, transpileAgentCode } from "./transpile";
 
 export class DbProxy extends WorkerEntrypoint<Env> {
   async query(sql: string, ...params: unknown[]) {
@@ -44,6 +45,7 @@ export async function executeCode(
   try {
     // biome-ignore lint/suspicious/noExplicitAny: Dynamic Worker ctx.exports has no public type defs
     const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
+    const agentFunction = transpileAgentCode(code);
 
     const wrappedCode = `
       export default {
@@ -58,7 +60,8 @@ export async function executeCode(
               }
             }
           }
-          const __result = await (async () => { ${code} })()
+          ${agentFunction}
+          const __result = await ${AGENT_FUNCTION_NAME}()
           return new Response(JSON.stringify(__result), {
             headers: { "Content-Type": "application/json" },
           })

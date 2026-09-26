@@ -63,3 +63,20 @@ describe("sanitizeErrorMessage", () => {
     expect(sanitizeErrorMessage(new Error(""))).toBe("execution failed");
   });
 });
+
+describe("executeCode TypeScript", () => {
+  it("returns a sanitized error for invalid TypeScript without loading a sandbox", async () => {
+    let loaded = false;
+    const env = {
+      LOADER: {
+        load: () => {
+          loaded = true;
+          throw new Error("should not load");
+        },
+      },
+    } as unknown as Env;
+    const result = await executeCode("return )", env, stubCtx);
+    expect(loaded).toBe(false);
+    expect(result.error).toMatch(/^TypeScript syntax error:/);
+  });
+});

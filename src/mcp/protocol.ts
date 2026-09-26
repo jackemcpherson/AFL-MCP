@@ -50,7 +50,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "code",
     description:
-      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
+      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only; type annotations are stripped, not type-checked), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
     inputSchema: {
       type: "object",
       properties: {

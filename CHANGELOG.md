@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `code` tool: submitted code is now type-stripped with Sucrase before it
+  runs, so TypeScript syntax (annotations, interfaces, type aliases, `as`,
+  `satisfies`, generics, enums) works as advertised. Previously the body was
+  embedded verbatim in a JavaScript module and any annotation failed to
+  parse. Types are stripped, not checked; syntax errors now report
+  `TypeScript syntax error: … (line:column)` against the submitted code.
+
 ## [3.7.1] - 2026-07-30
 
 Version 3.7.1 trues up lineup coverage after the v3.7.0 backfills.
