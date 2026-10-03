@@ -42,6 +42,7 @@ describe("GET /mcp/admin/status", () => {
       "competitions",
       "integrity",
       "degradation",
+      "coaching",
     ]);
     expect(body.status).toBe("ok");
     expect(body.lease).toEqual({ held: false, ageSeconds: null });
@@ -73,6 +74,14 @@ describe("GET /mcp/admin/status", () => {
       partialLineupEvents: 0,
       partialStatsEvents: 0,
       unmappedTeamEvents: 0,
+    });
+    expect(body.coaching).toEqual({
+      latestSuccessAt: null,
+      failedScopes: 0,
+      unresolvedJoins: 0,
+      conflicts: 0,
+      currentSeasonExpectedAssignments: 0,
+      currentSeasonObservedAssignments: 0,
     });
     expect(JSON.stringify(body).length).toBeLessThan(16 * 1024);
   });
@@ -164,7 +173,7 @@ describe("GET /mcp/admin/status", () => {
     expect(JSON.stringify(body)).not.toContain("secret");
   });
 
-  it("uses exactly nine fixed statements", async () => {
+  it("uses exactly thirteen fixed statements", async () => {
     let statementCount = 0;
     const countingDb = {
       prepare: authedEnv.DB.prepare.bind(authedEnv.DB),
@@ -175,7 +184,7 @@ describe("GET /mcp/admin/status", () => {
     } as D1Database;
     vi.spyOn(console, "log").mockImplementation(() => {});
     await getAdminStatus({ ...authedEnv, DB: countingDb }, new Date("2026-07-12T06:00:00.000Z"));
-    expect(statementCount).toBe(9);
+    expect(statementCount).toBe(13);
   });
 
   it("returns a sanitized 500 when a fixed query fails", async () => {

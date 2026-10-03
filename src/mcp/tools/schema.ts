@@ -180,11 +180,32 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "model_version TEXT (production model identity and full source revision),",
           "generated_at TEXT (UTC ISO 8601)",
         ].join(" "),
+        coach_backfill_progress:
+          "provider TEXT, season INTEGER, cursor TEXT, assignments_json TEXT, updated_at TEXT, PRIMARY KEY (provider, season)",
+        coaches: "id TEXT PRIMARY KEY, display_name TEXT, profile_url TEXT, created_at TEXT",
+        coach_external_ids:
+          "provider TEXT, external_coach_id TEXT, coach_id TEXT REFERENCES coaches(id), display_name TEXT, profile_url TEXT, verified INTEGER, PRIMARY KEY (provider, external_coach_id)",
+        coach_external_match_ids:
+          "provider TEXT, external_match_id TEXT, match_id INTEGER REFERENCES matches(id), PRIMARY KEY (provider, external_match_id)",
+        coach_observations:
+          "id INTEGER PRIMARY KEY, provider TEXT, external_coach_id TEXT, external_match_id TEXT, coach_id TEXT, match_id INTEGER, team_id INTEGER, season INTEGER, source_url TEXT, retrieved_at TEXT, match_date TEXT, display_name TEXT, raw_team TEXT, home_points INTEGER, away_points INTEGER",
+        match_coaches:
+          "match_id INTEGER REFERENCES matches(id), team_id INTEGER REFERENCES teams(id), coach_id TEXT REFERENCES coaches(id), observation_id INTEGER REFERENCES coach_observations(id), updated_at TEXT, PRIMARY KEY (match_id, team_id)",
+        coach_import_pages:
+          "provider TEXT, season INTEGER, scope TEXT, status TEXT, last_checked_at TEXT, last_success_at TEXT, failure_count INTEGER",
+        coach_import_diagnostics:
+          "id INTEGER PRIMARY KEY, provider TEXT, season INTEGER, scope TEXT, source_url TEXT, reason TEXT, created_at TEXT, resolved_at TEXT",
+        public_input_revision:
+          "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT",
       },
       notes: [
         // Multi-competition rules — read first
         "ALWAYS filter queries by competition. Join `seasons s ON m.season_id = s.id` then `competitions c ON s.competition_id = c.id` and add `WHERE c.code = ?`. Without this filter, results mix competitions silently — team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) have distinct team_id values, so unfiltered aggregates double-count.",
         "Coverage expectations, exact ranges, sources, and review dates are canonical in database.coverage_contract. Descriptive notes never override that typed contract.",
+        "match_coaches has at most one credited coach per match and participant club. It stores canonical AFL Tables assignments; LEFT JOIN it to preserve unknown assignments. Coach IDs use provider-qualified identity unless a cross-provider match has been explicitly verified.",
+        "coach_observations retains AFL Tables and FootyWire evidence independently. FootyWire is comparison-only and never replaces the canonical AFL Tables assignment. Source disagreements remain queryable in this table.",
+        "Historical AFLM team identities are Brisbane Bears through 1996, Fitzroy, and Brisbane Lions. Their distinct team IDs preserve the source history; downstream ELO systems may carry ratings across the Bears-to-Lions transition.",
+        "public_input_revision is a monotonic input-change marker. It changes for meaningful match result or canonical coach changes. Read revision, in_progress, and write_started_at before and after a native snapshot; retry on a revision difference or any active write. A stale marker requires operator recovery after checking the shared lease and incomplete work. Last-check timestamps, secondary observations, diagnostics, and coverage checks do not change the revision.",
         // Round labels — competition-specific
         "Round labels: matches has TWO round-string columns mirroring the AFL API directly (same approach as the R fitzRoy package — no cross-competition normalisation):",
         "- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+, round_number=0), `Wildcard` (VFL only, before finals), and finals `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`. The AFLM 2026 finals format adds `Wildcard Finals` and `Qualifying & Elimination Finals`.",
@@ -291,6 +312,36 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN teams at ON m.away_team_id = at.id",
           "JOIN venues v ON m.venue_id = v.id",
           "WHERE c.code = ? AND s.year = ?",
+        ].join("\n"),
+        match_coaches_lookup: [
+          "-- Bind: competition, season year",
+          "SELECT m.id AS match_id, m.date, m.round, ht.name AS home_team, at.name AS away_team,",
+          "  home_coach.display_name AS home_coach, away_coach.display_name AS away_coach,",
+          "  home_coach.id AS home_coach_id, away_coach.id AS away_coach_id",
+          "FROM matches m",
+          "JOIN seasons s ON s.id = m.season_id",
+          "JOIN competitions c ON c.id = s.competition_id",
+          "JOIN teams ht ON ht.id = m.home_team_id",
+          "JOIN teams at ON at.id = m.away_team_id",
+          "LEFT JOIN match_coaches hm ON hm.match_id = m.id AND hm.team_id = m.home_team_id",
+          "LEFT JOIN coaches home_coach ON home_coach.id = hm.coach_id",
+          "LEFT JOIN match_coaches am ON am.match_id = m.id AND am.team_id = m.away_team_id",
+          "LEFT JOIN coaches away_coach ON away_coach.id = am.coach_id",
+          "WHERE c.code = ? AND s.year = ?",
+          "ORDER BY m.date, m.id",
+        ].join("\n"),
+        coaching_source_comparisons: [
+          "-- AFL Tables vs FootyWire evidence for one AFLM season.",
+          "-- Bind: season year",
+          "SELECT primary_obs.match_date, primary_obs.raw_team AS team,",
+          "  primary_obs.display_name AS afl_tables_coach, secondary_obs.display_name AS footywire_coach,",
+          "  primary_obs.source_url AS afl_tables_evidence, secondary_obs.source_url AS footywire_evidence",
+          "FROM coach_observations primary_obs",
+          "JOIN coach_observations secondary_obs ON secondary_obs.match_id = primary_obs.match_id",
+          "  AND secondary_obs.team_id = primary_obs.team_id AND secondary_obs.provider = 'footywire'",
+          "WHERE primary_obs.provider = 'afl-tables' AND primary_obs.season = ?",
+          "  AND primary_obs.coach_id <> secondary_obs.coach_id",
+          "ORDER BY primary_obs.match_date, team",
         ].join("\n"),
         lineup_round_comparison: [
           "-- Compare team lineups between two rounds (shows ins/outs)",

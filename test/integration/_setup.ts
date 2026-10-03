@@ -2,6 +2,14 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, beforeEach } from "vitest";
 
 const TABLES_TO_WIPE = [
+  "coach_backfill_progress",
+  "match_coaches",
+  "coach_import_diagnostics",
+  "coach_import_pages",
+  "coach_observations",
+  "coach_external_match_ids",
+  "coach_external_ids",
+  "coaches",
   "match_predictions",
   "tipper_predictions",
   "tipper_runs",
@@ -27,4 +35,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   // Reset dynamic tables between tests; keep seeded `competitions` rows.
   await env.DB.batch(TABLES_TO_WIPE.map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+  await env.DB.prepare(
+    "UPDATE public_input_revision SET revision = 0, in_progress = 0, write_started_at = NULL WHERE id = 1",
+  ).run();
 });

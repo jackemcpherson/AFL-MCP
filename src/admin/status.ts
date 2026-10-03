@@ -33,6 +33,14 @@ export interface AdminStatusResponse {
     readonly partialStatsEvents: number;
     readonly unmappedTeamEvents: number;
   };
+  readonly coaching: {
+    readonly latestSuccessAt: string | null;
+    readonly failedScopes: number;
+    readonly unresolvedJoins: number;
+    readonly conflicts: number;
+    readonly currentSeasonExpectedAssignments: number;
+    readonly currentSeasonObservedAssignments: number;
+  };
 }
 
 /**
@@ -94,6 +102,30 @@ export async function getAdminStatus(
          SUM(CASE WHEN type = 'sync:stats:unmapped-team' THEN 1 ELSE 0 END) AS unmappedTeamEvents
        FROM sync_log WHERE timestamp >= ?1`,
     ).bind(windowStart),
+    env.DB.prepare(
+      `SELECT MAX(last_success_at) AS latestSuccessAt,
+              SUM(CASE WHEN status IN ('failed', 'partial') THEN 1 ELSE 0 END) AS failedScopes
+       FROM coach_import_pages WHERE provider = 'afl-tables'`,
+    ),
+    env.DB.prepare(
+      `SELECT
+         SUM(CASE WHEN reason IN ('unresolved-match', 'ambiguous-match', 'invalid-participant', 'score-mismatch') THEN 1 ELSE 0 END) AS unresolvedJoins
+       FROM coach_import_diagnostics WHERE provider = 'afl-tables' AND resolved_at IS NULL`,
+    ),
+    env.DB.prepare(
+      `SELECT COUNT(DISTINCT CAST(a.match_id AS TEXT) || ':' || CAST(a.team_id AS TEXT)) AS conflicts
+       FROM coach_observations a JOIN coach_observations b
+         ON b.match_id = a.match_id AND b.team_id = a.team_id AND b.provider = 'footywire'
+       WHERE a.provider = 'afl-tables' AND a.coach_id <> b.coach_id`,
+    ),
+    env.DB.prepare(
+      `SELECT 2 * COUNT(DISTINCT m.id) AS expectedAssignments,
+              COUNT(DISTINCT CAST(mc.match_id AS TEXT) || ':' || CAST(mc.team_id AS TEXT)) AS observedAssignments
+       FROM competitions c JOIN seasons s ON s.competition_id = c.id
+       JOIN matches m ON m.season_id = s.id
+       LEFT JOIN match_coaches mc ON mc.match_id = m.id AND mc.team_id IN (m.home_team_id, m.away_team_id)
+       WHERE c.code = 'AFLM' AND s.year = ?1 AND m.home_points IS NOT NULL AND m.away_points IS NOT NULL`,
+    ).bind(now.getUTCFullYear()),
   ]);
 
   const lease = resultRow(results, 0);
@@ -118,6 +150,10 @@ export async function getAdminStatus(
     };
   });
   const degradation = resultRow(results, 8);
+  const coaching = resultRow(results, 9);
+  const coachingJoins = resultRow(results, 10);
+  const coachingConflict = resultRow(results, 11);
+  const coachingCoverage = resultRow(results, 12);
   const response: AdminStatusResponse = {
     status: "ok",
     asOf,
@@ -138,6 +174,14 @@ export async function getAdminStatus(
       partialLineupEvents: numberValue(degradation?.partialLineupEvents),
       partialStatsEvents: numberValue(degradation?.partialStatsEvents),
       unmappedTeamEvents: numberValue(degradation?.unmappedTeamEvents),
+    },
+    coaching: {
+      latestSuccessAt: nullableString(coaching?.latestSuccessAt),
+      failedScopes: numberValue(coaching?.failedScopes),
+      unresolvedJoins: numberValue(coachingJoins?.unresolvedJoins),
+      conflicts: numberValue(coachingConflict?.conflicts),
+      currentSeasonExpectedAssignments: numberValue(coachingCoverage?.expectedAssignments),
+      currentSeasonObservedAssignments: numberValue(coachingCoverage?.observedAssignments),
     },
   };
   console.log(

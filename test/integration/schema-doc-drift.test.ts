@@ -15,12 +15,15 @@ const INTERNAL_TABLES = new Set([
   "d1_migrations",
   "sync_lease",
   "sync_log",
+  "coach_backfill_progress",
   "_cf_KV",
   "tipper_runs",
   "tipper_predictions",
   "tipper_game_ids",
   "tipper_reports",
   "tipper_status",
+  "coach_import_diagnostics",
+  "coach_import_pages",
 ]);
 
 describe("schema tool vs live D1 schema", () => {

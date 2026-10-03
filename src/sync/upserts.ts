@@ -7,7 +7,12 @@ import {
   roundLabel,
   roundTypeLabel,
 } from "fitzroy";
-import { isPlaceholderTeamName, normaliseTeam, normaliseVenue } from "../lib/normalise";
+import {
+  isPlaceholderTeamName,
+  normaliseTeam,
+  normaliseTeamForMatch,
+  normaliseVenue,
+} from "../lib/normalise";
 import { toIsoDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 import {
@@ -43,11 +48,13 @@ const MIN_LINEUP_SYNC_YEAR = 2023;
  * Run prepared statements in batches and return the total number of rows that
  * were actually inserted or updated (`meta.changes`). Combined with WHERE
  * predicates on `ON CONFLICT DO UPDATE`, this distinguishes real writes from
- * UPSERT no-ops where every column already matches.
+ * UPSERT no-ops where every column already matches. Match writes count RETURNING
+ * rows so revision-trigger writes do not inflate the assignment count.
  */
 async function batchAndCountChanges(
   env: Env,
   stmts: readonly D1PreparedStatement[],
+  countReturnedRows = false,
 ): Promise<number> {
   let affected = 0;
   for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
@@ -55,7 +62,7 @@ async function batchAndCountChanges(
     if (chunk.length === 0) continue;
     const results = await env.DB.batch(chunk);
     for (const r of results) {
-      if (r.success) affected += r.meta.changes;
+      if (r.success) affected += countReturnedRows ? r.results.length : r.meta.changes;
     }
   }
   return affected;
@@ -154,8 +161,8 @@ export async function ensureTeams(
 ): Promise<Map<string, number>> {
   const names = new Set<string>();
   for (const m of matches) {
-    names.add(normaliseTeam(m.homeTeam));
-    names.add(normaliseTeam(m.awayTeam));
+    names.add(normaliseTeamForMatch(m.homeTeam, competitionCode, m.season));
+    names.add(normaliseTeamForMatch(m.awayTeam, competitionCode, m.season));
   }
 
   const existing = await env.DB.prepare("SELECT id, name FROM teams WHERE competition_id = ?")
@@ -477,11 +484,11 @@ export async function upsertMatches(
   const stmts = matches.map((m) =>
     Number.isFinite(m.date.getTime())
       ? buildMatchUpsert(env, m, ctx)
-      : env.DB.prepare("UPDATE matches SET kickoff_at=NULL WHERE external_afl_id=?").bind(
-          m.matchId,
-        ),
+      : env.DB.prepare(
+          "UPDATE matches SET kickoff_at=NULL WHERE external_afl_id=? RETURNING id",
+        ).bind(m.matchId),
   );
-  return await batchAndCountChanges(env, stmts);
+  return await batchAndCountChanges(env, stmts, true);
 }
 
 /** Input row for the {@link MATCH_COLUMNS} manifest: the fitzroy match plus resolved FK ids and derived date/time strings. */
@@ -598,8 +605,8 @@ const MATCH_UPDATE_COMMON_WHERE = changeDetectionWhere("matches", MATCH_COLUMNS)
  *    `external_afl_id` value when fitzroy starts providing one.
  */
 function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1PreparedStatement {
-  const homeTeam = normaliseTeam(m.homeTeam);
-  const awayTeam = normaliseTeam(m.awayTeam);
+  const homeTeam = normaliseTeamForMatch(m.homeTeam, m.competition, m.season);
+  const awayTeam = normaliseTeamForMatch(m.awayTeam, m.competition, m.season);
   const venue = normaliseVenue(m.venue);
   const row: MatchRow = {
     m,
@@ -630,7 +637,8 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
       ${MATCH_UPDATE_COMMON_SET}
     WHERE
       matches.external_afl_id IS NOT COALESCE(excluded.external_afl_id, matches.external_afl_id) OR
-      ${MATCH_UPDATE_COMMON_WHERE}`,
+      ${MATCH_UPDATE_COMMON_WHERE}
+    RETURNING id`,
   ).bind(...bindValues(MATCH_COLUMNS, row));
 }
 
@@ -660,7 +668,7 @@ export async function upsertStats(
     if (!s.timeOnGroundPercentage && !s.disposals) continue;
     const matchId = matchMap.get(s.matchId);
     if (!matchId) continue;
-    const teamId = teamMap.get(normaliseTeam(s.team));
+    const teamId = teamMap.get(normaliseTeamForMatch(s.team, s.competition, s.season));
     if (teamId === undefined) {
       unmappedTeams.add(s.team);
       continue;
@@ -802,8 +810,12 @@ export async function upsertLineups(
   for (const lineup of lineups) {
     if (lineup.season < MIN_LINEUP_SYNC_YEAR) continue;
     const matchId = matchMap.get(lineup.matchId);
-    const home = teamMap.get(normaliseTeam(lineup.homeTeam));
-    const away = teamMap.get(normaliseTeam(lineup.awayTeam));
+    const home = teamMap.get(
+      normaliseTeamForMatch(lineup.homeTeam, lineup.competition, lineup.season),
+    );
+    const away = teamMap.get(
+      normaliseTeamForMatch(lineup.awayTeam, lineup.competition, lineup.season),
+    );
     if (!matchId || !home || !away || home === away) continue;
     const size = lineup.competition === "AFLM" ? 23 : lineup.competition === "AFLW" ? 21 : null;
     const sides = [

@@ -1,11 +1,15 @@
 import type { CompetitionCode } from "fitzroy";
 import { backfillBrownlow } from "./admin/brownlow";
+import { reconcileBearsIdentity } from "./admin/club-identities";
+import { backfillCoaches } from "./admin/coaching";
 import { getAdminStatus } from "./admin/status";
 import { handleMcpRequest } from "./mcp/protocol";
 import {
   type BackfillRequest,
   BackfillRequestSchema,
+  BearsRepairRequestSchema,
   BrownlowBackfillRequestSchema,
+  CoachingBackfillRequestSchema,
   describeBackfillIssue,
   describeBrownlowBackfillIssue,
 } from "./mcp/validation";
@@ -185,6 +189,44 @@ function timingSafeEqual(a: string, b: string): boolean {
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
   if (path === "/mcp/admin/status" && request.method === "GET") {
     return Response.json(await getAdminStatus(env));
+  }
+
+  if (path === "/mcp/admin/backfill-coaches" && request.method === "POST") {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = CoachingBackfillRequestSchema.safeParse(raw);
+    if (!parsed.success)
+      return Response.json({ error: "invalid coaching backfill request" }, { status: 400 });
+    const { fromYear, toYear, source, dryRun } = parsed.data;
+    const currentYear = new Date().getUTCFullYear();
+    if (fromYear !== toYear || fromYear < 1990 || toYear > currentYear) {
+      return Response.json(
+        { error: `fromYear and toYear must be the same year between 1990 and ${currentYear}` },
+        { status: 400 },
+      );
+    }
+    const result = await backfillCoaches(env, fromYear, source, dryRun);
+    if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
+    return Response.json({ status: "ok", ...result.summary });
+  }
+
+  if (path === "/mcp/admin/reconcile-bears" && request.method === "POST") {
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = BearsRepairRequestSchema.safeParse(raw);
+    if (!parsed.success)
+      return Response.json({ error: "invalid Bears repair request" }, { status: 400 });
+    const result = await reconcileBearsIdentity(env, parsed.data.dryRun);
+    if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
+    return Response.json({ status: "ok", ...result.report });
   }
 
   if (path === "/mcp/admin/backfill-brownlow" && request.method === "POST") {

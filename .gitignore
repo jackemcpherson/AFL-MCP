@@ -34,3 +34,6 @@ data/weather-cache/
 # Agent tooling
 .codex/
 HANDOFF.md
+
+# Python verification caches
+__pycache__/

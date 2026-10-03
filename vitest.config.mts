@@ -11,7 +11,7 @@ export default defineConfig(async () => {
         {
           test: {
             name: "unit",
-            include: ["test/*.test.ts"],
+            include: ["test/*.test.ts", "test/*.test.mjs"],
           },
         },
         {
@@ -20,7 +20,7 @@ export default defineConfig(async () => {
               miniflare: {
                 compatibilityDate: "2026-04-01",
                 compatibilityFlags: ["nodejs_compat"],
-                d1Databases: ["DB"],
+                d1Databases: ["DB", "UPGRADE_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,
                 },

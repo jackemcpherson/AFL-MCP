@@ -194,7 +194,7 @@ describe("handleMcpRequest", () => {
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
     expect(schema.database.tables).toHaveProperty("matches");
     expect(schema.database.tables).toHaveProperty("player_match_stats");
-    expect(schema.database.coverage_contract.version).toBe(2);
+    expect(schema.database.coverage_contract.version).toBe(3);
   });
 
   it("rejects invalid observed schema arguments before querying D1", async () => {
