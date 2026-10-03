@@ -255,6 +255,45 @@ backfill also writes only when the current value is NULL or zero. This keeps
 repeated runs idempotent and prevents either path from clobbering an existing
 vote. Brownlow votes are AFLM-only - the medal is not awarded for AFLW/VFL/VFLW.
 
+## Match Coaches
+
+The hourly path may refresh AFL Tables match-coach facts for the active AFLM
+season while holding the existing sync lease. Successful checks recur every 24
+hours. Incomplete or failed checks retry every three hours. Five-minute cron
+ticks do not fetch coach career pages again.
+The sync logs coaching failures and continues score, lineup, statistics,
+weather and PAV work.
+
+`POST /mcp/admin/backfill-coaches` accepts one AFLM season per request:
+
+```json
+{ "fromYear": 2024, "toYear": 2024, "source": "afl-tables", "dryRun": true }
+```
+
+Years must be 1990 or later. FootyWire season-wide coaching requires captured
+match headings to establish coverage. Dry-run is the default.
+
+Repeating a request is idempotent by provider key. Stored page status records
+the latest outcome. AFL Tables alone writes canonical `match_coaches` rows.
+
+FootyWire observations remain separate. A partial unbounded import can add successful
+observations and assignments but cannot remove prior canonical facts. A fully
+successful AFL Tables season pass can remove stale canonical facts absent from
+the source snapshot. The importer records unresolved or contradictory joins
+for review.
+
+The admin route stages bounded profile batches and returns `pending: true`
+until the season source cycle finishes. Repeat write-mode requests to resume.
+Dry-run requests do not persist a cursor or advance an existing checkpoint.
+
+`POST /mcp/admin/reconcile-bears` returns a dry-run count report by default.
+After review, write mode moves AFLM matches through 1996 from the legacy Lions
+team ID to a separate Brisbane Bears team ID. It updates match rows, player
+statistics, lineups, PAV, and coaching team references. The operation keeps
+match IDs and provider mappings stable. Season-aware normalisation prevents
+future syncs from folding those facts back into Brisbane Lions. ELO continuity
+belongs to downstream consumers.
+
 ## Private Operator Status
 
 `GET /mcp/admin/status` returns a stable aggregate snapshot for all four
@@ -262,11 +301,36 @@ competitions. The snapshot includes whole-sync outcomes, completed match dates,
 lease age, and all five integrity-view counts. It also reports 24-hour
 partial-lineup, partial-stat, and unmapped-team event counts.
 
-The endpoint uses nine fixed statements and one fixed window. It never returns
-raw errors, lease holders, IDs, row samples, client data, or tokens. Public
-health routes retain their small uptime contract.
+The endpoint uses thirteen fixed statements and one fixed window. It includes
+aggregate coaching last-success, failed-scope, unresolved-join, disagreement,
+and active-season assignment counts. It never returns raw errors, lease
+holders, IDs, row samples, client data, or tokens. Public health routes retain
+their small uptime contract.
+
+Coaching backfill fetches at most five AFL Tables coach profiles per request,
+plus the initial index request. `coach_backfill_progress` stores the opaque
+season-specific cursor and staged source assignments. Failed pages return to
+the retry queue. Pending responses include `pending: true` and do not update
+canonical facts or remove season assignments. Repeated authenticated requests
+resume the cursor under the shared lease. Active-season sync continues pending
+cycles before applying the normal successful-check cadence.
+
+The final batch reconciles the combined season evidence before any coach or
+match mapping write. It rejects duplicate participant assignments and verifies
+both participant names and corresponding scores in either orientation. Only a
+complete authoritative season permits canonical removals. Unresolved imports
+retain their diagnostics for review. A returned final summary clears the page
+checkpoint, including unresolved imports, so the next cycle can fetch corrections
+from earlier profiles. A thrown write failure retains its checkpoint for retry.
 
 Public health clears a competition-level error after a later successful sync
 for that competition. Success in another competition or a lineup/stat sub-task
 does not clear it. Error records remain in `sync_log`. Fatal errors retain the
 three-hour alert window.
+
+Bears identity repair changes match participants through the existing fixture
+trigger. That trigger invalidates current `match_predictions` and
+`tipper_game_ids` mappings. Append-only `tipper_predictions` retain the team
+identities from the original prediction. A later source refresh
+rebuilds current mappings. Historical snapshots never become identity-repair
+inputs.

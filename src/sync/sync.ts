@@ -1,5 +1,7 @@
 import type { CompetitionCode, Match } from "fitzroy";
 import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
+import { refreshActiveCoaches } from "../admin/coaching";
+import { beginPublicInputWrite, finishPublicInputWrite } from "../db/public-inputs";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
@@ -91,6 +93,7 @@ export async function sync(
   }
 
   try {
+    await beginPublicInputWrite(env, now);
     const seasons: number[] =
       options?.fromYear !== undefined && options.toYear !== undefined
         ? rangeInclusive(options.fromYear, options.toYear)
@@ -104,6 +107,16 @@ export async function sync(
           await syncCompetition(env, competition, season, options?.skipPav ?? false, isBackfill),
         );
       }
+    }
+
+    // Coach profiles are expensive season-wide reads. Refresh only in the
+    // hourly path, with the import module enforcing a 24-hour retry cadence.
+    if (!isBackfill && now.getUTCMinutes() === 0 && competitions.includes("AFLM")) {
+      await refreshActiveCoaches(env, now).catch(async () => {
+        await logSync(env, "sync:AFLM:coaches", 0, "coaching refresh failed").catch(
+          () => undefined,
+        );
+      });
     }
 
     // Weather rides the same lease as match data but self-gates to
@@ -121,6 +134,14 @@ export async function sync(
 
     return results;
   } finally {
+    await finishPublicInputWrite(env).catch(async () => {
+      await logSync(
+        env,
+        "sync:input-revision",
+        0,
+        "failed to clear active input write marker",
+      ).catch(() => undefined);
+    });
     await releaseOperationLease(env, holder);
   }
 }

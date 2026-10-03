@@ -6,6 +6,7 @@ declare global {
     /** The miniflare test env carries the app bindings plus migrations. */
     interface Env extends AppEnv {
       TEST_MIGRATIONS: D1Migration[];
+      UPGRADE_DB: D1Database;
     }
   }
 }

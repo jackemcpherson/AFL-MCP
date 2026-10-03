@@ -5,6 +5,33 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-10-04
+
+Version 3.8.0 adds coaching ingestion and consistent native input revisions.
+
+### Added in 3.8.0
+
+- Authoritative AFLM coaching observations, canonical assignments and bounded,
+  admin backfills using published fitzroy 5.0.0.
+- Public input revisions and protected writer markers for consistent native
+  reads across syncs, identity repairs and coaching backfills.
+- Name-based venue reference seeds for fresh database recovery.
+- Schema and reference-seed parity checks, including integrity views and
+  constraints, plus real D1 tests for fresh and existing databases.
+
+### Changed in 3.8.0
+
+- Coverage contract v3 describes coaching support, incomplete historical
+  coverage, source limitations and unresolved joins.
+- Historical Brisbane Bears normalisation preserves match IDs and issued
+  Tipper prediction snapshots. Participant changes invalidate current caches.
+- Release automation checks the reviewed commit and main ancestry before
+  publishing immutable artefacts.
+
+Historical identity repairs and coaching writes require separate operator
+approval. See [Coaching Release Operations](docs/coaching-release-operations.md)
+for deployment verification, backfill procedures and recovery instructions.
+
 ## [3.7.1] - 2026-07-30
 
 Version 3.7.1 trues up lineup coverage after the v3.7.0 backfills.

@@ -1,5 +1,27 @@
 import { TEAM_NAME_MAP, VENUE_NAME_MAP } from "./constants";
 
+/**
+ * Resolve the historical Bears identity without breaking modern Brisbane aliases.
+ *
+ * @param name - Raw source team name.
+ * @param competition - Competition code for the match.
+ * @param season - Match season.
+ * @returns The database's canonical name for that match's club identity.
+ * @example
+ * normaliseTeamForMatch("Brisbane Bears", "AFLM", 1996);
+ */
+export function normaliseTeamForMatch(name: string, competition: string, season: number): string {
+  const trimmed = name.trim();
+  if (
+    competition === "AFLM" &&
+    season <= 1996 &&
+    ["Brisbane Bears", "Brisbane Lions", "Brisbane"].includes(trimmed)
+  ) {
+    return "Brisbane Bears";
+  }
+  return normaliseTeam(trimmed);
+}
+
 export function normaliseTeam(name: string): string {
   const trimmed = name.trim();
   return TEAM_NAME_MAP[trimmed] ?? trimmed;

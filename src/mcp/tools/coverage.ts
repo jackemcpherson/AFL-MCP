@@ -9,9 +9,9 @@ export type CoverageExpectation =
   | "not-applicable";
 
 /** Version included in responses and cache keys. */
-export const COVERAGE_CONTRACT_VERSION = 2;
+export const COVERAGE_CONTRACT_VERSION = 3;
 /** Date on which static source expectations were last reviewed. */
-export const COVERAGE_REVIEW_DATE = "2026-09-06";
+export const COVERAGE_REVIEW_DATE = "2026-10-04";
 /** Competition codes supported by the typed contract. */
 export const COVERAGE_COMPETITIONS = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 /** Supported competition code for a coverage request. */
@@ -170,6 +170,35 @@ export const ANALYTICS_COLUMNS = {
     "weight_kg",
     "is_retired",
   ],
+  coaches: ["id", "display_name", "profile_url", "created_at"],
+  coach_external_ids: [
+    "provider",
+    "external_coach_id",
+    "coach_id",
+    "display_name",
+    "profile_url",
+    "verified",
+  ],
+  coach_external_match_ids: ["provider", "external_match_id", "match_id"],
+  coach_observations: [
+    "id",
+    "provider",
+    "external_coach_id",
+    "external_match_id",
+    "coach_id",
+    "match_id",
+    "team_id",
+    "season",
+    "source_url",
+    "retrieved_at",
+    "match_date",
+    "display_name",
+    "raw_team",
+    "home_points",
+    "away_points",
+  ],
+  match_coaches: ["match_id", "team_id", "coach_id", "observation_id", "updated_at"],
+  public_input_revision: ["id", "revision", "in_progress", "write_started_at"],
   matches: MATCH_COLUMNS,
   player_match_stats: STAT_COLUMNS,
   player_season_pav: [
@@ -222,6 +251,34 @@ const CORE = {
   source: ["afl-api"],
   notes: [],
 } as const satisfies CoverageTableExpectation;
+
+const COACHING_PARTIAL = {
+  range: "1990..current",
+  expected: "partial",
+  source: ["afl-tables"],
+  notes: [],
+} as const satisfies CoverageTableExpectation;
+const COACHING_UNSUPPORTED = {
+  ...COACHING_PARTIAL,
+  range: "all",
+  expected: "not-applicable",
+} as const satisfies CoverageTableExpectation;
+const COACHING_TABLES = {
+  coaches: COACHING_PARTIAL,
+  coach_external_ids: COACHING_PARTIAL,
+  coach_external_match_ids: COACHING_PARTIAL,
+  coach_observations: COACHING_PARTIAL,
+  match_coaches: COACHING_PARTIAL,
+  public_input_revision: COACHING_PARTIAL,
+};
+const UNSUPPORTED_COACHING_TABLES = {
+  coaches: COACHING_UNSUPPORTED,
+  coach_external_ids: COACHING_UNSUPPORTED,
+  coach_external_match_ids: COACHING_UNSUPPORTED,
+  coach_observations: COACHING_UNSUPPORTED,
+  match_coaches: COACHING_UNSUPPORTED,
+  public_input_revision: COACHING_UNSUPPORTED,
+};
 
 const VENUES = {
   ...CORE,
@@ -323,6 +380,7 @@ const VFLW_STAT_OVERRIDES = {
 /** Canonical expectation manifest; exact ranges and prose are generated from this value. */
 export const COVERAGE_EXPECTATIONS = {
   AFLM: {
+    ...COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
@@ -363,6 +421,7 @@ export const COVERAGE_EXPECTATIONS = {
     match_predictions: MATCH_PREDICTIONS,
   },
   AFLW: {
+    ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
@@ -394,6 +453,7 @@ export const COVERAGE_EXPECTATIONS = {
     match_predictions: MATCH_PREDICTIONS,
   },
   VFL: {
+    ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
@@ -430,6 +490,7 @@ export const COVERAGE_EXPECTATIONS = {
     match_predictions: MATCH_PREDICTIONS_ABSENT,
   },
   VFLW: {
+    ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
     teams: CORE,
@@ -589,6 +650,98 @@ const OBSERVED_STAT_COLUMNS = STAT_COLUMNS.filter(
   (column) => !["id", "match_id", "player_id", "team_id"].includes(column),
 );
 
+interface CoachingObservation {
+  readonly applicable: boolean;
+  readonly unit: "participant_assignments";
+  readonly expected_assignments: number;
+  readonly observed_assignments: number;
+  readonly matches_with_both_coaches: number;
+  readonly unresolved_joins: number;
+  readonly conflicts: number;
+  readonly failed_pages: number;
+  readonly last_success_at: string | null;
+}
+
+async function queryCoachingObservation(
+  env: Env,
+  competition: CoverageCompetition,
+  season: number,
+): Promise<CoachingObservation> {
+  if (competition !== "AFLM" || season < 1990)
+    return {
+      applicable: false,
+      unit: "participant_assignments",
+      expected_assignments: 0,
+      observed_assignments: 0,
+      matches_with_both_coaches: 0,
+      unresolved_joins: 0,
+      conflicts: 0,
+      failed_pages: 0,
+      last_success_at: null,
+    };
+  const row = await env.DB.prepare(
+    `SELECT
+       2 * COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete') THEN m.id END) AS expected_assignments,
+       COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete')
+         THEN CAST(mc.match_id AS TEXT) || ':' || CAST(mc.team_id AS TEXT) END) AS observed_assignments,
+       COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete')
+         THEN CASE WHEN home_coach.match_id IS NOT NULL AND away_coach.match_id IS NOT NULL THEN m.id END END) AS matches_with_both_coaches
+     FROM competitions c JOIN seasons s ON s.competition_id = c.id
+     LEFT JOIN matches m ON m.season_id = s.id
+     LEFT JOIN match_coaches mc ON mc.match_id = m.id AND mc.team_id IN (m.home_team_id, m.away_team_id)
+     LEFT JOIN match_coaches home_coach ON home_coach.match_id = m.id AND home_coach.team_id = m.home_team_id
+     LEFT JOIN match_coaches away_coach ON away_coach.match_id = m.id AND away_coach.team_id = m.away_team_id
+     WHERE c.code = ?1 AND s.year = ?2`,
+  )
+    .bind(competition, season)
+    .first<Record<string, number>>();
+  const [diagnostics, conflicts, failedPages, lastSuccess] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM coach_import_diagnostics
+       WHERE provider = 'afl-tables' AND season = ?1 AND resolved_at IS NULL
+         AND reason IN ('unresolved-match', 'ambiguous-match', 'invalid-participant', 'score-mismatch')`,
+    )
+      .bind(season)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM match_coaches mc
+       JOIN matches m ON m.id = mc.match_id JOIN seasons s ON s.id = m.season_id
+       JOIN competitions c ON c.id = s.competition_id
+       JOIN coach_observations secondary_obs ON secondary_obs.match_id = mc.match_id
+         AND secondary_obs.team_id = mc.team_id AND secondary_obs.provider = 'footywire'
+       WHERE c.code = 'AFLM' AND s.year = ?1 AND mc.coach_id <> secondary_obs.coach_id
+         AND secondary_obs.id = (SELECT o.id FROM coach_observations o
+           WHERE o.match_id = mc.match_id AND o.team_id = mc.team_id AND o.provider = 'footywire'
+           ORDER BY o.retrieved_at DESC, o.id DESC LIMIT 1)`,
+    )
+      .bind(season)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM coach_import_diagnostics
+       WHERE provider = 'afl-tables' AND season = ?1 AND resolved_at IS NULL
+         AND (scope LIKE 'coach:%' OR reason = 'source-fetch-failed')`,
+    )
+      .bind(season)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      "SELECT MAX(last_success_at) AS at FROM coach_import_pages WHERE provider = 'afl-tables' AND season = ?1",
+    )
+      .bind(season)
+      .first<{ at: string | null }>(),
+  ]);
+  return {
+    applicable: true,
+    unit: "participant_assignments",
+    expected_assignments: row?.expected_assignments ?? 0,
+    observed_assignments: row?.observed_assignments ?? 0,
+    matches_with_both_coaches: row?.matches_with_both_coaches ?? 0,
+    unresolved_joins: diagnostics?.n ?? 0,
+    conflicts: conflicts?.n ?? 0,
+    failed_pages: failedPages?.n ?? 0,
+    last_success_at: lastSuccess?.at ?? null,
+  };
+}
+
 type NumericRow = Record<string, number>;
 
 async function queryObservation(env: Env, competition: CoverageCompetition, season: number) {
@@ -678,6 +831,7 @@ interface ObservedBlock {
   readonly player_match_stats: Readonly<Record<string, RowObservation>>;
   readonly player_season_pav: TableRowsObservation;
   readonly match_lineups: MatchPresenceObservation;
+  readonly match_coaches: CoachingObservation;
 }
 
 /**
@@ -699,12 +853,30 @@ export async function coverageContract(options: CoverageOptions, env?: Env) {
       player_match_stats: measured.scalar,
       player_season_pav: measured.pav,
       match_lineups: measured.lineups,
+      match_coaches: await queryCoachingObservation(env, options.competition, options.season),
     };
   }
   return {
     version: COVERAGE_CONTRACT_VERSION,
     review_date: COVERAGE_REVIEW_DATE,
     how_to_read: COVERAGE_HOW_TO_READ,
+    coaching_contract: {
+      by_competition: {
+        AFLM: {
+          range: "1990..current",
+          expected: "partial",
+          source: ["afl-tables", "footywire comparison"],
+          unit: "participant assignments",
+          notes: [
+            "AFL Tables controls canonical assignments. FootyWire observations are comparison evidence only.",
+            "Expected assignments equal two per completed match, including Opening Round and finals. Missing rows remain unknown.",
+          ],
+        },
+        AFLW: { range: "all", expected: "not-applicable", source: [] },
+        VFL: { range: "all", expected: "not-applicable", source: [] },
+        VFLW: { range: "all", expected: "not-applicable", source: [] },
+      },
+    },
     by_competition: byCompetition,
     ...(observed && { observed }),
   };

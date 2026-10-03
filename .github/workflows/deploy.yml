@@ -3,8 +3,8 @@ name: Publish artifact
 # afl-mcp no longer self-deploys. On merge to main it builds the Worker bundle
 # and publishes it to R2 (worker-artifacts/afl-mcp/<sha>.js) together with the
 # D1 migrations (afl-mcp/<sha>-migrations.tar.gz). Deployment happens from the
-# cloudflare-infra repo by bumping afl_mcp_version to this SHA; the infra
-# pipeline applies migrations BEFORE uploading the Worker, so migrations must
+# cloudflare-infra repo through promote-worker.yml and its reviewed release
+# descriptor. The pipeline applies migrations BEFORE uploading the Worker, so migrations must
 # stay backwards-compatible with the previous Worker version (expand-contract).
 on:
   push:

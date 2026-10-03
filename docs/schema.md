@@ -180,8 +180,8 @@ Current Tipper predictions, one row per match with primary key `match_id`.
 Unlocked matches can refresh. Append-only captures retain publication history.
 
 - `home_win_prob` - 0..1, the home team's win probability.
-- `predicted_margin` - points, one decimal. Positive means the home team is
-  favoured.
+- `predicted_margin` - points, one decimal. Positive means the model favours
+  the home team.
 - `model_version` records the issued model identity and complete build source
   revision. Use the recorded identity when reading older predictions.
 - `generated_at` is the UTC publication timestamp.
@@ -241,10 +241,54 @@ removes the temporary reconstruction tables. Migration `0022` remains in the
 migration history. The offline replay archive retains the detailed inputs and
 assumptions. Consumers need only the normal predictions table.
 
+## Coaching Data
+
+Coaching facts are AFLM-only from 1990. `match_coaches` stores at most one
+credited coach per `(match_id, team_id)`. It references a stable internal coach
+ID and the source observation used for the canonical assignment. Missing rows
+mean unknown attribution. Join with `LEFT JOIN` so matches without a credited
+coach remain present.
+
+- `coaches` stores internal coach identity and display name.
+- `coach_external_ids` maps provider-qualified coach keys to internal IDs. A
+  cross-provider mapping requires explicit identity verification.
+- `coach_external_match_ids` maps provider match keys to existing match rows.
+- `coach_observations` retains AFL Tables and FootyWire facts independently,
+  including provider IDs, source URLs, retrieval times, names, clubs, dates and
+  scores when supplied. AFL Tables controls `match_coaches`. FootyWire never
+  overwrites canonical assignments.
+- `coach_import_pages` tracks last checks, last successful checks and failure
+  counts by provider and scope. `coach_import_diagnostics` records unresolved
+  joins and failed pages for review.
+- `public_input_revision` is the monotonic revision read by native publishers.
+  It changes for meaningful match inputs and canonical coach changes. Polling
+  timestamps, secondary-only observations and diagnostics do not change it.
+  `in_progress` and `write_started_at` let a publisher reject reads during a
+  shared-lease write. Read the marker before and after a snapshot. Retry when
+  revisions differ or when a write is active. A marker older than the
+  ten-minute lease window still requires operator recovery before publication.
+
+Join `match_coaches` on the home team and again on the away team.
+Left join `coaches` for the names. Always filter via
+`seasons` and `competitions`. The static `coaching_contract` documents AFLM
+source expectations.
+
+Bounded observed schema responses report two expected
+participant assignments per completed match, including Opening Round and finals.
+They also report observed assignments, pairs with both coaches, unresolved joins,
+conflicts, failed pages and last successful checks. Expected coverage
+does not mean an assignment exists.
+
+Historical AFLM identities are Brisbane Bears through 1996, Fitzroy, and
+Brisbane Lions. The authenticated `/mcp/admin/reconcile-bears` operation first
+returns a dry-run reference-count report. Write mode moves the bounded
+pre-1997 Bears match sides and dependent team references while preserving match
+IDs and provider mappings. Separate club IDs do not reset ELO ratings.
+
 ## Coverage Contract
 
 The no-argument `schema` call returns deterministic static expectations in
-`database.coverage_contract` (version 2) and performs no D1 reads. Each table
+`database.coverage_contract` (version 3) and performs no D1 reads. Each table
 declares a default (`range`, `expected`, `source`) that applies to every
 column. `columns` lists only exceptions that deviate from that default. A
 `how_to_read` key in the response explains the encoding, and a single
@@ -252,13 +296,13 @@ column. `columns` lists only exceptions that deviate from that default. A
 
 Call `schema` with one `competition` and nothing else to get the same static
 schema filtered to that competition (its `competitions` entry and
-`coverage_contract` subtree. tables and notes are competition-agnostic and
+`coverage_contract` subtree). Tables and notes are competition-agnostic and
 unchanged).
 
 Call `schema` with `includeObserved: true`, one `competition`, and one integer
 `season` to attach a bounded measurement as a sibling `observed` block beside
-the static contract (measurements never mutate expectations). Stats, PAV, and
-lineup presence use separate indexed aggregates. The Worker caches successful
+the static contract (measurements never mutate expectations). Stats, PAV,
+lineup presence, and coaching use bounded aggregates. The Worker caches successful
 results for 15 minutes. A zero-row observation does not prove absence. Invalid
 or broad requests fail before D1 access with a single error stating the full
 parameter contract (no params | competition alone | competition + season +
@@ -293,3 +337,30 @@ returns the holder.
 - The schema declares foreign keys, but SQLite enforcement requires
   `PRAGMA foreign_keys = ON`. Assume integrity comes from the upsert helpers,
   not the engine.
+
+`coach_backfill_progress` is operational staging for bounded profile batches.
+Its key is `(provider, season)`. It stores `cursor`, `assignments_json` and
+`updated_at`. These rows do not advance the public input revision. A completed
+season cycle reconciles its staged assignments and clears progress after a returned
+summary. A thrown write failure retains the checkpoint for retry.
+
+Match status and local time, season identity, competition code and canonical
+observation evidence URLs also advance the native publisher revision when they
+change. Unsupported competitions return `applicable: false` with no AFLM
+coaching diagnostics, conflicts or success timestamps.
+
+## Schema Parity and Reference Seeds
+
+`bun run check:schema` compares migration replay with `schema.sql`, including
+constraints, indexes, all five integrity views, triggers, and reference seeds.
+Column order and SQL formatting do not change the comparison.
+
+Migration `0025_venue_reference_seed.sql` supplies 106 reviewed venue names,
+geodata and canonical aliases. It preserves existing IDs and resolves aliases
+by name, so a fresh database has the same reference data before sync starts.
+The seed retains unknown coordinates for unclassified venues.
+
+Incident-specific data repairs remain in migration history. Recurring data
+operations belong on the authenticated admin surface. A later baseline deployment
+will preserve reference seeds and retain historical repair links through the
+pre-baseline tag.

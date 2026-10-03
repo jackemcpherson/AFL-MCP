@@ -116,8 +116,8 @@ describe("coverage contract", () => {
     const schema = await getSchemaInfo();
     const serialized = JSON.stringify(schema);
     expect(serialized.length).toBeLessThan(40 * 1024);
-    expect(schema.database.coverage_contract.version).toBe(2);
-    expect(schema.database.coverage_contract.review_date).toBe("2026-09-06");
+    expect(schema.database.coverage_contract.version).toBe(3);
+    expect(schema.database.coverage_contract.review_date).toBe("2026-10-04");
     expect(schema.database.coverage_contract.how_to_read).toContain("exceptions");
     expect(schema.database).not.toHaveProperty("column_coverage");
     expect(schema.database.competitions.AFLM.coverage).toEqual({
@@ -134,7 +134,7 @@ describe("coverage contract", () => {
 
     expect(Object.keys(filtered.database.competitions)).toEqual(["AFLW"]);
     expect(Object.keys(filtered.database.coverage_contract.by_competition)).toEqual(["AFLW"]);
-    expect(filtered.database.coverage_contract.version).toBe(2);
+    expect(filtered.database.coverage_contract.version).toBe(3);
     // The reading key survives the filter path.
     expect(filtered.database.coverage_contract.how_to_read).toContain("exceptions");
     // Tables, notes, and join examples are competition-agnostic and stay.

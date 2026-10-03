@@ -96,6 +96,22 @@ export const BrownlowBackfillRequestSchema = z.object({
 
 export type BrownlowBackfillRequest = z.infer<typeof BrownlowBackfillRequestSchema>;
 
+/** One explicit AFLM coaching season and source. */
+export const CoachingBackfillRequestSchema = z.object({
+  fromYear: z.number().int(),
+  toYear: z.number().int(),
+  source: z.enum(["afl-tables", "footywire"]).default("afl-tables"),
+  dryRun: z.boolean().default(true),
+});
+
+/** One-season coaching backfill request shape. */
+export type CoachingBackfillRequest = z.infer<typeof CoachingBackfillRequestSchema>;
+
+/** Explicit historical club identity repair request. */
+export const BearsRepairRequestSchema = z.object({
+  dryRun: z.boolean().default(true),
+});
+
 /**
  * Map the first Zod issue to the caller-facing message contract the
  * endpoint has always used (and the integration tests assert).

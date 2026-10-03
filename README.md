@@ -201,3 +201,15 @@ queries, including Opening Round, finals codes, and the VFL Wildcard.
 ## License
 
 [MIT](LICENSE)
+
+## Coaching and Native Publishers
+
+Version 3.8.0 adds canonical AFL Tables coaching facts for AFLM from 1990.
+The schema tool documents coach joins, source evidence, coverage and the native
+`public_input_revision` snapshot contract. Coaching refresh shares the existing
+sync lease. Five-minute match ticks do not fetch coach profiles again.
+
+Historical Bears repair and coaching backfill use authenticated operator
+endpoints. Read the [coaching release operations](docs/coaching-release-operations.md)
+before previewing or authorising historical writes. FootyWire season-wide
+coaching remains unsupported.

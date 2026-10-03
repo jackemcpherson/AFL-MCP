@@ -2,8 +2,8 @@
 
 ## Architecture (TL;DR)
 
-AFL-MCP is a Cloudflare Worker serving an MCP server with 3 Code Mode tools
-(`schema`, `tools`, `code`). The `code` tool runs LLM-written TypeScript in
+AFL-MCP is a Cloudflare Worker serving an MCP server with 2 Code Mode tools
+(`schema`, `code`). The `code` tool runs LLM-written TypeScript in
 sandboxed Dynamic Worker isolates against a D1 (SQLite) database
 (`afl-stats`).
 
@@ -19,6 +19,7 @@ For deeper context, read the appropriate doc:
 ```bash
 bun install              # Install dependencies
 bun run dev              # Start local worker (wrangler dev)
+bun run check:schema     # Compare migrated and consolidated schemas
 bun run typecheck        # Type-check without emitting (tsc --noEmit)
 bun run check            # Lint + format check (biome check .)
 bun run format           # Auto-format (biome format --write .)
@@ -28,8 +29,9 @@ bun run test             # Run all tests (vitest)
 Deploy (GitOps — this repo does NOT self-deploy):
 merging to main publishes the bundle and D1 migrations to R2
 (`worker-artifacts/afl-mcp/<sha>.js` + `<sha>-migrations.tar.gz`).
-To ship: bump `afl_mcp_version` to that SHA in the cloudflare-infra repo
-and run its gated `apply-prod` workflow. The pipeline applies D1 migrations
+To ship: dispatch `promote-worker.yml` in cloudflare-infra with that SHA,
+review and merge the release descriptor PR, then dispatch `apply-prod` for
+`targets/afl-mcp`. The pipeline applies D1 migrations
 BEFORE uploading the Worker, so migrations must be backwards-compatible
 with the previous Worker version (expand-contract). `wrangler deploy` by
 hand is break-glass only.
@@ -68,7 +70,7 @@ full pipeline.
 - `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
   weather stage writes `match_weather` itself from `src/weather/stage.ts`).
 - `src/sync/pav.ts` — PAV recalculation.
-- `src/db/schema.sql` — D1 schema (13 tables).
+- `src/db/schema.sql` — D1 schema and reference seeds.
 
 ## Style-Guide Exception
 
