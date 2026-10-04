@@ -1,6 +1,6 @@
 {
   "name": "afl-mcp",
-  "version": "3.8.2",
+  "version": "4.0.0",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
@@ -13,7 +13,7 @@
     "check:schema": "python3 scripts/test_schema_parity.py && python3 scripts/verify_schema_parity.py"
   },
   "dependencies": {
-    "fitzroy": "5.0.0",
+    "fitzroy": "6.0.0",
     "zod": "^4.4.3"
   },
   "overrides": {

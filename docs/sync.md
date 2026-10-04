@@ -66,8 +66,9 @@ endpoint iterates a year range):
    the AFL API's `completedQuarter` as nullable `completed_quarter` (0 - 4).
    `COALESCE` preserves the last authoritative value if the upstream clock is
    transiently absent.
-6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
-   `{AFLM, AFLW}` AND `skipPav` is not set. Skip VFL/VFLW because the AFL
+6. **Recalculate PAV** from the persisted queue when PAV input fields change
+   in `{AFLM, AFLW}`. Each pass rebuilds up to four queued seasons.
+   Skip VFL/VFLW because the AFL
    API does not populate the PAV formula's required inputs (`goal_assists`,
    `marks_inside_50`, `one_percenters`).
 7. **Log** to `sync_log` only when the tick produced new stats or lineup rows.
@@ -129,18 +130,16 @@ loads. Body:
 
 ```json
 {
-    "competitions": ["AFLM", "AFLW", "VFL", "VFLW"],
-    "fromYear": 2021,
-    "toYear": 2025,
-    "skipShouldRunNow": true,
-    "skipPav": false
+    "competition": "AFLW",
+    "season": "2022-S7",
+    "skipShouldRunNow": true
 }
 ```
 
 `skipShouldRunNow` (default `true`) bypasses the cadence gate so the backfill
-runs immediately. `skipPav` (default `false`) is useful for label-only re-syncs
-(such as relabelling an existing AFLM season) where stats are not changing and
-PAV recalculation would be wasteful.
+runs immediately. PAV rebuilds only when its inputs change. The major release
+removes `skipPav`. Requests containing it fail validation. Set `resume: true`
+to recover an interrupted operation with the identical competition-season scope.
 
 The endpoint iterates `(competition, year)` pairs and returns per-tick results:
 
@@ -196,7 +195,11 @@ competitions - AFLM R1 is March, AFLW R1 is August, VFL R1 is April.
 
 `recalculatePav(env, competition, year?)` in `src/sync/pav.ts` writes to
 `player_season_pav`. The sync pipeline runs it after updating player statistics
-for AFLM or AFLW, unless `skipPav` is set.
+for AFLM or AFLW through the persisted rebuild queue.
+
+Cancelled and live matches do not contribute to PAV. Missing required inputs
+or a missing team participant population leave derived season values null.
+The model does not interpret unknown statistics as measured zeroes.
 
 Per-competition floor years are in `MIN_PAV_YEAR_BY_COMPETITION`
 (`src/lib/constants.ts`):

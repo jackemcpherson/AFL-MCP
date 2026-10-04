@@ -39,9 +39,9 @@ const TOOLS: ToolDefinition[] = [
             "Alone: filter the schema response to this competition. With season + includeObserved:true: the competition to measure.",
         },
         season: {
-          type: "integer",
+          oneOf: [{ type: "integer" }, { type: "string", pattern: "^[0-9]{4}(-S[67])?$" }],
           description:
-            "Season year to measure. Only valid together with competition and includeObserved:true.",
+            "Canonical season key or unambiguous year. AFLW 2022 requires 2022-S6 or 2022-S7. Requires competition and includeObserved:true.",
         },
       },
       additionalProperties: false,

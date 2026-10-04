@@ -1,7 +1,12 @@
 import type { MatchCoachAssignment, MatchCoachFailure } from "fitzroy";
 import { fetchMatchCoaches } from "fitzroy";
 import { z } from "zod";
-import { beginPublicInputWrite, finishPublicInputWrite } from "../db/public-inputs";
+import {
+  beginPublicInputWrite,
+  finishPublicInputWrite,
+  protectOperationWrites,
+  resumePublicInputWrite,
+} from "../db/public-inputs";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
@@ -393,19 +398,29 @@ export async function backfillCoaches(
   season: number,
   source: CoachProvider,
   dryRun: boolean,
+  resume = false,
 ): Promise<{ readonly busy: boolean; readonly summary?: CoachingImportSummary }> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;
+  let consistent = false;
   try {
     if (!dryRun) {
-      await beginPublicInputWrite(env);
+      const operation = `coaching:${source}:${season}`;
+      if (resume) await resumePublicInputWrite(env, holder, operation);
+      else await beginPublicInputWrite(env, holder, new Date(), operation);
       marked = true;
     }
-    return { busy: false, summary: await runCoachBatch(env, season, source, dryRun) };
+    const writer = dryRun ? env : protectOperationWrites(env, holder);
+    const summary = await runCoachBatch(writer, season, source, dryRun);
+    consistent = true;
+    return { busy: false, summary };
   } finally {
-    if (marked) await finishPublicInputWrite(env).catch(() => undefined);
-    await releaseOperationLease(env, holder);
+    try {
+      if (marked && consistent) await finishPublicInputWrite(env, holder);
+    } finally {
+      await releaseOperationLease(env, holder);
+    }
   }
 }
 
@@ -450,10 +465,14 @@ export async function refreshActiveCoaches(env: Env, now = new Date()): Promise<
         summary.complete ? undefined : "partial coaching coverage",
       );
     }
-  } catch {
-    await recordSourceFailure(env, season, "afl-tables", now.toISOString());
+  } catch (error) {
+    // Source failures are recorded before mutation. Database failures may leave
+    // a partial import and must retain the public write marker for recovery.
+    if (!(error instanceof CoachingSourceError)) throw error;
   }
 }
+
+class CoachingSourceError extends Error {}
 
 async function runCoachBatch(
   env: Env,
@@ -475,7 +494,7 @@ async function runCoachBatch(
   });
   if (!fetched.success) {
     if (!dryRun) await recordSourceFailure(env, season, source, now);
-    throw new Error("coaching source fetch failed");
+    throw new CoachingSourceError("coaching source fetch failed");
   }
   const previous = progress?.cursor
     ? CoachAssignmentsSchema.parse(JSON.parse(progress.assignments_json))

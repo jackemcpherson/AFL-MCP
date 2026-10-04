@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { reconcileBearsIdentity } from "../../src/admin/club-identities";
 import { ingestMatchCoachResult } from "../../src/admin/coaching";
 import { beginPublicInputWrite, finishPublicInputWrite } from "../../src/db/public-inputs";
+import { acquireOperationLease, releaseOperationLease } from "../../src/sync/lease";
 import {
   ensureCompetition,
   ensureSeason,
@@ -68,7 +69,8 @@ async function revision(): Promise<number> {
 describe("coaching ingestion on local D1", () => {
   it("marks multi-statement input writes without changing the meaningful revision", async () => {
     const initialRevision = await revision();
-    await beginPublicInputWrite(dbEnv, new Date("2026-10-03T00:00:00Z"));
+    await acquireOperationLease(dbEnv, "test-holder");
+    await beginPublicInputWrite(dbEnv, "test-holder", new Date("2026-10-03T00:00:00Z"));
     const active = await dbEnv.DB.prepare(
       "SELECT revision, in_progress, write_started_at FROM public_input_revision WHERE id = 1",
     ).first<{ revision: number; in_progress: number; write_started_at: string | null }>();
@@ -77,7 +79,8 @@ describe("coaching ingestion on local D1", () => {
       in_progress: 1,
       write_started_at: "2026-10-03T00:00:00.000Z",
     });
-    await finishPublicInputWrite(dbEnv);
+    await finishPublicInputWrite(dbEnv, "test-holder");
+    await releaseOperationLease(dbEnv, "test-holder");
     expect(await revision()).toBe(initialRevision);
   });
 
@@ -344,7 +347,10 @@ describe("coaching ingestion on local D1", () => {
     expect(preview.report?.pavRows).toBe(1);
     expect(await revision()).toBe(beforeRevision);
 
-    const applied = await reconcileBearsIdentity(dbEnv, false);
+    await expect(reconcileBearsIdentity(dbEnv, false)).rejects.toThrow("preview missing");
+    const applied = await reconcileBearsIdentity(dbEnv, false, {
+      manifestDigest: preview.manifestDigest,
+    });
     expect(applied.report?.matchSides).toBe(1);
     const repaired = await dbEnv.DB.prepare(
       `SELECT m.id, m.home_team_id, pms.team_id AS stat_team_id, ml.team_id AS lineup_team_id, psp.team_id AS pav_team_id
@@ -369,7 +375,10 @@ describe("coaching ingestion on local D1", () => {
       pav_team_id: bearsId,
     });
     expect(await revision()).toBeGreaterThan(beforeRevision);
-    const repeated = await reconcileBearsIdentity(dbEnv, false);
+    const nextPreview = await reconcileBearsIdentity(dbEnv, true);
+    const repeated = await reconcileBearsIdentity(dbEnv, false, {
+      manifestDigest: nextPreview.manifestDigest,
+    });
     expect(repeated.report?.affectedMatches).toBe(0);
   });
 });

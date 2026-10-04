@@ -40,7 +40,7 @@ describe("upsertPlayers", () => {
     expect(count?.n).toBe(1);
   });
 
-  it("adopts a legacy fryzigg-only row by name match instead of inserting a duplicate", async () => {
+  it("keeps a same-name legacy row separate until provider identity is verified", async () => {
     await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
       .bind("Patrick", "Cripps", "fryzigg-123")
       .run();
@@ -55,16 +55,16 @@ describe("upsertPlayers", () => {
       external_id: string | null;
       external_afl_player_id: string | null;
     }>();
-    expect(rows.results).toHaveLength(1);
+    expect(rows.results).toHaveLength(2);
     expect(rows.results[0]).toEqual({
       first_name: "Patrick",
       surname: "Cripps",
       external_id: "fryzigg-123",
-      external_afl_player_id: "P-1",
+      external_afl_player_id: null,
     });
   });
 
-  it("adopts only one row when two legacy homonyms share a name (COR-05)", async () => {
+  it("does not assign a new provider ID to either of two legacy homonyms", async () => {
     // Two distinct historical players with the same name (homonyms are
     // real across 130 seasons). Pre-fix, both got the same AFL id and the
     // unique-index violation aborted the whole batch.
@@ -80,11 +80,11 @@ describe("upsertPlayers", () => {
     const rows = await env.DB.prepare(
       "SELECT external_id, external_afl_player_id FROM players ORDER BY id",
     ).all<{ external_id: string | null; external_afl_player_id: string | null }>();
-    // No third row inserted; only the older legacy row adopted the AFL id.
-    expect(rows.results).toHaveLength(2);
+    // The new provider identity remains separate from both unverified historical people.
+    expect(rows.results).toHaveLength(3);
     expect(rows.results[0]).toEqual({
       external_id: "fryzigg-100",
-      external_afl_player_id: "P-1",
+      external_afl_player_id: null,
     });
     expect(rows.results[1]).toEqual({
       external_id: "fryzigg-200",

@@ -67,7 +67,13 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT (AFLM/AFLW/VFL/VFLW), name TEXT",
         seasons:
-          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, is_complete INTEGER (0=in-progress, 1=all matches played)",
+          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, season_key TEXT (canonical selector, AFLW 2022-S6 or 2022-S7), display_name TEXT, is_complete INTEGER (0=in-progress, 1=all matches played)",
+        season_provider_ids:
+          "season_id INTEGER, provider TEXT, provider_season_id TEXT. Verified provider season mappings.",
+        player_provider_ids:
+          "provider TEXT, provider_id TEXT, player_id INTEGER, evidence_json TEXT. Provider identity crosswalk; names are not identity evidence.",
+        player_id_redirects:
+          "retired_id INTEGER, canonical_id INTEGER, manifest_digest TEXT. Resolve retired internal IDs without altering issued predictions.",
         teams:
           "id INTEGER PRIMARY KEY, name TEXT, abbreviation TEXT, competition_id INTEGER REFERENCES competitions(id)",
         venues: [
@@ -196,7 +202,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         coach_import_diagnostics:
           "id INTEGER PRIMARY KEY, provider TEXT, season INTEGER, scope TEXT, source_url TEXT, reason TEXT, created_at TEXT, resolved_at TEXT",
         public_input_revision:
-          "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT",
+          "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT, write_holder TEXT (opaque operation ownership), write_operation TEXT (resumable operation identity)",
       },
       notes: [
         // Multi-competition rules — read first
@@ -261,19 +267,19 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "FROM competitions c",
           "JOIN seasons s ON s.competition_id = c.id",
           "JOIN matches m ON m.season_id = s.id",
-          "WHERE s.year = ?",
+          "WHERE s.season_key = ?",
           "GROUP BY c.code",
           "ORDER BY c.code",
         ].join("\n"),
         team_roster_pav: [
-          "-- Bind: competition, team name, season year",
+          "-- Bind: competition, team name, canonical season key",
           "SELECT p.first_name, p.surname, psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
           "FROM player_season_pav psp",
           "JOIN players p ON psp.player_id = p.id",
           "JOIN seasons s ON psp.season_id = s.id",
           "JOIN competitions c ON s.competition_id = c.id",
           "JOIN teams t ON psp.team_id = t.id",
-          "WHERE c.code = ? AND t.name = ? AND s.year = ?",
+          "WHERE c.code = ? AND t.name = ? AND s.season_key = ?",
           "ORDER BY psp.total_pav DESC",
         ].join("\n"),
         player_career_arc: [
@@ -290,19 +296,19 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "ORDER BY s.year",
         ].join("\n"),
         zone_leaders: [
-          "-- Bind: competition, season year",
+          "-- Bind: competition, canonical season key",
           "SELECT p.first_name, p.surname, t.name as team, psp.mid_pav, psp.off_pav, psp.def_pav, psp.total_pav",
           "FROM player_season_pav psp",
           "JOIN players p ON psp.player_id = p.id",
           "JOIN seasons s ON psp.season_id = s.id",
           "JOIN competitions c ON s.competition_id = c.id",
           "JOIN teams t ON psp.team_id = t.id",
-          "WHERE c.code = ? AND s.year = ?",
+          "WHERE c.code = ? AND s.season_key = ?",
           "ORDER BY psp.total_pav DESC",
           "LIMIT 20",
         ].join("\n"),
         match_with_teams_venue: [
-          "-- Bind: competition, season year",
+          "-- Bind: competition, canonical season key",
           "SELECT m.date, m.round, ht.name as home_team, at.name as away_team,",
           "  m.home_points, m.away_points, m.margin, v.name as venue",
           "FROM matches m",
@@ -311,10 +317,10 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN teams ht ON m.home_team_id = ht.id",
           "JOIN teams at ON m.away_team_id = at.id",
           "JOIN venues v ON m.venue_id = v.id",
-          "WHERE c.code = ? AND s.year = ?",
+          "WHERE c.code = ? AND s.season_key = ?",
         ].join("\n"),
         match_coaches_lookup: [
-          "-- Bind: competition, season year",
+          "-- Bind: competition, canonical season key",
           "SELECT m.id AS match_id, m.date, m.round, ht.name AS home_team, at.name AS away_team,",
           "  home_coach.display_name AS home_coach, away_coach.display_name AS away_coach,",
           "  home_coach.id AS home_coach_id, away_coach.id AS away_coach_id",
@@ -327,12 +333,12 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "LEFT JOIN coaches home_coach ON home_coach.id = hm.coach_id",
           "LEFT JOIN match_coaches am ON am.match_id = m.id AND am.team_id = m.away_team_id",
           "LEFT JOIN coaches away_coach ON away_coach.id = am.coach_id",
-          "WHERE c.code = ? AND s.year = ?",
+          "WHERE c.code = ? AND s.season_key = ?",
           "ORDER BY m.date, m.id",
         ].join("\n"),
         coaching_source_comparisons: [
           "-- AFL Tables vs FootyWire evidence for one AFLM season.",
-          "-- Bind: season year",
+          "-- Bind: canonical season key",
           "SELECT primary_obs.match_date, primary_obs.raw_team AS team,",
           "  primary_obs.display_name AS afl_tables_coach, secondary_obs.display_name AS footywire_coach,",
           "  primary_obs.source_url AS afl_tables_evidence, secondary_obs.source_url AS footywire_evidence",
@@ -376,7 +382,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         ].join("\n"),
         lineup_with_pav: [
           "-- Team lineup enriched with PAV data",
-          "-- Bind: competition, team name, round number, season year",
+          "-- Bind: competition, team name, round number, canonical season key",
           "SELECT p.first_name, p.surname, ml.position, ml.guernsey_number,",
           "  ml.is_emergency, ml.is_substitute,",
           "  psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
@@ -387,12 +393,12 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN players p ON ml.player_id = p.id",
           "JOIN teams t ON ml.team_id = t.id",
           "LEFT JOIN player_season_pav psp ON psp.player_id = p.id AND psp.season_id = s.id",
-          "WHERE c.code = ? AND t.name = ? AND m.round_number = ? AND s.year = ?",
+          "WHERE c.code = ? AND t.name = ? AND m.round_number = ? AND s.season_key = ?",
           "ORDER BY ml.is_emergency, psp.total_pav DESC NULLS LAST",
         ].join("\n"),
         match_weather_lookup: [
           "-- Weather for one match (observed + retained forecast) via the canonical venue.",
-          "-- Bind: competition, season year, home team name",
+          "-- Bind: competition, canonical season key, home team name",
           "SELECT m.date, m.round, ht.name AS home_team, at.name AS away_team,",
           "  cv.name AS venue, cv.roof, w.kind, w.source,",
           "  w.temp_c, w.precip_mm, w.precip_24h_prior_mm,",
@@ -405,7 +411,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN venues v ON m.venue_id = v.id",
           "JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)",
           "LEFT JOIN match_weather w ON w.match_id = m.id",
-          "WHERE c.code = ? AND s.year = ? AND ht.name = ?",
+          "WHERE c.code = ? AND s.season_key = ? AND ht.name = ?",
           "ORDER BY m.date, w.kind",
         ].join("\n"),
         wet_game_scoring: [
@@ -428,7 +434,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
         ].join("\n"),
         round_predictions: [
           "-- Model predictions for a round, with team names.",
-          "-- Bind: competition, season year, round number",
+          "-- Bind: competition, canonical season key, round number",
           "SELECT m.date, m.round, ht.name AS home_team, at.name AS away_team,",
           "  mp.home_win_prob, mp.predicted_margin, mp.model_version",
           "FROM matches m",
@@ -437,11 +443,11 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN teams ht ON m.home_team_id = ht.id",
           "JOIN teams at ON m.away_team_id = at.id",
           "LEFT JOIN match_predictions mp ON mp.match_id = m.id",
-          "WHERE c.code = ? AND s.year = ? AND m.round_number = ?",
+          "WHERE c.code = ? AND s.season_key = ? AND m.round_number = ?",
           "ORDER BY m.date",
         ].join("\n"),
         tipping_performance: [
-          "-- Bind: competition, season year. Includes retained backfill and real-time predictions.",
+          "-- Bind: competition, canonical season key. Includes retained backfill and real-time predictions.",
           "WITH summary AS (",
           "  SELECT c.code AS competition, s.year, COUNT(*) AS completed_matches,",
           "    COUNT(mp.match_id) AS predictions, COUNT(*) - COUNT(mp.match_id) AS missing_predictions,",
@@ -454,14 +460,14 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "  FROM matches m JOIN seasons s ON s.id = m.season_id",
           "  JOIN competitions c ON c.id = s.competition_id",
           "  LEFT JOIN match_predictions mp ON mp.match_id = m.id",
-          "  WHERE c.code = ? AND s.year = ? AND m.status = 'Complete'",
+          "  WHERE c.code = ? AND s.season_key = ? AND m.status = 'Complete'",
           "    AND m.home_points >= 0 AND m.away_points >= 0",
           "  GROUP BY c.code, s.year",
           ") SELECT *, 100.0 * correct_winners / NULLIF(decisive_matches, 0) AS accuracy_pct FROM summary",
         ].join("\n"),
         ladder: [
           "-- Ladder for a season (regular season only). Works for any competition.",
-          "-- Bind: competition, season year",
+          "-- Bind: competition, canonical season key",
           "SELECT t.name AS team,",
           "  COUNT(*) AS played,",
           "  SUM(CASE WHEN (m.home_team_id = t.id AND m.home_points > m.away_points) OR (m.away_team_id = t.id AND m.away_points > m.home_points) THEN 1 ELSE 0 END) AS wins,",
@@ -475,7 +481,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
           "JOIN competitions c ON t.competition_id = c.id",
           "JOIN matches m ON t.id = m.home_team_id OR t.id = m.away_team_id",
           "JOIN seasons s ON m.season_id = s.id",
-          "WHERE c.code = ? AND s.year = ? AND m.round_type = 'Regular' AND m.home_points IS NOT NULL",
+          "WHERE c.code = ? AND s.season_key = ? AND m.round_type = 'Regular' AND m.home_points IS NOT NULL",
           "GROUP BY t.id",
           "ORDER BY premiership_points DESC, percentage DESC",
         ].join("\n"),

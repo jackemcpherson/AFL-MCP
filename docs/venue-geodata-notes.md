@@ -93,3 +93,15 @@ This dataset cannot support weather backfills for those matches because they
 have no coordinates or timezone. Resolve the matches against source fixture data
 before or during the weather backfill. Until then, expect 55 matches to retain
 NULL weather values.
+
+## Windsor Park Verification, 4 October 2026
+
+West Tamar Council lists Windsor Park at 432 West Tamar Road, Riverside,
+Tasmania. Its [facility map](https://www.wtc.tas.gov.au/facility/windsor-park/)
+publishes the pin at latitude -41.402883, longitude 147.0908651.
+[Launceston Football Club](https://launcestonfc.com.au/contact/) independently
+identifies this address as its Windsor Park home ground. The source capture is
+part of the remediation evidence bundle. Migration 0039 preserves the existing
+venue ID, adds these coordinates and `Australia/Hobart`, and keeps an unknown
+roof value unknown. `Windsor Park Oval` resolves to the same venue. The
+`To Be Confirmed` placeholder retains null coordinates.

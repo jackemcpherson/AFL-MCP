@@ -12,6 +12,13 @@ import type { Env } from "../../src/types";
 
 /** Operational tables not part of the documented analytics surface. */
 const INTERNAL_TABLES = new Set([
+  "identity_repair_operations",
+  "pav_rebuild_queue",
+  "weather_refresh_state",
+  "match_stats_refresh",
+  "stats_refresh_operations",
+  "stats_refresh_operation_matches",
+  "season_provider_inventory",
   "d1_migrations",
   "sync_lease",
   "sync_log",

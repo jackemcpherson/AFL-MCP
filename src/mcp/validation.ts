@@ -42,7 +42,7 @@ export const SchemaToolRequestSchema = z
   .object({
     includeObserved: z.boolean().optional().default(false),
     competition: z.enum(COMPETITION_CODE_VALUES).optional(),
-    season: z.number().int().optional(),
+    season: z.union([z.number().int(), z.string().regex(/^\d{4}(?:-S[67])?$/)]).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -58,14 +58,26 @@ export const SchemaToolRequestSchema = z
       context.addIssue({ code: "custom", message: SCHEMA_TOOL_CONTRACT });
       return;
     }
+    const key = String(value.season);
+    if (
+      (value.competition === "AFLW" && key === "2022") ||
+      (key.includes("-S") &&
+        !(value.competition === "AFLW" && ["2022-S6", "2022-S7"].includes(key)))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Ambiguous or invalid season; AFLW 2022 requires 2022-S6 or 2022-S7",
+      });
+      return;
+    }
     const currentMelbourneYear = Number(
       new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", year: "numeric" }).format(
         new Date(),
       ),
     );
     if (
-      value.season < COVERAGE_START_YEAR[value.competition] ||
-      value.season > currentMelbourneYear + 1
+      Number(String(value.season).slice(0, 4)) < COVERAGE_START_YEAR[value.competition] ||
+      Number(String(value.season).slice(0, 4)) > currentMelbourneYear + 1
     ) {
       context.addIssue({
         code: "custom",
@@ -76,19 +88,33 @@ export const SchemaToolRequestSchema = z
 
 export type SchemaToolRequest = z.infer<typeof SchemaToolRequestSchema>;
 
+/** Optional recovery flag for the current competition-season sync scope. */
+export const SyncRequestSchema = z.strictObject({
+  resume: z.boolean().default(false),
+});
+
 /** Shape of POST /mcp/admin/backfill bodies. Range clamps live with the route. */
-export const BackfillRequestSchema = z.object({
+export const BackfillRequestSchema = z.strictObject({
+  resume: z.boolean().default(false),
   competitions: z.array(z.enum(COMPETITION_CODE_VALUES)).min(1),
   fromYear: z.number().int(),
   toYear: z.number().int(),
   skipShouldRunNow: z.boolean().optional(),
-  skipPav: z.boolean().optional(),
+});
+
+/** Exact-season ingestion, including the two distinct AFLW 2022 seasons. */
+export const ExactSeasonBackfillRequestSchema = z.strictObject({
+  resume: z.boolean().default(false),
+  competition: z.enum(COMPETITION_CODE_VALUES),
+  season: z.union([z.number().int(), z.string()]),
+  skipShouldRunNow: z.boolean().default(true),
 });
 
 export type BackfillRequest = z.infer<typeof BackfillRequestSchema>;
 
 /** Shape of POST /mcp/admin/backfill-brownlow bodies. Range clamps live with the route. */
 export const BrownlowBackfillRequestSchema = z.object({
+  resume: z.boolean().default(false),
   fromYear: z.number().int(),
   toYear: z.number().int(),
   dryRun: z.boolean().default(true),
@@ -98,6 +124,7 @@ export type BrownlowBackfillRequest = z.infer<typeof BrownlowBackfillRequestSche
 
 /** One explicit AFLM coaching season and source. */
 export const CoachingBackfillRequestSchema = z.object({
+  resume: z.boolean().default(false),
   fromYear: z.number().int(),
   toYear: z.number().int(),
   source: z.enum(["afl-tables", "footywire"]).default("afl-tables"),
@@ -108,8 +135,13 @@ export const CoachingBackfillRequestSchema = z.object({
 export type CoachingBackfillRequest = z.infer<typeof CoachingBackfillRequestSchema>;
 
 /** Explicit historical club identity repair request. */
-export const BearsRepairRequestSchema = z.object({
+export const BearsRepairRequestSchema = z.strictObject({
   dryRun: z.boolean().default(true),
+  resume: z.boolean().default(false),
+  manifestDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
 });
 
 /**

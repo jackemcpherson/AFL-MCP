@@ -33,6 +33,19 @@ export interface AdminStatusResponse {
     readonly partialStatsEvents: number;
     readonly unmappedTeamEvents: number;
   };
+  readonly remediation: {
+    readonly inputWriteActive: boolean;
+    readonly inputWriteOperation: string | null;
+    readonly auditScopesUnresolved: number;
+    readonly inputWriteAgeSeconds: number | null;
+    readonly statisticsDue: number;
+    readonly statisticsFailed: number;
+    readonly statisticsUnresolved: number;
+    readonly weatherUnresolved: number;
+    readonly weatherUnavailable: number;
+    readonly pavSeasonsPending: number;
+    readonly identityRepairsPending: number;
+  };
   readonly coaching: {
     readonly latestSuccessAt: string | null;
     readonly failedScopes: number;
@@ -126,6 +139,17 @@ export async function getAdminStatus(
        LEFT JOIN match_coaches mc ON mc.match_id = m.id AND mc.team_id IN (m.home_team_id, m.away_team_id)
        WHERE c.code = 'AFLM' AND s.year = ?1 AND m.home_points IS NOT NULL AND m.away_points IS NOT NULL`,
     ).bind(now.getUTCFullYear()),
+    env.DB.prepare(`SELECT in_progress, write_started_at, write_operation,
+      (SELECT COUNT(*) FROM sync_log a WHERE a.type LIKE 'audit:season:%' AND a.error IS NOT NULL
+       AND a.id=(SELECT MAX(b.id) FROM sync_log b WHERE b.type=a.type)) AS auditScopesUnresolved,
+      (SELECT count(*) FROM match_stats_refresh WHERE next_retry_at <= ?1) AS statisticsDue,
+      (SELECT count(*) FROM match_stats_refresh WHERE failures > 0) AS statisticsFailed,
+      (SELECT count(*) FROM match_stats_refresh WHERE diagnostic IS NOT NULL) AS statisticsUnresolved,
+      (SELECT count(*) FROM weather_refresh_state WHERE diagnostic IS NOT NULL) AS weatherUnresolved,
+      (SELECT count(*) FROM weather_refresh_state WHERE failures > 3) AS weatherUnavailable,
+      (SELECT count(*) FROM pav_rebuild_queue) AS pavSeasonsPending,
+      (SELECT count(*) FROM identity_repair_operations WHERE status <> 'complete') AS identityRepairsPending
+      FROM public_input_revision WHERE id=1`).bind(asOf),
   ]);
 
   const lease = resultRow(results, 0);
@@ -154,6 +178,7 @@ export async function getAdminStatus(
   const coachingJoins = resultRow(results, 10);
   const coachingConflict = resultRow(results, 11);
   const coachingCoverage = resultRow(results, 12);
+  const remediation = resultRow(results, 13);
   const response: AdminStatusResponse = {
     status: "ok",
     asOf,
@@ -174,6 +199,19 @@ export async function getAdminStatus(
       partialLineupEvents: numberValue(degradation?.partialLineupEvents),
       partialStatsEvents: numberValue(degradation?.partialStatsEvents),
       unmappedTeamEvents: numberValue(degradation?.unmappedTeamEvents),
+    },
+    remediation: {
+      inputWriteActive: numberValue(remediation?.in_progress) === 1,
+      inputWriteOperation: nullableString(remediation?.write_operation),
+      auditScopesUnresolved: numberValue(remediation?.auditScopesUnresolved),
+      inputWriteAgeSeconds: ageSeconds(nullableString(remediation?.write_started_at), now),
+      statisticsDue: numberValue(remediation?.statisticsDue),
+      statisticsFailed: numberValue(remediation?.statisticsFailed),
+      statisticsUnresolved: numberValue(remediation?.statisticsUnresolved),
+      weatherUnresolved: numberValue(remediation?.weatherUnresolved),
+      weatherUnavailable: numberValue(remediation?.weatherUnavailable),
+      pavSeasonsPending: numberValue(remediation?.pavSeasonsPending),
+      identityRepairsPending: numberValue(remediation?.identityRepairsPending),
     },
     coaching: {
       latestSuccessAt: nullableString(coaching?.latestSuccessAt),

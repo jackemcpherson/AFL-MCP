@@ -1,5 +1,11 @@
 import type { PlayerStats } from "fitzroy";
 import { fetchPlayerStats } from "fitzroy";
+import {
+  beginPublicInputWrite,
+  finishPublicInputWrite,
+  protectOperationWrites,
+  resumePublicInputWrite,
+} from "../db/public-inputs";
 import { normaliseTeam } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
@@ -204,6 +210,7 @@ export async function backfillBrownlow(
   fromYear: number,
   toYear: number,
   dryRun: boolean,
+  resume = false,
 ): Promise<{ readonly httpStatus: 200 | 409; readonly body: BrownlowBackfillResponse }> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) {
@@ -213,6 +220,8 @@ export async function backfillBrownlow(
     };
   }
 
+  let marked = false;
+  let consistent = false;
   try {
     const resolved: ResolvedSeason[] = [];
     for (let year = fromYear; year <= toYear; year++) {
@@ -259,18 +268,28 @@ export async function backfillBrownlow(
       };
     }
 
+    const operation = `brownlow:${fromYear}:${toYear}`;
+    if (resume) await resumePublicInputWrite(env, holder, operation);
+    else await beginPublicInputWrite(env, holder, new Date(), operation);
+    marked = true;
+    const writer = protectOperationWrites(env, holder);
     const summaries: BrownlowSeasonSummary[] = [];
     for (const season of resolved) {
-      const updated = await applyBrownlowUpdates(env.DB, season.writes);
+      const updated = await applyBrownlowUpdates(writer.DB, season.writes);
       const summary = { ...season.summary, updated };
       summaries.push(summary);
       if (!summary.notPublished) {
         await logSync(env, "admin:brownlow-backfill", updated);
       }
     }
+    consistent = true;
     return { httpStatus: 200, body: { status: "ok", dryRun, seasons: summaries } };
   } finally {
-    await releaseOperationLease(env, holder);
+    try {
+      if (marked && consistent) await finishPublicInputWrite(env, holder);
+    } finally {
+      await releaseOperationLease(env, holder);
+    }
   }
 }
 
@@ -279,7 +298,7 @@ export async function backfillBrownlow(
  *
  * @param db - D1 database binding.
  * @param writes - Fully resolved player-match vote updates.
- * @returns Sum of D1 `meta.changes` across every submitted statement.
+ * @returns Number of affected statistic rows, excluding revision-trigger writes.
  */
 export async function applyBrownlowUpdates(
   db: D1Database,
@@ -292,12 +311,12 @@ export async function applyBrownlowUpdates(
         .prepare(
           `UPDATE player_match_stats SET brownlow_votes = ?1
            WHERE match_id = ?2 AND player_id = ?3
-             AND (brownlow_votes IS NULL OR brownlow_votes = 0)`,
+             AND (brownlow_votes IS NULL OR brownlow_votes = 0) RETURNING id`,
         )
         .bind(write.votes, write.matchId, write.playerId),
     );
     const results = await db.batch(statements);
-    for (const result of results) updated += result.meta.changes;
+    for (const result of results) updated += result.results.length;
   }
   return updated;
 }

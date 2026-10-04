@@ -117,7 +117,7 @@ describe("authenticated coaching backfill on local D1", () => {
         "INSERT INTO match_predictions(match_id,home_win_prob,predicted_margin,model_version,generated_at) VALUES(915,.7,12,'test','2026-10-04')",
       ),
     ]);
-    const repair = (dryRun: boolean) =>
+    const repair = (dryRun: boolean, manifestDigest?: string) =>
       worker.fetch(
         new Request("https://afl.test/mcp/admin/reconcile-bears", {
           method: "POST",
@@ -125,12 +125,13 @@ describe("authenticated coaching backfill on local D1", () => {
             Authorization: "Bearer coaching-test-token",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ dryRun }),
+          body: JSON.stringify({ dryRun, manifestDigest }),
         }),
         adminEnv,
         context,
       );
-    expect(await (await repair(true)).json()).toMatchObject({
+    const preview = await (await repair(true)).json<{ manifestDigest: string }>();
+    expect(preview).toMatchObject({
       affectedMatches: 1,
       playerStats: 1,
       lineups: 1,
@@ -143,7 +144,16 @@ describe("authenticated coaching backfill on local D1", () => {
         "SELECT COUNT(*) AS n FROM teams WHERE name = 'Brisbane Bears'",
       ).first(),
     ).toEqual({ n: 0 });
-    expect(await (await repair(false)).json()).toMatchObject({ affectedMatches: 1 });
+    expect(
+      await (
+        await repair(
+          false,
+          (
+            await (await repair(true)).json<{ manifestDigest: string }>()
+          ).manifestDigest,
+        )
+      ).json(),
+    ).toMatchObject({ affectedMatches: 1 });
     const bears = await adminEnv.DB.prepare(
       "SELECT id FROM teams WHERE name = 'Brisbane Bears'",
     ).first<{ id: number }>();
@@ -205,7 +215,16 @@ describe("authenticated coaching backfill on local D1", () => {
     const before = await adminEnv.DB.prepare(
       "SELECT revision FROM public_input_revision WHERE id = 1",
     ).first();
-    expect(await (await repair(false)).json()).toMatchObject({
+    expect(
+      await (
+        await repair(
+          false,
+          (
+            await (await repair(true)).json<{ manifestDigest: string }>()
+          ).manifestDigest,
+        )
+      ).json(),
+    ).toMatchObject({
       affectedMatches: 0,
       playerStats: 0,
       canonicalCoaches: 0,

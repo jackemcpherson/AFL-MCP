@@ -36,6 +36,28 @@ function makeSeries(
 }
 
 describe("aggregateWeatherWindow", () => {
+  it("uses 24 elapsed hours across the Melbourne spring transition", () => {
+    const series = makeSeries("2026-10-03", 3, { precip: 1 });
+    const missingHour = series.time.indexOf("2026-10-04T02:00");
+    series.precipitationMm[missingHour] = null;
+    expect(aggregateWeatherWindow(series, "2026-10-04T14:00").precip24hPriorMm).toBe(24);
+  });
+
+  it("keeps a fall-back window unknown when the provider has no offset", () => {
+    const series = makeSeries("2026-04-04", 3, { precip: 1 });
+    expect(aggregateWeatherWindow(series, "2026-04-05T14:00").precip24hPriorMm).toBeNull();
+    expect(() => aggregateWeatherWindow(series, "2026-04-05T02:30")).toThrow(/Ambiguous/);
+  });
+
+  it.each([
+    ["2026-07-18T19:40", "2026-07-18T19:00"], // Perth 17:40, Melbourne 19:40
+    ["2026-07-18T20:10", "2026-07-18T20:00"], // Adelaide 19:40, Melbourne 20:10
+  ])("uses Melbourne fixture time regardless of venue: %s", (kickoff, hour) => {
+    const series = makeSeries("2026-07-17", 3, { precip: 0 });
+    series.precipitationMm[series.time.indexOf(hour)] = 7;
+    expect(aggregateWeatherWindow(series, kickoff).precipMm).toBe(7);
+  });
+
   it("computes the six metrics over a 3h window from the scheduled start", () => {
     const series = makeSeries("2026-07-17", 2, {
       temp: 15,
@@ -87,12 +109,30 @@ describe("aggregateWeatherWindow", () => {
     expect(metrics.precip24hPriorMm).toBeCloseTo(2.4, 5);
   });
 
-  it("skips null hours and aggregates the hours that are present", () => {
+  it("retains null for a metric with incomplete hourly coverage", () => {
     const series = makeSeries("2026-07-17", 2, { temp: null });
     const temps = series.temperatureC as (number | null)[];
     temps[24 + 19] = 8; // only one non-null hour in the window
     const metrics = aggregateWeatherWindow(series, "2026-07-18T19:40:00");
-    expect(metrics.tempC).toBe(8);
+    expect(metrics.tempC).toBeNull();
+    expect(metrics.precipMm).toBe(0);
+  });
+
+  it("does not publish a partial precipitation total when an hour is absent", () => {
+    const series = makeSeries("2026-07-17", 2, { precip: 1 });
+    const time = [...series.time];
+    time[24 + 20] = "missing";
+    const metrics = aggregateWeatherWindow({ ...series, time }, "2026-07-18T19:40:00");
+    expect(metrics.precipMm).toBeNull();
+    expect(metrics.precip24hPriorMm).toBe(24);
+  });
+
+  it("retains null for an ambiguous repeated daylight-saving hour", () => {
+    const series = makeSeries("2026-04-04", 3, { precip: 1 });
+    const time = [...series.time];
+    time[24 + 3] = "2026-04-05T02:00";
+    const metrics = aggregateWeatherWindow({ ...series, time }, "2026-04-05T01:10:00");
+    expect(metrics.precipMm).toBeNull();
   });
 
   it("returns null metrics when every hour in the window is null or missing", () => {

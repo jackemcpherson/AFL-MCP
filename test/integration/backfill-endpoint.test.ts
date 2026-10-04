@@ -181,3 +181,21 @@ describe("POST /mcp/admin/backfill — input validation", () => {
     expect(res.status).toBe(404);
   });
 });
+
+it("rejects ambiguous AFLW backfills before acquiring a lease or public marker", async () => {
+  for (const body of [
+    { competition: "AFLW", season: 2022 },
+    { competitions: ["AFLW"], fromYear: 2021, toYear: 2023 },
+  ]) {
+    const response = await worker.fetch(makeRequest(body), authedEnv, stubCtx);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: "AMBIGUOUS_SEASON",
+      validSelectors: ["2022-S6", "2022-S7"],
+    });
+  }
+  expect(
+    await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+  ).toBe(0);
+  expect(await env.DB.prepare("SELECT holder FROM sync_lease").first("holder")).toBeNull();
+});

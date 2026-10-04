@@ -2,7 +2,12 @@ import type { CompetitionCode } from "fitzroy";
 import { backfillBrownlow } from "./admin/brownlow";
 import { reconcileBearsIdentity } from "./admin/club-identities";
 import { backfillCoaches } from "./admin/coaching";
+import { PavRepairRequestSchema, repairPav } from "./admin/pav";
+import { IdentityRepairRequestSchema, repairPlayerIdentity } from "./admin/player-identities";
+import { operateStatsRefresh, StatsRefreshRequestSchema } from "./admin/stats-refresh";
 import { getAdminStatus } from "./admin/status";
+import { retryWeather, WeatherRetryRequestSchema } from "./admin/weather-retry";
+import { SeasonSelectionError, seasonKey } from "./db/seasons";
 import { handleMcpRequest } from "./mcp/protocol";
 import {
   type BackfillRequest,
@@ -12,8 +17,10 @@ import {
   CoachingBackfillRequestSchema,
   describeBackfillIssue,
   describeBrownlowBackfillIssue,
+  ExactSeasonBackfillRequestSchema,
+  SyncRequestSchema,
 } from "./mcp/validation";
-import { calculateAllPav, recalculatePav } from "./sync/pav";
+import { auditNextSeason } from "./sync/audit";
 import { sync } from "./sync/sync";
 import type { Env } from "./types";
 
@@ -110,7 +117,12 @@ export default {
       }
       try {
         return await handleAdmin(path, request, env);
-      } catch {
+      } catch (error) {
+        if (error instanceof SeasonSelectionError)
+          return Response.json(
+            { error: error.message, code: error.code, validSelectors: error.validSelectors },
+            { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
+          );
         console.error(JSON.stringify({ event: "admin_route_error", path }));
         return Response.json({ error: "internal error" }, { status: 500 });
       }
@@ -130,23 +142,29 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    if (env.SYNC_PAUSED === "true") return;
     // An exception before the per-competition try/catch (e.g. in the
     // shouldRunNow gate) was previously invisible — waitUntil swallowed
     // it. Record a sync:fatal row so /mcp/health turns unhealthy (OPS-02).
     ctx.waitUntil(
-      sync(env, ALL_COMPETITIONS).catch(async (err) => {
-        console.error("sync fatal:", err);
-        try {
-          await env.DB.prepare(
-            "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:fatal', 0, ?)",
-          )
-            .bind(new Date().toISOString(), err instanceof Error ? err.message : String(err))
-            .run();
-        } catch (logErr) {
-          console.error("sync fatal logging failed:", logErr);
-        }
-      }),
+      sync(env, ALL_COMPETITIONS)
+        .then(async () => {
+          const now = new Date(event.scheduledTime);
+          if (now.getUTCMinutes() === 0) await auditNextSeason(env, now);
+        })
+        .catch(async (err) => {
+          console.error("sync fatal:", err);
+          try {
+            await env.DB.prepare(
+              "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:fatal', 0, ?)",
+            )
+              .bind(new Date().toISOString(), err instanceof Error ? err.message : String(err))
+              .run();
+          } catch (logErr) {
+            console.error("sync fatal logging failed:", logErr);
+          }
+        }),
     );
   },
 };
@@ -187,6 +205,30 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
+  if (path === "/mcp/admin/repair-player-identity" && request.method === "POST") {
+    const parsed = IdentityRepairRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "invalid identity repair request" }, { status: 400 });
+    const result = await repairPlayerIdentity(env, parsed.data);
+    return Response.json(result, { status: result.busy ? 409 : 200 });
+  }
+
+  if (path === "/mcp/admin/refresh-statistics" && request.method === "POST") {
+    const parsed = StatsRefreshRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "invalid statistics refresh request" }, { status: 400 });
+    const result = await operateStatsRefresh(env, parsed.data);
+    return Response.json(result, { status: result.busy ? 409 : 200 });
+  }
+
+  if (path === "/mcp/admin/retry-weather" && request.method === "POST") {
+    const parsed = WeatherRetryRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "invalid weather retry request" }, { status: 400 });
+    const result = await retryWeather(env, parsed.data);
+    return Response.json(result, { status: result.busy ? 409 : 200 });
+  }
+
   if (path === "/mcp/admin/status" && request.method === "GET") {
     return Response.json(await getAdminStatus(env));
   }
@@ -209,7 +251,7 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
         { status: 400 },
       );
     }
-    const result = await backfillCoaches(env, fromYear, source, dryRun);
+    const result = await backfillCoaches(env, fromYear, source, dryRun, parsed.data.resume);
     if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
     return Response.json({ status: "ok", ...result.summary });
   }
@@ -224,9 +266,14 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     const parsed = BearsRepairRequestSchema.safeParse(raw);
     if (!parsed.success)
       return Response.json({ error: "invalid Bears repair request" }, { status: 400 });
-    const result = await reconcileBearsIdentity(env, parsed.data.dryRun);
+    const result = await reconcileBearsIdentity(env, parsed.data.dryRun, parsed.data);
     if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
-    return Response.json({ status: "ok", ...result.report });
+    return Response.json({
+      status: "ok",
+      ...result.report,
+      manifestDigest: result.manifestDigest,
+      matchIds: result.matchIds,
+    });
   }
 
   if (path === "/mcp/admin/backfill-brownlow" && request.method === "POST") {
@@ -249,6 +296,7 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
       parsed.data.fromYear,
       parsed.data.toYear,
       parsed.data.dryRun,
+      parsed.data.resume,
     );
     if (result.body.status === "blocked" && result.body.seasons.length === 0) {
       return Response.json({ error: "operation lease held" }, { status: 409 });
@@ -257,33 +305,37 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
-    // Optional ?year= override — the wall-clock default is wrong at
-    // season/year boundaries (COR-11).
-    const url = new URL(request.url);
-    const yearParam = url.searchParams.get("year");
-    let year: number | undefined;
-    if (yearParam !== null) {
-      const parsed = Number.parseInt(yearParam, 10);
-      const currentYear = new Date().getUTCFullYear();
-      if (!Number.isInteger(parsed) || parsed < MIN_BACKFILL_YEAR || parsed > currentYear) {
-        return Response.json(
-          { error: `year must be between ${MIN_BACKFILL_YEAR} and ${currentYear}` },
-          { status: 400 },
-        );
-      }
-      year = parsed;
-    }
-    await Promise.all([recalculatePav(env, "AFLM", year), recalculatePav(env, "AFLW", year)]);
-    return Response.json({ status: "ok", year: year ?? new Date().getFullYear() });
+    const parsed = PavRepairRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json(
+        { error: "PAV requires competition, season and a reviewed preview" },
+        { status: 400 },
+      );
+    const result = await repairPav(env, parsed.data);
+    return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
   if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {
-    const results = await calculateAllPav(env);
-    return Response.json({ status: "ok", results });
+    return Response.json(
+      { error: "Use /mcp/admin/recalculate-pav with one explicit competition and season" },
+      { status: 410 },
+    );
   }
 
   if (path === "/mcp/admin/sync" && request.method === "POST") {
-    const results = await sync(env, ALL_COMPETITIONS, { skipShouldRunNow: true });
+    const text = await request.text();
+    let raw: unknown = {};
+    try {
+      if (text.trim()) raw = JSON.parse(text);
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+    const parsed = SyncRequestSchema.safeParse(raw);
+    if (!parsed.success) return Response.json({ error: "invalid sync request" }, { status: 400 });
+    const results = await sync(env, ALL_COMPETITIONS, {
+      skipShouldRunNow: true,
+      resume: parsed.data.resume,
+    });
     return Response.json({ status: "ok", results });
   }
 
@@ -293,6 +345,25 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
       raw = await request.json();
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+
+    if (typeof raw === "object" && raw !== null && "season" in raw) {
+      const exact = ExactSeasonBackfillRequestSchema.safeParse(raw);
+      if (!exact.success)
+        return Response.json({ error: "invalid exact-season backfill request" }, { status: 400 });
+      const key = seasonKey(exact.data.competition, exact.data.season);
+      const year = Number(key.slice(0, 4));
+      if (year < MIN_BACKFILL_YEAR || year > new Date().getUTCFullYear())
+        return Response.json(
+          { error: "season is outside the historical backfill range" },
+          { status: 400 },
+        );
+      const results = await sync(env, [exact.data.competition], {
+        season: exact.data.season as import("fitzroy").SeasonSelector,
+        skipShouldRunNow: exact.data.skipShouldRunNow,
+        resume: exact.data.resume,
+      });
+      return Response.json({ status: "ok", results });
     }
 
     const parsed = BackfillRequestSchema.safeParse(raw);
@@ -306,11 +377,14 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
       return Response.json({ error: rangeError }, { status: 400 });
     }
 
+    if (body.competitions.includes("AFLW") && body.fromYear <= 2022 && body.toYear >= 2022)
+      seasonKey("AFLW", 2022);
+
     const results = await sync(env, body.competitions, {
       fromYear: body.fromYear,
       toYear: body.toYear,
       skipShouldRunNow: body.skipShouldRunNow ?? true,
-      skipPav: body.skipPav ?? false,
+      resume: body.resume,
     });
     return Response.json({ status: "ok", results });
   }

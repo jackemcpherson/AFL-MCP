@@ -105,3 +105,4 @@ venue_id,name,latitude,longitude,timezone,roof,canonical_venue_id,confidence,not
 763961,"Victor George Kailis Oval",-32.1220,115.8450,Australia/Perth,none,217702,high,"Same ground as Cockburn ARC Oval (verified via Austadiums); alias of Cockburn ARC Oval (217702)"
 1526404,"Blacktown International Sportspark",-33.7692,150.8593,Australia/Sydney,none,17602,high,"Alias of Blacktown ISP (17602)"
 1184693,"Avalon Airport Oval",-37.9030,144.6560,Australia/Melbourne,none,17641,high,"Alias of Melbourne Avalon Airport Oval (17641), Chirnside Park, Werribee VIC"
+2318995,"Windsor Park",-41.402883,147.0908651,Australia/Hobart,,2318995,high,"Council facility map pin verified 2026-10-04: https://www.wtc.tas.gov.au/facility/windsor-park/; roof unknown"

@@ -7,13 +7,14 @@ import {
   roundLabel,
   roundTypeLabel,
 } from "fitzroy";
+import { seasonKey } from "../db/seasons";
 import {
   isPlaceholderTeamName,
   normaliseTeam,
   normaliseTeamForMatch,
   normaliseVenue,
 } from "../lib/normalise";
-import { toIsoDate, toMelbourneTime } from "../lib/time";
+import { toMelbourneDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 import {
   bindValues,
@@ -130,14 +131,31 @@ export async function ensureCompetition(env: Env, code: CompetitionCode): Promis
  * Ensure a season row exists for the given (competition, year) pair and return its id.
  * @throws if the row cannot be located after the insert (database error).
  */
-export async function ensureSeason(env: Env, competitionId: number, year: number): Promise<number> {
-  await env.DB.prepare("INSERT OR IGNORE INTO seasons (competition_id, year) VALUES (?, ?)")
-    .bind(competitionId, year)
+export async function ensureSeason(
+  env: Env,
+  competitionId: number,
+  selector: number | string,
+): Promise<number> {
+  const competition = await env.DB.prepare("SELECT code FROM competitions WHERE id = ?1")
+    .bind(competitionId)
+    .first<{ code: string }>();
+  if (!competition) throw new Error("Unknown competition");
+  const key = seasonKey(competition.code, selector);
+  const year = Number(key.slice(0, 4));
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO seasons (competition_id, year, season_key) VALUES (?1, ?2, ?3)",
+  )
+    .bind(competitionId, year, key)
     .run();
-  const row = await env.DB.prepare("SELECT id FROM seasons WHERE competition_id = ? AND year = ?")
-    .bind(competitionId, year)
+  const row = await env.DB.prepare(
+    "SELECT id FROM seasons WHERE competition_id = ?1 AND season_key = ?2",
+  )
+    .bind(competitionId, key)
     .first<{ id: number }>();
-  if (!row) throw new Error(`Failed to ensure season ${year}`);
+  if (!row)
+    throw new Error(
+      `Season ${key} cannot be inserted until the season schema transition is enabled`,
+    );
   return row.id;
 }
 
@@ -425,50 +443,47 @@ export async function buildMatchAflIdMap(env: Env, seasonId: number): Promise<Ma
 }
 
 /**
- * Upsert players keyed by `external_afl_player_id`. First tries to adopt an
- * existing fryzigg-only row by name match (so legacy data carries forward
- * without duplication); then inserts/updates by AFL id.
+ * Resolve provider identities through the crosswalk. Names never establish identity.
+ * New provider IDs create separate people until an evidence-backed repair is approved.
  */
 export async function upsertPlayers(
   env: Env,
   players: readonly PlayerInput[],
 ): Promise<Map<string, number>> {
-  for (let i = 0; i < players.length; i += BATCH_SIZE) {
-    const chunk = players.slice(i, i + BATCH_SIZE);
-    const stmts: D1PreparedStatement[] = [];
-    for (const p of chunk) {
-      stmts.push(
-        // Adopt at most ONE legacy row. Homonyms are real across 130
-        // seasons; updating every name match gave multiple rows the same
-        // AFL id, violating the unique index and aborting the whole
-        // transactional batch until manual intervention (COR-05).
-        env.DB.prepare(
-          `UPDATE players SET external_afl_player_id = ?
-           WHERE id = (
-             SELECT MIN(id) FROM players
-             WHERE first_name = ? AND surname = ?
-               AND external_afl_player_id IS NULL
-               AND external_id IS NOT NULL
-           )
-             AND NOT EXISTS (SELECT 1 FROM players WHERE external_afl_player_id = ?)`,
-        ).bind(p.playerId, p.givenName, p.surname, p.playerId),
-      );
-      stmts.push(
-        env.DB.prepare(
-          `INSERT INTO players (first_name, surname, external_afl_player_id)
-           VALUES (?, ?, ?)
-           ON CONFLICT (external_afl_player_id) WHERE external_afl_player_id IS NOT NULL
-           DO UPDATE SET first_name = excluded.first_name, surname = excluded.surname`,
-        ).bind(p.givenName, p.surname, p.playerId),
-      );
-    }
-    await env.DB.batch(stmts);
+  const requestedIds = JSON.stringify([...new Set(players.map((player) => player.playerId))]);
+  const existing = await env.DB.prepare(
+    "SELECT provider_id FROM player_provider_ids WHERE provider='afl-api' AND provider_id IN (SELECT value FROM json_each(?1))",
+  )
+    .bind(requestedIds)
+    .all<{ provider_id: string }>();
+  const known = new Set(existing.results.map((row) => row.provider_id));
+  const statements: D1PreparedStatement[] = [];
+  for (const player of players) {
+    if (known.has(player.playerId)) continue;
+    known.add(player.playerId);
+    statements.push(
+      env.DB.prepare(`INSERT INTO players(first_name, surname, external_afl_player_id)
+        SELECT ?1, ?2, ?3 WHERE NOT EXISTS (
+          SELECT 1 FROM player_provider_ids WHERE provider='afl-api' AND provider_id=?3)
+        ON CONFLICT(external_afl_player_id) WHERE external_afl_player_id IS NOT NULL DO NOTHING`).bind(
+        player.givenName,
+        player.surname,
+        player.playerId,
+      ),
+      env.DB.prepare(`INSERT INTO player_provider_ids(provider, provider_id, player_id, evidence_json)
+        SELECT 'afl-api', ?1, id, '{"kind":"provider-key"}' FROM players WHERE external_afl_player_id=?1
+        ON CONFLICT(provider, provider_id) DO NOTHING`).bind(player.playerId),
+    );
   }
-
+  for (let offset = 0; offset < statements.length; offset += BATCH_SIZE) {
+    await env.DB.batch(statements.slice(offset, offset + BATCH_SIZE));
+  }
   const { results } = await env.DB.prepare(
-    "SELECT id, external_afl_player_id FROM players WHERE external_afl_player_id IS NOT NULL",
-  ).all<{ id: number; external_afl_player_id: string }>();
-  return new Map(results.map((r) => [r.external_afl_player_id, r.id]));
+    "SELECT player_id, provider_id FROM player_provider_ids WHERE provider='afl-api' AND provider_id IN (SELECT value FROM json_each(?1))",
+  )
+    .bind(requestedIds)
+    .all<{ player_id: number; provider_id: string }>();
+  return new Map(results.map((row) => [row.provider_id, row.player_id]));
 }
 
 /**
@@ -614,7 +629,7 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
     venueId: ctx.venueMap.get(venue) ?? null,
     homeTeamId: ctx.teamMap.get(homeTeam) ?? null,
     awayTeamId: ctx.teamMap.get(awayTeam) ?? null,
-    dateStr: toIsoDate(m.date),
+    dateStr: toMelbourneDate(m.date),
     localTime: toMelbourneTime(m.date),
     kickoffAt: m.date.toISOString(),
   };
@@ -683,7 +698,7 @@ export async function upsertStats(
       `skipped stat rows for unmapped team(s): ${Array.from(unmappedTeams).join(", ")}`,
     );
   }
-  return await batchAndCountChanges(env, stmts);
+  return await batchAndCountChanges(env, stmts, true);
 }
 
 /** Input row for the {@link STAT_COLUMNS} manifest: the fitzroy stats line plus resolved FK ids. */
@@ -709,72 +724,80 @@ interface StatRow {
 export const STAT_COLUMNS = [
   { name: "match_id", kind: "key", value: (r) => r.matchId },
   { name: "player_id", kind: "key", value: (r) => r.playerId },
-  { name: "team_id", kind: "replace", value: (r) => r.teamId },
-  { name: "guernsey_number", kind: "replace", value: (r) => r.s.jumperNumber },
-  { name: "player_position", kind: "replace", value: (r) => r.s.position },
-  { name: "kicks", kind: "replace", value: (r) => r.s.kicks },
-  { name: "handballs", kind: "replace", value: (r) => r.s.handballs },
-  { name: "disposals", kind: "replace", value: (r) => r.s.disposals },
-  { name: "marks", kind: "replace", value: (r) => r.s.marks },
-  { name: "goals", kind: "replace", value: (r) => r.s.goals },
-  { name: "behinds", kind: "replace", value: (r) => r.s.behinds },
-  { name: "tackles", kind: "replace", value: (r) => r.s.tackles },
-  { name: "hitouts", kind: "replace", value: (r) => r.s.hitouts },
-  { name: "free_kicks_for", kind: "replace", value: (r) => r.s.freesFor },
-  { name: "free_kicks_against", kind: "replace", value: (r) => r.s.freesAgainst },
-  { name: "contested_possessions", kind: "replace", value: (r) => r.s.contestedPossessions },
-  { name: "uncontested_possessions", kind: "replace", value: (r) => r.s.uncontestedPossessions },
-  { name: "contested_marks", kind: "replace", value: (r) => r.s.contestedMarks },
-  { name: "intercepts", kind: "replace", value: (r) => r.s.intercepts },
-  { name: "centre_clearances", kind: "replace", value: (r) => r.s.centreClearances },
-  { name: "stoppage_clearances", kind: "replace", value: (r) => r.s.stoppageClearances },
-  { name: "clearances", kind: "replace", value: (r) => r.s.totalClearances },
-  { name: "inside_fifties", kind: "replace", value: (r) => r.s.inside50s },
-  { name: "rebounds", kind: "replace", value: (r) => r.s.rebound50s },
-  { name: "clangers", kind: "replace", value: (r) => r.s.clangers },
-  { name: "turnovers", kind: "replace", value: (r) => r.s.turnovers },
-  { name: "one_percenters", kind: "replace", value: (r) => r.s.onePercenters },
-  { name: "bounces", kind: "replace", value: (r) => r.s.bounces },
-  { name: "goal_assists", kind: "replace", value: (r) => r.s.goalAssists },
-  { name: "disposal_efficiency_pct", kind: "replace", value: (r) => r.s.disposalEfficiency },
-  { name: "metres_gained", kind: "replace", value: (r) => r.s.metresGained },
-  { name: "goal_accuracy", kind: "replace", value: (r) => r.s.goalAccuracy },
-  { name: "marks_inside_fifty", kind: "replace", value: (r) => r.s.marksInside50 },
-  { name: "tackles_inside_fifty", kind: "replace", value: (r) => r.s.tacklesInside50 },
-  { name: "shots_at_goal", kind: "replace", value: (r) => r.s.shotsAtGoal },
-  { name: "score_involvements", kind: "replace", value: (r) => r.s.scoreInvolvements },
-  { name: "total_possessions", kind: "replace", value: (r) => r.s.totalPossessions },
-  { name: "time_on_ground_pct", kind: "replace", value: (r) => r.s.timeOnGroundPercentage },
-  { name: "afl_fantasy_score", kind: "replace", value: (r) => r.s.dreamTeamPoints },
-  { name: "rating_points", kind: "replace", value: (r) => r.s.ratingPoints },
-  { name: "goal_efficiency", kind: "replace", value: (r) => r.s.goalEfficiency },
-  { name: "shot_efficiency", kind: "replace", value: (r) => r.s.shotEfficiency },
-  { name: "interchange_counts", kind: "replace", value: (r) => r.s.interchangeCounts },
-  { name: "effective_disposals", kind: "replace", value: (r) => r.s.effectiveDisposals },
-  { name: "effective_kicks", kind: "replace", value: (r) => r.s.effectiveKicks },
-  { name: "kick_efficiency", kind: "replace", value: (r) => r.s.kickEfficiency },
-  { name: "kick_to_handball_ratio", kind: "replace", value: (r) => r.s.kickToHandballRatio },
-  { name: "pressure_acts", kind: "replace", value: (r) => r.s.pressureActs },
-  { name: "def_half_pressure_acts", kind: "replace", value: (r) => r.s.defHalfPressureActs },
-  { name: "spoils", kind: "replace", value: (r) => r.s.spoils },
-  { name: "hitouts_to_advantage", kind: "replace", value: (r) => r.s.hitoutsToAdvantage },
-  { name: "hitout_win_pct", kind: "replace", value: (r) => r.s.hitoutWinPercentage },
-  { name: "ground_ball_gets", kind: "replace", value: (r) => r.s.groundBallGets },
-  { name: "f50_ground_ball_gets", kind: "replace", value: (r) => r.s.f50GroundBallGets },
-  { name: "intercept_marks", kind: "replace", value: (r) => r.s.interceptMarks },
-  { name: "marks_on_lead", kind: "replace", value: (r) => r.s.marksOnLead },
-  { name: "contested_possession_rate", kind: "replace", value: (r) => r.s.contestedPossessionRate },
-  { name: "contest_off_one_on_ones", kind: "replace", value: (r) => r.s.contestOffOneOnOnes },
-  { name: "contest_off_wins", kind: "replace", value: (r) => r.s.contestOffWins },
-  { name: "contest_off_wins_pct", kind: "replace", value: (r) => r.s.contestOffWinsPercentage },
-  { name: "contest_def_one_on_ones", kind: "replace", value: (r) => r.s.contestDefOneOnOnes },
-  { name: "contest_def_losses", kind: "replace", value: (r) => r.s.contestDefLosses },
-  { name: "contest_def_loss_pct", kind: "replace", value: (r) => r.s.contestDefLossPercentage },
-  { name: "centre_bounce_attendances", kind: "replace", value: (r) => r.s.centreBounceAttendances },
-  { name: "kickins", kind: "replace", value: (r) => r.s.kickins },
-  { name: "kickins_playon", kind: "replace", value: (r) => r.s.kickinsPlayon },
-  { name: "ruck_contests", kind: "replace", value: (r) => r.s.ruckContests },
-  { name: "score_launches", kind: "replace", value: (r) => r.s.scoreLaunches },
+  { name: "team_id", kind: "coalesce", value: (r) => r.teamId },
+  { name: "guernsey_number", kind: "coalesce", value: (r) => r.s.jumperNumber },
+  { name: "player_position", kind: "coalesce", value: (r) => r.s.position },
+  { name: "kicks", kind: "coalesce", value: (r) => r.s.kicks },
+  { name: "handballs", kind: "coalesce", value: (r) => r.s.handballs },
+  { name: "disposals", kind: "coalesce", value: (r) => r.s.disposals },
+  { name: "marks", kind: "coalesce", value: (r) => r.s.marks },
+  { name: "goals", kind: "coalesce", value: (r) => r.s.goals },
+  { name: "behinds", kind: "coalesce", value: (r) => r.s.behinds },
+  { name: "tackles", kind: "coalesce", value: (r) => r.s.tackles },
+  { name: "hitouts", kind: "coalesce", value: (r) => r.s.hitouts },
+  { name: "free_kicks_for", kind: "coalesce", value: (r) => r.s.freesFor },
+  { name: "free_kicks_against", kind: "coalesce", value: (r) => r.s.freesAgainst },
+  { name: "contested_possessions", kind: "coalesce", value: (r) => r.s.contestedPossessions },
+  { name: "uncontested_possessions", kind: "coalesce", value: (r) => r.s.uncontestedPossessions },
+  { name: "contested_marks", kind: "coalesce", value: (r) => r.s.contestedMarks },
+  { name: "intercepts", kind: "coalesce", value: (r) => r.s.intercepts },
+  { name: "centre_clearances", kind: "coalesce", value: (r) => r.s.centreClearances },
+  { name: "stoppage_clearances", kind: "coalesce", value: (r) => r.s.stoppageClearances },
+  { name: "clearances", kind: "coalesce", value: (r) => r.s.totalClearances },
+  { name: "inside_fifties", kind: "coalesce", value: (r) => r.s.inside50s },
+  { name: "rebounds", kind: "coalesce", value: (r) => r.s.rebound50s },
+  { name: "clangers", kind: "coalesce", value: (r) => r.s.clangers },
+  { name: "turnovers", kind: "coalesce", value: (r) => r.s.turnovers },
+  { name: "one_percenters", kind: "coalesce", value: (r) => r.s.onePercenters },
+  { name: "bounces", kind: "coalesce", value: (r) => r.s.bounces },
+  { name: "goal_assists", kind: "coalesce", value: (r) => r.s.goalAssists },
+  { name: "disposal_efficiency_pct", kind: "coalesce", value: (r) => r.s.disposalEfficiency },
+  { name: "metres_gained", kind: "coalesce", value: (r) => r.s.metresGained },
+  { name: "goal_accuracy", kind: "coalesce", value: (r) => r.s.goalAccuracy },
+  { name: "marks_inside_fifty", kind: "coalesce", value: (r) => r.s.marksInside50 },
+  { name: "tackles_inside_fifty", kind: "coalesce", value: (r) => r.s.tacklesInside50 },
+  { name: "shots_at_goal", kind: "coalesce", value: (r) => r.s.shotsAtGoal },
+  { name: "score_involvements", kind: "coalesce", value: (r) => r.s.scoreInvolvements },
+  { name: "total_possessions", kind: "coalesce", value: (r) => r.s.totalPossessions },
+  { name: "time_on_ground_pct", kind: "coalesce", value: (r) => r.s.timeOnGroundPercentage },
+  { name: "afl_fantasy_score", kind: "coalesce", value: (r) => r.s.dreamTeamPoints },
+  { name: "rating_points", kind: "coalesce", value: (r) => r.s.ratingPoints },
+  { name: "goal_efficiency", kind: "coalesce", value: (r) => r.s.goalEfficiency },
+  { name: "shot_efficiency", kind: "coalesce", value: (r) => r.s.shotEfficiency },
+  { name: "interchange_counts", kind: "coalesce", value: (r) => r.s.interchangeCounts },
+  { name: "effective_disposals", kind: "coalesce", value: (r) => r.s.effectiveDisposals },
+  { name: "effective_kicks", kind: "coalesce", value: (r) => r.s.effectiveKicks },
+  { name: "kick_efficiency", kind: "coalesce", value: (r) => r.s.kickEfficiency },
+  { name: "kick_to_handball_ratio", kind: "coalesce", value: (r) => r.s.kickToHandballRatio },
+  { name: "pressure_acts", kind: "coalesce", value: (r) => r.s.pressureActs },
+  { name: "def_half_pressure_acts", kind: "coalesce", value: (r) => r.s.defHalfPressureActs },
+  { name: "spoils", kind: "coalesce", value: (r) => r.s.spoils },
+  { name: "hitouts_to_advantage", kind: "coalesce", value: (r) => r.s.hitoutsToAdvantage },
+  { name: "hitout_win_pct", kind: "coalesce", value: (r) => r.s.hitoutWinPercentage },
+  { name: "ground_ball_gets", kind: "coalesce", value: (r) => r.s.groundBallGets },
+  { name: "f50_ground_ball_gets", kind: "coalesce", value: (r) => r.s.f50GroundBallGets },
+  { name: "intercept_marks", kind: "coalesce", value: (r) => r.s.interceptMarks },
+  { name: "marks_on_lead", kind: "coalesce", value: (r) => r.s.marksOnLead },
+  {
+    name: "contested_possession_rate",
+    kind: "coalesce",
+    value: (r) => r.s.contestedPossessionRate,
+  },
+  { name: "contest_off_one_on_ones", kind: "coalesce", value: (r) => r.s.contestOffOneOnOnes },
+  { name: "contest_off_wins", kind: "coalesce", value: (r) => r.s.contestOffWins },
+  { name: "contest_off_wins_pct", kind: "coalesce", value: (r) => r.s.contestOffWinsPercentage },
+  { name: "contest_def_one_on_ones", kind: "coalesce", value: (r) => r.s.contestDefOneOnOnes },
+  { name: "contest_def_losses", kind: "coalesce", value: (r) => r.s.contestDefLosses },
+  { name: "contest_def_loss_pct", kind: "coalesce", value: (r) => r.s.contestDefLossPercentage },
+  {
+    name: "centre_bounce_attendances",
+    kind: "coalesce",
+    value: (r) => r.s.centreBounceAttendances,
+  },
+  { name: "kickins", kind: "coalesce", value: (r) => r.s.kickins },
+  { name: "kickins_playon", kind: "coalesce", value: (r) => r.s.kickinsPlayon },
+  { name: "ruck_contests", kind: "coalesce", value: (r) => r.s.ruckContests },
+  { name: "score_launches", kind: "coalesce", value: (r) => r.s.scoreLaunches },
   { name: "supercoach_score", kind: "coalesce", value: (r) => r.s.supercoachScore },
   { name: "brownlow_votes", kind: "coalesce", value: (r) => r.s.brownlowVotes },
 ] as const satisfies readonly UpsertColumn<StatRow>[];
@@ -784,7 +807,7 @@ const STAT_UPSERT_SQL = `INSERT INTO player_match_stats (${insertColumnList(STAT
     ON CONFLICT (match_id, player_id) DO UPDATE SET
       ${updateSetClause("player_match_stats", STAT_COLUMNS)}
     WHERE
-      ${changeDetectionWhere("player_match_stats", STAT_COLUMNS)}`;
+      ${changeDetectionWhere("player_match_stats", STAT_COLUMNS)} RETURNING id`;
 
 function buildStatUpsert(
   env: Env,
@@ -861,7 +884,7 @@ export async function upsertLineups(
         SELECT m.id,json_extract(j.value,'$.player_id'),json_extract(j.value,'$.team_id'),
           json_extract(j.value,'$.guernsey_number'),json_extract(j.value,'$.position'),
           json_extract(j.value,'$.is_emergency'),json_extract(j.value,'$.is_substitute')
-        FROM matches m,json_each(?) j WHERE ${guard.replace("id=?", "m.id=?")}`).bind(
+        FROM matches m,json_each(?) j WHERE ${guard.replace("id=?", "m.id=?")} RETURNING id`).bind(
         JSON.stringify(players),
         ...args,
       ),
@@ -869,7 +892,7 @@ export async function upsertLineups(
         `UPDATE matches SET lineups_observed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE ${guard}`,
       ).bind(...args),
     ]);
-    changes += result[1]?.meta.changes ?? 0;
+    changes += result[1]?.results.length ?? 0;
   }
   return changes;
 }

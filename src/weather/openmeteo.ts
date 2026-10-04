@@ -28,13 +28,6 @@ export type WeatherSource = "best_match" | "historical_forecast" | "era5_land+er
  */
 export const OBSERVED_FINAL_SOURCE: WeatherSource = "era5_land+era5";
 
-/**
- * Scheduled start for legacy rows lacking `local_time` (coverage says the
- * column is complete, so this is a belt-and-braces fallback): 13:00 puts
- * the 3h window in a typical afternoon-bounce slot rather than midnight.
- */
-export const FALLBACK_LOCAL_TIME = "13:00:00";
-
 /** Forecast API (`best_match` model) for upcoming matches. */
 export const FORECAST_API = "https://api.open-meteo.com/v1/forecast";
 /** Archived forecast model output; bridges the ~5-day ERA5 publication lag. */
