@@ -174,6 +174,7 @@ export const ANALYTICS_COLUMNS = {
     "height_cm",
     "weight_kg",
     "is_retired",
+    "legacy_is_retired",
   ],
   coaches: ["id", "display_name", "profile_url", "created_at"],
   coach_external_ids: [
@@ -264,6 +265,13 @@ const CORE = {
   notes: [],
 } as const satisfies CoverageTableExpectation;
 
+const PLAYER_METADATA = {
+  ...CORE,
+  expected: "partial",
+  source: ["mixed-provider and unverified legacy metadata"],
+  overrides: { id: "complete", surname: "complete", is_retired: "best-effort" },
+} as const;
+
 const COACHING_PARTIAL = {
   range: "1990..current",
   expected: "partial",
@@ -342,7 +350,7 @@ const AFLM_STAT_OVERRIDES = {
 } as const satisfies Record<string, CoverageExpectation>;
 
 const AFLM_STAT_RANGES = {
-  brownlow_votes: "1990..2025",
+  brownlow_votes: "1990..current",
   supercoach_score: "2007..2019",
   afl_fantasy_score: "2007..current",
   subbed: "1990..2019",
@@ -351,25 +359,6 @@ const AFLM_STAT_RANGES = {
   metres_gained: "2015..current",
   intercepts: "2015..current",
   pressure_acts: "2017..current",
-} as const;
-
-const QUARTER_SCORE_RANGES = {
-  home_q1_goals: "2020..current",
-  home_q1_behinds: "2020..current",
-  home_q2_goals: "2020..current",
-  home_q2_behinds: "2020..current",
-  home_q3_goals: "2020..current",
-  home_q3_behinds: "2020..current",
-  home_q4_goals: "2020..current",
-  home_q4_behinds: "2020..current",
-  away_q1_goals: "2020..current",
-  away_q1_behinds: "2020..current",
-  away_q2_goals: "2020..current",
-  away_q2_behinds: "2020..current",
-  away_q3_goals: "2020..current",
-  away_q3_behinds: "2020..current",
-  away_q4_goals: "2020..current",
-  away_q4_behinds: "2020..current",
 } as const;
 
 const RESERVES_STAT_OVERRIDES = {
@@ -400,7 +389,7 @@ export const COVERAGE_EXPECTATIONS = {
     season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
-    players: CORE,
+    players: PLAYER_METADATA,
     matches: {
       ...CORE,
       range: "1990..current",
@@ -412,7 +401,6 @@ export const COVERAGE_EXPECTATIONS = {
         live_period_status: "2026..current",
         completed_quarter: "2026..current",
         ...PUBLICATION_MATCH_RANGES,
-        ...QUARTER_SCORE_RANGES,
       },
     },
     player_match_stats: {
@@ -455,7 +443,7 @@ export const COVERAGE_EXPECTATIONS = {
     season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
-    players: CORE,
+    players: PLAYER_METADATA,
     matches: {
       ...CORE,
       range: "2017..current",
@@ -498,7 +486,7 @@ export const COVERAGE_EXPECTATIONS = {
     season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
-    players: CORE,
+    players: PLAYER_METADATA,
     matches: {
       ...CORE,
       range: "2021..current",
@@ -538,7 +526,7 @@ export const COVERAGE_EXPECTATIONS = {
     season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
-    players: CORE,
+    players: PLAYER_METADATA,
     matches: {
       ...CORE,
       range: "2021..current",

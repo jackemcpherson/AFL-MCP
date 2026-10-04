@@ -7,6 +7,7 @@ import { PavRepairRequestSchema, repairPav } from "./admin/pav";
 import { IdentityRepairRequestSchema, repairPlayerIdentity } from "./admin/player-identities";
 import { operateStatsRefresh, StatsRefreshRequestSchema } from "./admin/stats-refresh";
 import { getAdminStatus } from "./admin/status";
+import { refreshWeather, WeatherRefreshRequestSchema } from "./admin/weather-refresh";
 import { retryWeather, WeatherRetryRequestSchema } from "./admin/weather-retry";
 import { SeasonSelectionError, seasonKey } from "./db/seasons";
 import { handleMcpRequest } from "./mcp/protocol";
@@ -236,6 +237,14 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     if (!parsed.success)
       return Response.json({ error: "invalid statistics refresh request" }, { status: 400 });
     const result = await operateStatsRefresh(env, parsed.data);
+    return Response.json(result, { status: result.busy ? 409 : 200 });
+  }
+
+  if (path === "/mcp/admin/refresh-weather" && request.method === "POST") {
+    const parsed = WeatherRefreshRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "invalid weather refresh request" }, { status: 400 });
+    const result = await refreshWeather(env, parsed.data);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 

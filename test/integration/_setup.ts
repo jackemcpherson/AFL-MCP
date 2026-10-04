@@ -2,6 +2,7 @@ import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeAll, beforeEach } from "vitest";
 
 const TABLES_TO_WIPE = [
+  "weather_repair_operations",
   "pav_rebuild_queue",
   "identity_repair_operations",
   "player_id_redirects",

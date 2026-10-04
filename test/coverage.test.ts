@@ -106,7 +106,8 @@ describe("coverage contract", () => {
   it("keeps exact ranges and Melbourne-time coverage canonical as exceptions", () => {
     const coverage = contractCoverage();
     expect(coverage.AFLM.matches?.columns?.attendance?.range).toBe("1990..2019");
-    expect(coverage.AFLM.player_match_stats?.columns?.brownlow_votes?.range).toBe("1990..2025");
+    expect(coverage.AFLM.player_match_stats?.range).toBe("1990..current");
+    expect(coverage.AFLM.player_match_stats?.columns?.brownlow_votes?.range).toBeUndefined();
     for (const competition of COVERAGE_COMPETITIONS) {
       expect(coverage[competition].matches?.columns?.local_time?.expected).toBe("complete");
     }
@@ -114,7 +115,7 @@ describe("coverage contract", () => {
       for (const quarter of [1, 2, 3, 4]) {
         for (const score of ["goals", "behinds"]) {
           expect(coverage.AFLM.matches?.columns?.[`${side}_q${quarter}_${score}`]?.range).toBe(
-            "2020..current",
+            undefined,
           );
         }
       }

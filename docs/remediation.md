@@ -139,3 +139,24 @@ Raw provider inventories remain separate from reviewed source corrections. The
 The 2015 Grand Final retains the stored West Coast home perspective and
 transposes scores together. These corrections identify their primary evidence
 in `src/sync/source-corrections.ts`.
+
+## Weather and Metadata Corrections
+
+`POST /mcp/admin/refresh-weather` accepts exact `competition`, `season`,
+`matchId` and source `evidence`. Review the default dry-run manifest, then apply
+its `manifestDigest`. The operation recomputes only that fixture's model window.
+A database failure retains the checkpoint and public marker. Resume the same
+request with `resume: true`.
+
+Successful reruns are idempotent. Provider failures
+leave unknown values with diagnostics and daily retry deadlines.
+
+Kickoff and physical venue changes invalidate cached model weather. Legacy
+local-time records without a verified UTC timestamp do not by themselves prove
+that the model window was wrong. Review the source context before recomputing.
+
+Migration `0041` corrects `INT` rows previously marked as substitutes. Dedicated
+`SUB` rows remain intact. It also preserves old retirement bits in
+`legacy_is_retired`. These imported or defaulted bits have no verified source
+provenance. `is_retired` therefore remains `NULL` until evidence establishes the
+status. Do not infer a player is active from a defaulted zero.

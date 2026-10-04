@@ -268,7 +268,8 @@ CREATE TABLE players (
   date_of_birth TEXT,
   height_cm INTEGER,
   weight_kg INTEGER,
-  is_retired INTEGER DEFAULT 0
+  legacy_is_retired INTEGER DEFAULT 0,
+  is_retired INTEGER DEFAULT NULL CHECK(is_retired IN (0,1))
 );
 
 CREATE TABLE public_input_revision (
@@ -959,7 +960,7 @@ CREATE TRIGGER public_input_players_insert AFTER INSERT ON players BEGIN
 END;
 
 CREATE TRIGGER public_input_players_update AFTER UPDATE ON players
-WHEN OLD.first_name IS NOT NEW.first_name OR OLD.surname IS NOT NEW.surname OR OLD.external_id IS NOT NEW.external_id OR OLD.external_afl_player_id IS NOT NEW.external_afl_player_id OR OLD.date_of_birth IS NOT NEW.date_of_birth OR OLD.height_cm IS NOT NEW.height_cm OR OLD.weight_kg IS NOT NEW.weight_kg OR OLD.is_retired IS NOT NEW.is_retired BEGIN
+WHEN OLD.first_name IS NOT NEW.first_name OR OLD.surname IS NOT NEW.surname OR OLD.external_id IS NOT NEW.external_id OR OLD.external_afl_player_id IS NOT NEW.external_afl_player_id OR OLD.date_of_birth IS NOT NEW.date_of_birth OR OLD.height_cm IS NOT NEW.height_cm OR OLD.weight_kg IS NOT NEW.weight_kg OR OLD.legacy_is_retired IS NOT NEW.legacy_is_retired OR OLD.is_retired IS NOT NEW.is_retired BEGIN
   UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
 END;
 
@@ -1126,3 +1127,34 @@ WHEN OLD.year IS NOT NEW.year OR OLD.competition_id IS NOT NEW.competition_id OR
   UPDATE public_input_revision SET revision=revision+1 WHERE id=1;
 END;
 UPDATE public_input_revision SET revision=revision+1 WHERE id=1;
+
+CREATE TABLE weather_repair_operations (
+  manifest_digest TEXT PRIMARY KEY,
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  manifest_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','complete'))
+);
+-- A cached model window cannot survive a changed kickoff or physical venue.
+CREATE TRIGGER weather_matches_context_update AFTER UPDATE OF date,local_time,kickoff_at,venue_id ON matches
+WHEN OLD.date IS NOT NEW.date OR OLD.local_time IS NOT NEW.local_time
+ OR OLD.kickoff_at IS NOT NEW.kickoff_at OR OLD.venue_id IS NOT NEW.venue_id
+BEGIN
+  DELETE FROM match_weather WHERE match_id=NEW.id;
+  DELETE FROM weather_refresh_state WHERE match_id=NEW.id;
+END;
+
+CREATE TRIGGER weather_venues_context_update AFTER UPDATE OF latitude,longitude,timezone,canonical_venue_id ON venues
+WHEN OLD.latitude IS NOT NEW.latitude OR OLD.longitude IS NOT NEW.longitude
+ OR OLD.timezone IS NOT NEW.timezone OR OLD.canonical_venue_id IS NOT NEW.canonical_venue_id
+BEGIN
+  DELETE FROM match_weather WHERE match_id IN (
+    SELECT id FROM matches WHERE venue_id IN (
+      SELECT id FROM venues WHERE id=NEW.id OR canonical_venue_id=NEW.id
+    )
+  );
+  DELETE FROM weather_refresh_state WHERE match_id IN (
+    SELECT id FROM matches WHERE venue_id IN (
+      SELECT id FROM venues WHERE id=NEW.id OR canonical_venue_id=NEW.id
+    )
+  );
+END;

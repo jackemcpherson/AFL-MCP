@@ -76,11 +76,17 @@ const CANONICAL_VENUE_JOIN = `
  * @param env - Worker bindings.
  * @param fetchImpl - `fetch` in production; a stub in tests.
  * @param now - Injected clock for cadence tiers and `fetched_at` stamps.
+ * @param matchId - Optional exact fixture for a reviewed operator refresh.
  */
-export async function runWeatherStage(env: Env, fetchImpl: typeof fetch, now: Date): Promise<void> {
+export async function runWeatherStage(
+  env: Env,
+  fetchImpl: typeof fetch,
+  now: Date,
+  matchId: number | null = null,
+): Promise<void> {
   try {
-    const cleaned = await cleanupCancelledWeather(env);
-    const jobs = await selectNeedsWork(env, now);
+    const cleaned = await cleanupCancelledWeather(env, matchId);
+    const jobs = await selectNeedsWork(env, now, matchId);
     let written = 0;
     // Sequential on purpose: one in-flight request at a time keeps the
     // stage gentle on Open-Meteo's free tier (not a Promise.all candidate).
@@ -129,18 +135,20 @@ export async function runWeatherStage(env: Env, fetchImpl: typeof fetch, now: Da
   }
 }
 
-async function cleanupCancelledWeather(env: Env): Promise<number> {
+async function cleanupCancelledWeather(env: Env, matchId: number | null): Promise<number> {
   const result = await env.DB.prepare(
-    "DELETE FROM match_weather WHERE match_id IN (SELECT id FROM matches WHERE status = 'Cancelled')",
-  ).run();
+    "DELETE FROM match_weather WHERE match_id IN (SELECT id FROM matches WHERE status = 'Cancelled' AND (?1 IS NULL OR id=?1))",
+  )
+    .bind(matchId)
+    .run();
   return result.meta.changes;
 }
 
-async function selectNeedsWork(env: Env, now: Date): Promise<WeatherJob[]> {
+async function selectNeedsWork(env: Env, now: Date, matchId: number | null): Promise<WeatherJob[]> {
   const [forecast, fastObserved, finalObserved] = await Promise.all([
-    selectForecastCandidates(env, now),
-    selectFastObservedCandidates(env, now),
-    selectFinalObservedCandidates(env, now),
+    selectForecastCandidates(env, now, matchId),
+    selectFastObservedCandidates(env, now, matchId),
+    selectFinalObservedCandidates(env, now, matchId),
   ]);
   return [
     ...forecast.map(
@@ -179,7 +187,11 @@ async function selectNeedsWork(env: Env, now: Date): Promise<WeatherJob[]> {
  * Postponed matches need no special case: the tiers compute from the current
  * match datetime, so a fixture change self-corrects within a day.
  */
-async function selectForecastCandidates(env: Env, now: Date): Promise<CandidateRow[]> {
+async function selectForecastCandidates(
+  env: Env,
+  now: Date,
+  matchId: number | null,
+): Promise<CandidateRow[]> {
   const today = toMelbourneDate(now);
   const nowMelbourne = `${today} ${toMelbourneTime(now)}`;
   const horizon = addDaysToIsoDate(today, FORECAST_HORIZON_DAYS);
@@ -191,10 +203,11 @@ async function selectForecastCandidates(env: Env, now: Date): Promise<CandidateR
      WHERE (m.status IS NULL OR m.status NOT IN ('Complete', 'Cancelled'))
        AND m.date || ' ' || COALESCE(m.local_time, '23:59:59') > ?1
        AND m.date <= ?2
+       AND (?3 IS NULL OR m.id=?3)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
      ORDER BY m.date, m.id`,
   )
-    .bind(nowMelbourne, horizon)
+    .bind(nowMelbourne, horizon, matchId)
     .all<CandidateRow>();
   return rows.results.filter((row) => forecastIsStale(row, now)).slice(0, MAX_FETCHES_PER_QUERY);
 }
@@ -224,7 +237,11 @@ function forecastIsStale(row: CandidateRow, now: Date): boolean {
  * fast-written from the Historical Forecast API on the first hourly pass
  * after completion.
  */
-async function selectFastObservedCandidates(env: Env, now: Date): Promise<CandidateRow[]> {
+async function selectFastObservedCandidates(
+  env: Env,
+  now: Date,
+  matchId: number | null,
+): Promise<CandidateRow[]> {
   const rows = await env.DB.prepare(
     `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
      FROM matches m
@@ -233,6 +250,7 @@ async function selectFastObservedCandidates(env: Env, now: Date): Promise<Candid
      WHERE m.status = 'Complete'
        AND (w.match_id IS NULL OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND m.date > ?1
+       AND (?4 IS NULL OR m.id=?4)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
          AND r.kind='observed' AND r.source='historical_forecast' AND r.failures>0
@@ -240,7 +258,7 @@ async function selectFastObservedCandidates(env: Env, now: Date): Promise<Candid
      ORDER BY m.date DESC, m.id
      LIMIT ?2`,
   )
-    .bind(finalCutoffDate(now), MAX_FETCHES_PER_QUERY, now.toISOString())
+    .bind(finalCutoffDate(now), MAX_FETCHES_PER_QUERY, now.toISOString(), matchId)
     .all<CandidateRow>();
   return rows.results;
 }
@@ -260,7 +278,11 @@ function finalCutoffDate(now: Date): string {
  * from the archive API. Pre-status legacy rows count as completed when they
  * have points.
  */
-async function selectFinalObservedCandidates(env: Env, now: Date): Promise<CandidateRow[]> {
+async function selectFinalObservedCandidates(
+  env: Env,
+  now: Date,
+  matchId: number | null,
+): Promise<CandidateRow[]> {
   const rows = await env.DB.prepare(
     `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
      FROM matches m
@@ -268,6 +290,7 @@ async function selectFinalObservedCandidates(env: Env, now: Date): Promise<Candi
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
      WHERE (m.status = 'Complete' OR (m.status IS NULL AND m.home_points IS NOT NULL))
        AND m.date <= ?1
+       AND (?5 IS NULL OR m.id=?5)
        AND (w.match_id IS NULL OR w.source <> ?2 OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
@@ -276,7 +299,13 @@ async function selectFinalObservedCandidates(env: Env, now: Date): Promise<Candi
      ORDER BY m.date DESC, m.id
      LIMIT ?3`,
   )
-    .bind(finalCutoffDate(now), OBSERVED_FINAL_SOURCE, MAX_FETCHES_PER_QUERY, now.toISOString())
+    .bind(
+      finalCutoffDate(now),
+      OBSERVED_FINAL_SOURCE,
+      MAX_FETCHES_PER_QUERY,
+      now.toISOString(),
+      matchId,
+    )
     .all<CandidateRow>();
   return rows.results;
 }
