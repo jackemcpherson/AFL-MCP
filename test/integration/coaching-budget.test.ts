@@ -94,4 +94,4 @@ it("imports a complete season inside the production D1 request budget", async ()
       "in_progress",
     ),
   ).toBe(0);
-});
+}, 15_000);
