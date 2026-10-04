@@ -468,11 +468,11 @@ export const COVERAGE_EXPECTATIONS = {
     },
     match_lineups: {
       ...CORE,
-      // Pre-2023 AFL API rosters are announced teams, not who played, so
-      // the sync's MIN_LINEUP_SYNC_YEAR guard excludes them by design.
-      range: "2023..current",
+      range: "2022-S7..current",
       expected: "partial",
-      notes: [],
+      notes: [
+        "Season-seven rosters require exact agreement with recorded player-team appearances; earlier announced teams remain excluded.",
+      ],
     },
     match_weather: { ...MATCH_WEATHER_BASE, range: "2017..current" },
     match_predictions: MATCH_PREDICTIONS,

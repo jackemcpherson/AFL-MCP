@@ -840,7 +840,8 @@ export async function upsertLineups(
 ): Promise<number> {
   let changes = 0;
   for (const lineup of lineups) {
-    if (lineup.season < MIN_LINEUP_SYNC_YEAR) continue;
+    const verifiedSeasonSeven = lineup.competition === "AFLW" && lineup.seasonKey === "2022-S7";
+    if (lineup.season < MIN_LINEUP_SYNC_YEAR && !verifiedSeasonSeven) continue;
     const matchId = matchMap.get(lineup.matchId);
     const home = teamMap.get(
       normaliseTeamForMatch(lineup.homeTeam, lineup.competition, lineup.season),
@@ -880,6 +881,35 @@ export async function upsertLineups(
         `Rejected incomplete or duplicate lineup for ${matchId}`,
       );
       continue;
+    }
+    if (verifiedSeasonSeven) {
+      if (players.length !== 42 || players.some((p) => p.is_emergency === 1)) {
+        await logSync(
+          env,
+          "sync:lineups:invalid",
+          0,
+          `Season-seven roster is not exactly 42 participants for ${matchId}`,
+        );
+        continue;
+      }
+      const appearances = await env.DB.prepare(
+        "SELECT player_id,team_id FROM player_match_stats WHERE match_id=?1",
+      )
+        .bind(matchId)
+        .all<{ player_id: number; team_id: number }>();
+      const actual = new Set(appearances.results.map((p) => `${p.player_id}:${p.team_id}`));
+      if (
+        actual.size !== players.length ||
+        players.some((p) => !actual.has(`${p.player_id}:${p.team_id}`))
+      ) {
+        await logSync(
+          env,
+          "sync:lineups:invalid",
+          0,
+          `Season-seven roster differs from recorded appearances for ${matchId}`,
+        );
+        continue;
+      }
     }
     // Each snapshot replaces exactly one fixture in one native transaction. The fixture
     // guard is repeated so a concurrent identity change cannot attach the old lineup.

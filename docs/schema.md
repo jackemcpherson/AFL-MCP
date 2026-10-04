@@ -136,9 +136,10 @@ when late team changes arrive.
   minutes before kickoff.
 - AFLM 2015+ via AFL API. AFLW, VFL, and VFLW 2023+ (best-effort for the VFL
   competitions - fitzroy may return empty for some rounds). The AFL API only
-  publishes the Thursday-night announced team for pre-2023 seasons, so the
-  sync's `MIN_LINEUP_SYNC_YEAR` guard excludes them. 2021 - 2022 AFLM rows are
-  instead derived from `player_match_stats`.
+  historical roster can represent an announced selection. The sync therefore
+  excludes pre-2023 rosters except exact AFLW `2022-S7` snapshots whose complete
+  player-team sets agree with recorded appearances. 2021 - 2022 AFLM rows remain
+  derived from `player_match_stats`.
 
 ### `match_weather`
 
