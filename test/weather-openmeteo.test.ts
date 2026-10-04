@@ -67,6 +67,7 @@ describe("openMeteoUrl", () => {
     expect(url.searchParams.get("start_date")).toBe("2026-07-17");
     expect(url.searchParams.get("end_date")).toBe("2026-07-19");
     expect(url.searchParams.get("timezone")).toBe("Australia/Melbourne");
+    expect(url.searchParams.get("timeformat")).toBe("unixtime");
     expect(url.searchParams.get("models")).toBeNull();
   });
 

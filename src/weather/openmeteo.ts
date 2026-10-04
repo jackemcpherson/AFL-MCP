@@ -50,7 +50,8 @@ export interface WeatherRequest {
  * precipitation window and the day after keeps midnight-crossing match
  * windows complete (a 22:40 start needs 00:00 on the next day).
  * `timezone=Australia/Melbourne` always, because D1 match timestamps are
- * Melbourne-local regardless of venue (#126).
+ * Melbourne-local regardless of venue (#126). UTC epoch seconds preserve
+ * distinct elapsed hours when the Melbourne clock repeats.
  *
  * @param apiBase - One of {@link FORECAST_API}, {@link HISTORICAL_FORECAST_API},
  *   or {@link ARCHIVE_API}.
@@ -69,6 +70,7 @@ export function openMeteoUrl(
     longitude: String(request.longitude),
     hourly: OPEN_METEO_HOURLY_VARIABLES,
     timezone: "Australia/Melbourne",
+    timeformat: "unixtime",
     start_date: addDaysToIsoDate(request.date, -1),
     end_date: addDaysToIsoDate(request.date, 1),
   });

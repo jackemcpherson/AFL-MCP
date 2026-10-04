@@ -117,8 +117,10 @@ owner cannot clear a successor's marker or continue writing public inputs.
 ## Weather and Audit Observations
 
 Weather windows use Melbourne fixture times and elapsed hours across daylight
-saving changes, including fixtures played in Perth or Adelaide. Missing samples,
-unknown kickoffs and ambiguous repeated hours remain unknown. No process
+saving changes, including fixtures played in Perth or Adelaide. UTC epoch
+timestamps distinguish repeated provider hours. Missing samples and unknown
+kickoffs remain unknown. Legacy local captures keep repeated hours unknown.
+No process
 substitutes noon, zero rainfall or a roof position for missing evidence.
 
 Partial weather retries daily. After the initial failure and three unsuccessful
