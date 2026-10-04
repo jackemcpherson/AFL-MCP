@@ -5,6 +5,16 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.6] - 2026-10-04
+
+Restore the verified season-seven lineup backfill.
+
+### Fixed in 4.0.6
+
+- Ingest AFLW season-seven rosters when their complete player-team selections
+  agree with recorded appearances. Preserve historical announced-team guards
+  for other pre-2023 seasons and reject unmatched selections.
+
 ## [4.0.5] - 2026-10-04
 
 Correct lineup flags and expose unknown retirement status honestly. Support

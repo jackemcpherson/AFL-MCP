@@ -110,3 +110,56 @@ describe("unionPlayers", () => {
     expect(merged).toHaveLength(1);
   });
 });
+
+it("accepts season-seven rosters only when every player-team appearance agrees", async () => {
+  const competitionId = await ensureCompetition(env, "AFLW");
+  const seasonId = await ensureSeason(env, competitionId, "2022-S7");
+  const match = makeMatch({ competition: "AFLW", season: 2022, seasonKey: "2022-S7" });
+  const teamMap = await ensureTeams(env, competitionId, "AFLW", [match]);
+  const venueMap = await ensureVenues(env, [match]);
+  await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+  const matchMap = await buildMatchAflIdMap(env, seasonId);
+  const lineup = makeLineup({
+    competition: "AFLW",
+    season: 2022,
+    seasonKey: "2022-S7",
+    homePlayers: Array.from({ length: 21 }, (_, i) => makeLineupPlayer({ playerId: `S7H-${i}` })),
+    awayPlayers: Array.from({ length: 21 }, (_, i) => makeLineupPlayer({ playerId: `S7A-${i}` })),
+  });
+  const players = await upsertPlayers(env, unionPlayers([], [lineup]));
+  expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(0);
+  const matchId = matchMap.get(lineup.matchId);
+  await env.DB.batch([
+    ...[...lineup.homePlayers].map((p) =>
+      env.DB.prepare(
+        "INSERT INTO player_match_stats(match_id,player_id,team_id) VALUES(?1,?2,?3)",
+      ).bind(matchId, players.get(p.playerId), teamMap.get(lineup.homeTeam)),
+    ),
+    ...lineup.awayPlayers.map((p) =>
+      env.DB.prepare(
+        "INSERT INTO player_match_stats(match_id,player_id,team_id) VALUES(?1,?2,?3)",
+      ).bind(matchId, players.get(p.playerId), teamMap.get(lineup.awayTeam)),
+    ),
+  ]);
+  expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(42);
+  const emergency = makeLineupPlayer({ playerId: "S7-EMG", isEmergency: true });
+  const withEmergency = { ...lineup, homePlayers: [...lineup.homePlayers, emergency] };
+  const expandedPlayers = await upsertPlayers(env, unionPlayers([], [withEmergency]));
+  await env.DB.prepare(
+    "INSERT INTO player_match_stats(match_id,player_id,team_id) VALUES(?1,?2,?3)",
+  )
+    .bind(matchId, expandedPlayers.get(emergency.playerId), teamMap.get(lineup.homeTeam))
+    .run();
+  expect(await upsertLineups(env, [withEmergency], matchMap, expandedPlayers, teamMap)).toBe(0);
+  await env.DB.prepare("DELETE FROM player_match_stats WHERE player_id=?1")
+    .bind(expandedPlayers.get(emergency.playerId))
+    .run();
+  await env.DB.prepare("UPDATE player_match_stats SET team_id=?1 WHERE player_id=?2")
+    .bind(teamMap.get(lineup.awayTeam), players.get("S7H-0"))
+    .run();
+  expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(0);
+  expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM match_lineups").first("n")).toBe(42);
+  expect(
+    await upsertLineups(env, [{ ...lineup, seasonKey: "2022-S6" }], matchMap, players, teamMap),
+  ).toBe(0);
+});
