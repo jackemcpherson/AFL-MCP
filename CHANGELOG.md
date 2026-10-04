@@ -5,6 +5,16 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.2] - 2026-10-04
+
+Complete historical coaching imports within the database request budget.
+
+### Fixed in 4.0.2
+
+- Read season reconciliation inputs together and batch coaching observations,
+  assignments and provider links. Retain the interrupted operation marker and
+  source checkpoint for explicit recovery after a failed import.
+
 ## [4.0.1] - 2026-10-04
 
 Enable explicit season keys after deploying compatible consumers.

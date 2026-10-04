@@ -17,6 +17,7 @@ type CoachProvider = "afl-tables" | "footywire";
 interface MatchCandidate {
   readonly id: number;
   readonly season_id: number;
+  readonly external_afltables_id: string | null;
   readonly competition_id: number;
   readonly date: string;
   readonly home_team_id: number;
@@ -84,6 +85,45 @@ export async function ingestMatchCoachResult(
   const failedCoachIds = new Set(
     result.completeness.failures.flatMap((failure) => (failure.coachId ? [failure.coachId] : [])),
   );
+  const [matches, crosswalks, identities, currentAssignments] = await env.DB.batch<
+    Record<string, unknown>
+  >([
+    env.DB.prepare(`${MATCH_PROJECTION} WHERE c.code='AFLM' AND s.year=?1`).bind(season),
+    env.DB.prepare(`SELECT x.external_match_id,x.match_id FROM coach_external_match_ids x
+      JOIN matches m ON m.id=x.match_id JOIN seasons s ON s.id=m.season_id
+      WHERE x.provider=?1 AND s.year=?2 AND s.competition_id=(SELECT id FROM competitions WHERE code='AFLM')`).bind(
+      source,
+      season,
+    ),
+    env.DB.prepare(
+      "SELECT external_coach_id,coach_id,verified FROM coach_external_ids WHERE provider=?1",
+    ).bind(source),
+    env.DB.prepare(`SELECT mc.match_id,mc.team_id,mc.coach_id FROM match_coaches mc
+      JOIN matches m ON m.id=mc.match_id JOIN seasons s ON s.id=m.season_id
+      WHERE s.year=?1 AND s.competition_id=(SELECT id FROM competitions WHERE code='AFLM')`).bind(
+      season,
+    ),
+  ]);
+  if (!matches || !crosswalks || !identities || !currentAssignments)
+    throw new Error("Coaching reconciliation inputs are unavailable");
+  const seasonMatches = matches.results as unknown as MatchCandidate[];
+  const matchCrosswalk = new Map(
+    crosswalks.results.map((row) => [String(row.external_match_id), Number(row.match_id)]),
+  );
+  const coachIdentities = new Map(
+    identities.results.map((row) => [
+      String(row.external_coach_id),
+      { coach_id: String(row.coach_id), verified: Number(row.verified) },
+    ]),
+  );
+  const existingAssignments = new Map(
+    currentAssignments.results.map((row) => [
+      `${row.match_id}:${row.team_id}`,
+      String(row.coach_id),
+    ]),
+  );
+  const coaches = new Map<string, string>();
+  const writes: D1PreparedStatement[] = [];
   let resolved = 0;
   let unresolved = 0;
   let conflicts = 0;
@@ -115,7 +155,7 @@ export async function ingestMatchCoachResult(
         );
       continue;
     }
-    const candidate = await resolveMatch(env, assignment);
+    const candidate = resolveMatch(seasonMatches, matchCrosswalk, assignment);
     if (candidate.status === "ambiguous") {
       unresolved++;
       if (!dryRun)
@@ -157,15 +197,13 @@ export async function ingestMatchCoachResult(
       continue;
     }
     const teamName = normaliseTeamForMatch(assignment.team, "AFLM", season);
-    const sideIds = [match.home_team_id, match.away_team_id];
-    const teamRow = await env.DB.prepare(
-      "SELECT id, name, competition_id FROM teams WHERE id IN (?1, ?2) AND name = ?3 LIMIT 2",
-    )
-      .bind(...sideIds, teamName)
-      .all<{ id: number; name: string; competition_id: number }>();
-    const validTeam = teamRow.results.find(
-      (team) => team.competition_id === match.home_competition_id && sideIds.includes(team.id),
-    );
+    const teamId =
+      teamName === match.home_name
+        ? match.home_team_id
+        : teamName === match.away_name
+          ? match.away_team_id
+          : null;
+    const validTeam = teamId === null ? null : { id: teamId };
     if (!validTeam || match.home_competition_id !== match.away_competition_id) {
       unresolved++;
       if (!dryRun)
@@ -183,11 +221,7 @@ export async function ingestMatchCoachResult(
     const key = `${match.id}:${validTeam.id}`;
     if (resolvedKeys.has(key)) duplicateKeys.add(key);
     resolvedKeys.add(key);
-    const identity = await env.DB.prepare(
-      "SELECT coach_id, verified FROM coach_external_ids WHERE provider = ?1 AND external_coach_id = ?2",
-    )
-      .bind(source, assignment.coachId)
-      .first<{ coach_id: string; verified: number }>();
+    const identity = coachIdentities.get(assignment.coachId);
     if (identity && identity.coach_id !== assignment.coachId && identity.verified !== 1) {
       unresolved++;
       if (!dryRun)
@@ -220,46 +254,29 @@ export async function ingestMatchCoachResult(
       continue;
     }
     resolved++;
-    const existingAssignment = await env.DB.prepare(
-      "SELECT coach_id FROM match_coaches WHERE match_id = ?1 AND team_id = ?2",
-    )
-      .bind(match.id, teamId)
-      .first<{ coach_id: string }>();
-    if (dryRun) {
-      const identity = await env.DB.prepare(
-        "SELECT coach_id FROM coach_external_ids WHERE provider = ?1 AND external_coach_id = ?2 AND verified = 1",
-      )
-        .bind(source, assignment.coachId)
-        .first<{ coach_id: string }>();
-      if (
-        source === "footywire" &&
-        existingAssignment &&
-        existingAssignment.coach_id !== (identity?.coach_id ?? assignment.coachId)
-      )
-        conflicts++;
-      continue;
-    }
-    const coachId = await ensureCoach(env, assignment, source, retrievedAt);
-    const observationId = await ensureObservation(
-      env,
-      assignment,
-      source,
-      coachId,
-      match.id,
-      teamId,
-      retrievedAt,
-    );
-    if (source === "footywire" && existingAssignment && existingAssignment.coach_id !== coachId) {
+    const existingAssignment = existingAssignments.get(key);
+    const verifiedIdentity = coachIdentities.get(assignment.coachId);
+    const canonicalId =
+      verifiedIdentity?.verified === 1 ? verifiedIdentity.coach_id : assignment.coachId;
+    if (source === "footywire" && existingAssignment && existingAssignment !== canonicalId)
       conflicts++;
+    if (dryRun) continue;
+    let coachId = coaches.get(assignment.coachId);
+    if (!coachId) {
+      coachId = await ensureCoach(env, assignment, source, retrievedAt);
+      coaches.set(assignment.coachId, coachId);
     }
+    writes.push(buildObservation(env, assignment, source, coachId, match.id, teamId, retrievedAt));
     if (
       source === "afl-tables" &&
       !failedCoachIds.has(assignment.coachId) &&
       !failuresByCoach.has(assignment.coachName.toLocaleLowerCase())
     ) {
-      const write = await env.DB.prepare(
-        `INSERT INTO match_coaches (match_id, team_id, coach_id, observation_id, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+      writes.push(
+        env.DB.prepare(
+          `INSERT INTO match_coaches (match_id, team_id, coach_id, observation_id, updated_at)
+         SELECT ?1, ?2, ?3, id, ?4 FROM coach_observations
+         WHERE provider=?5 AND external_coach_id=?6 AND external_match_id=?7 AND raw_team=?8
          ON CONFLICT (match_id, team_id) DO UPDATE SET
            coach_id = excluded.coach_id,
            observation_id = excluded.observation_id,
@@ -267,17 +284,29 @@ export async function ingestMatchCoachResult(
          WHERE match_coaches.coach_id IS NOT excluded.coach_id
             OR match_coaches.observation_id IS NOT excluded.observation_id
          RETURNING match_id`,
-      )
-        .bind(match.id, teamId, coachId, observationId, retrievedAt)
-        .all();
-      changed += write.results.length;
+        ).bind(
+          match.id,
+          teamId,
+          coachId,
+          retrievedAt,
+          source,
+          assignment.coachId,
+          assignment.matchId,
+          assignment.team,
+        ),
+      );
     }
-    await env.DB.prepare(
-      `INSERT INTO coach_external_match_ids (provider, external_match_id, match_id)
+    writes.push(
+      env.DB.prepare(
+        `INSERT INTO coach_external_match_ids (provider, external_match_id, match_id)
        VALUES (?1, ?2, ?3) ON CONFLICT (provider, external_match_id) DO NOTHING`,
-    )
-      .bind(source, assignment.matchId, match.id)
-      .run();
+      ).bind(source, assignment.matchId, match.id),
+    );
+  }
+
+  for (let offset = 0; offset < writes.length; offset += 100) {
+    const results = await env.DB.batch(writes.slice(offset, offset + 100));
+    changed += results.reduce((sum, result) => sum + result.results.length, 0);
   }
 
   if (
@@ -576,7 +605,7 @@ const CoachAssignmentsSchema = z.array(
   }),
 );
 
-const MATCH_PROJECTION = `SELECT m.id, m.season_id, s.competition_id, m.date, m.home_team_id, m.away_team_id,
+const MATCH_PROJECTION = `SELECT m.id, m.season_id, m.external_afltables_id, s.competition_id, m.date, m.home_team_id, m.away_team_id,
   h.name AS home_name, a.name AS away_name,
   h.competition_id AS home_competition_id, a.competition_id AS away_competition_id,
   m.home_points, m.away_points FROM matches m
@@ -626,43 +655,37 @@ function matchesEvidence(
   );
 }
 
-async function resolveMatch(
-  env: Env,
+function resolveMatch(
+  matches: readonly MatchCandidate[],
+  crosswalk: ReadonlyMap<string, number>,
   assignment: MatchCoachAssignment,
-): Promise<{ readonly status: "none" | "ambiguous" | "found"; readonly match?: MatchCandidate }> {
-  const external = await env.DB.prepare(`${MATCH_PROJECTION}
-    JOIN coach_external_match_ids x ON x.match_id = m.id
-    WHERE x.provider = ?1 AND x.external_match_id = ?2 AND s.year = ?3 AND c.code = 'AFLM'`)
-    .bind(assignment.source, assignment.matchId, assignment.season)
-    .first<MatchCandidate>();
+): { readonly status: "none" | "ambiguous" | "found"; readonly match?: MatchCandidate } {
+  const externalId = crosswalk.get(assignment.matchId);
+  const external = matches.find((match) => match.id === externalId);
   if (external)
     return matchesEvidence(external, assignment, false)
       ? { status: "found", match: external }
       : { status: "none" };
-
   if (assignment.source === "afl-tables") {
     const sourceId = assignment.matchId.replace(/^afl-tables:/, "");
     const gameId = /\/([^/]+)\.html$/.exec(assignment.matchUrl)?.[1] ?? sourceId;
-    const references = await env.DB.prepare(`${MATCH_PROJECTION}
-      WHERE c.code = 'AFLM' AND s.year = ?1 AND m.external_afltables_id IN (?2, ?3, ?4, ?5)`)
-      .bind(assignment.season, sourceId, assignment.matchUrl, gameId, `AT_${gameId}`)
-      .all<MatchCandidate>();
-    if (references.results.length > 1) return { status: "ambiguous" };
-    const reference = references.results[0];
+    const ids = new Set([sourceId, assignment.matchUrl, gameId, `AT_${gameId}`]);
+    const references = matches.filter(
+      (match) => match.external_afltables_id !== null && ids.has(match.external_afltables_id),
+    );
+    if (references.length > 1) return { status: "ambiguous" };
+    const reference = references[0];
     if (reference)
       return matchesEvidence(reference, assignment, false)
         ? { status: "found", match: reference }
         : { status: "none" };
   }
   if (!assignment.date) return { status: "none" };
-  const candidates = await env.DB.prepare(`${MATCH_PROJECTION}
-    WHERE c.code = 'AFLM' AND s.year = ?1 AND m.date = ?2`)
-    .bind(assignment.season, assignment.date)
-    .all<MatchCandidate>();
-  const verified = candidates.results.filter((match) => matchesEvidence(match, assignment, true));
+  const verified = matches.filter(
+    (match) => match.date === assignment.date && matchesEvidence(match, assignment, true),
+  );
   if (verified.length > 1) return { status: "ambiguous" };
-  const match = verified[0];
-  return match ? { status: "found", match } : { status: "none" };
+  return verified[0] ? { status: "found", match: verified[0] } : { status: "none" };
 }
 
 async function ensureCoach(
@@ -695,7 +718,7 @@ async function ensureCoach(
   return internalId;
 }
 
-async function ensureObservation(
+function buildObservation(
   env: Env,
   assignment: MatchCoachAssignment,
   source: CoachProvider,
@@ -703,8 +726,8 @@ async function ensureObservation(
   matchId: number,
   teamId: number,
   now: string,
-): Promise<number> {
-  await env.DB.prepare(
+): D1PreparedStatement {
+  return env.DB.prepare(
     `INSERT INTO coach_observations
       (provider, external_coach_id, external_match_id, coach_id, match_id, team_id, season,
        source_url, retrieved_at, match_date, display_name, raw_team, home_points, away_points)
@@ -714,31 +737,22 @@ async function ensureObservation(
        season = excluded.season, source_url = excluded.source_url, retrieved_at = excluded.retrieved_at,
        match_date = excluded.match_date, display_name = excluded.display_name,
        home_points = excluded.home_points, away_points = excluded.away_points`,
-  )
-    .bind(
-      source,
-      assignment.coachId,
-      assignment.matchId,
-      coachId,
-      matchId,
-      teamId,
-      assignment.season,
-      assignment.matchUrl,
-      now,
-      assignment.date,
-      assignment.coachName,
-      assignment.team,
-      assignment.homePoints,
-      assignment.awayPoints,
-    )
-    .run();
-  const row = await env.DB.prepare(
-    "SELECT id FROM coach_observations WHERE provider = ?1 AND external_coach_id = ?2 AND external_match_id = ?3 AND raw_team = ?4",
-  )
-    .bind(source, assignment.coachId, assignment.matchId, assignment.team)
-    .first<{ id: number }>();
-  if (!row) throw new Error("Coach observation insert did not return an ID");
-  return row.id;
+  ).bind(
+    source,
+    assignment.coachId,
+    assignment.matchId,
+    coachId,
+    matchId,
+    teamId,
+    assignment.season,
+    assignment.matchUrl,
+    now,
+    assignment.date,
+    assignment.coachName,
+    assignment.team,
+    assignment.homePoints,
+    assignment.awayPoints,
+  );
 }
 
 async function writeDiagnostic(
