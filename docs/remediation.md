@@ -67,7 +67,8 @@ If the verified person has no separate row, choose an unused `canonicalId`
 within `playerIds` and include `newPerson` with `firstName`, `surname`,
 `dateOfBirth` and source `evidence`. Preview creates nothing. Apply creates the
 new person and reassigns the exact appearances atomically. The existing person
-and history outside the selected matches remain intact. A failed transaction retains its marker
+and history outside the selected matches remain intact. A failed transaction
+retains its marker
 without creating a partial identity.
 
 Set `resume: true` with the approved digest after an interruption. A successful
