@@ -21,6 +21,14 @@ const EvidenceSchema = z.strictObject({
 export const IdentityRepairRequestSchema = z.strictObject({
   kind: z.enum(["merge", "reassign-appearances"]).default("merge"),
   canonicalId: z.number().int().positive().optional(),
+  newPerson: z
+    .strictObject({
+      firstName: z.string().min(1),
+      surname: z.string().min(1),
+      dateOfBirth: z.iso.date(),
+      evidence: EvidenceSchema,
+    })
+    .optional(),
   matchIds: z.array(z.number().int().positive()).max(500).default([]),
   playerIds: z.array(z.number().int().positive()).min(2).max(10),
   evidence: z.array(EvidenceSchema).min(1),
@@ -151,6 +159,10 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       "An explicit target must belong to an appearance reassignment group",
     );
   const canonicalId = request.canonicalId ?? ids[0];
+  if (request.newPerson && (!scoped || request.canonicalId === undefined))
+    throw new OperationConflictError(
+      "A new person requires an explicit scoped reassignment target",
+    );
   if (ids.length < 2 || canonicalId === undefined)
     throw new OperationConflictError("At least two distinct player IDs are required");
   if (
@@ -186,12 +198,14 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         const recorded = JSON.parse(prior.manifest_json) as {
           ids: number[];
           canonicalId?: number;
+          newPerson?: RepairRequest["newPerson"];
           kind?: string;
           matchIds?: number[];
         };
         if (
           JSON.stringify(recorded.ids) !== JSON.stringify(ids) ||
           (recorded.canonicalId ?? ids[0]) !== canonicalId ||
+          JSON.stringify(recorded.newPerson) !== JSON.stringify(request.newPerson) ||
           (recorded.kind ?? "merge") !== request.kind ||
           JSON.stringify(recorded.matchIds ?? []) !==
             JSON.stringify(scoped ? JSON.parse(scope ?? "[]") : [])
@@ -277,7 +291,9 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         "Group includes a retired ID; use its approved repair digest or canonical ID",
       );
     const players = snapshots[0]?.results ?? [];
-    if (players.length !== ids.length)
+    if (request.newPerson && players.some((player) => player.id === canonicalId))
+      throw new OperationConflictError("The reviewed new person target already exists");
+    if (players.length !== ids.length - (request.newPerson ? 1 : 0))
       throw new OperationConflictError("An identity group member no longer exists");
     const datesOfBirth = [
       ...new Set(
@@ -331,6 +347,7 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       kind: request.kind,
       matchIds: scoped ? JSON.parse(scope ?? "[]") : [],
       canonicalId,
+      ...(request.newPerson ? { newPerson: request.newPerson } : {}),
       evidence: request.evidence,
       providerIdentities: request.providerIdentities,
       dateOfBirth: !scoped && datesOfBirth.length === 1 ? datesOfBirth[0] : null,
@@ -362,20 +379,30 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       throw new OperationConflictError("Conflicting dates of birth block this identity group");
     if (digest !== request.manifestDigest)
       throw new OperationConflictError("Identity repair preview is stale or not approved");
-    if (!prepared) {
-      await env.DB.prepare(
-        "INSERT INTO identity_repair_operations(manifest_digest, canonical_id, manifest_json, status, applied_at) VALUES(?1,?2,?3,'prepared',?4)",
-      )
-        .bind(digest, canonicalId, JSON.stringify(manifest), new Date().toISOString())
-        .run();
-    }
+    const prepareOperation = env.DB.prepare(
+      "INSERT INTO identity_repair_operations(manifest_digest, canonical_id, manifest_json, status, applied_at) VALUES(?1,?2,?3,'prepared',?4)",
+    ).bind(digest, canonicalId, JSON.stringify(manifest), new Date().toISOString());
+    if (!prepared && !request.newPerson) await prepareOperation.run();
     const marker = await env.DB.prepare(
       "SELECT in_progress FROM public_input_revision WHERE id=1",
     ).first<number>("in_progress");
-    if (prepared && marker === 1) await resumePublicInputWrite(env, holder, `identity:${digest}`);
+    if ((prepared || request.resume) && marker === 1)
+      await resumePublicInputWrite(env, holder, `identity:${digest}`);
     else await beginPublicInputWrite(env, holder, new Date(), `identity:${digest}`);
     marked = true;
     const statements: D1PreparedStatement[] = [publicInputWriteFence(env, holder)];
+    if (request.newPerson)
+      statements.push(
+        env.DB.prepare(
+          "INSERT INTO players(id,first_name,surname,date_of_birth) VALUES(?1,?2,?3,?4)",
+        ).bind(
+          canonicalId,
+          request.newPerson.firstName,
+          request.newPerson.surname,
+          request.newPerson.dateOfBirth,
+        ),
+      );
+    if (request.newPerson) statements.push(prepareOperation);
     for (const [table, merged] of [
       ["player_match_stats", stats],
       ["match_lineups", lineups],

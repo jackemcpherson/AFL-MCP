@@ -284,3 +284,106 @@ it("rejects explicit targets outside scoped reassignment", async () => {
   ).rejects.toThrow();
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_match_stats").first("n")).toBe(2);
 });
+
+it("splits a verified new person atomically without changing the source person's history", async () => {
+  await seed();
+  const competition = await ensureCompetition(env, "AFLM");
+  const season = await ensureSeason(env, competition, 2026);
+  const historical = makeMatch({
+    matchId: "SPLIT-UNSELECTED-HISTORY",
+    roundNumber: 2,
+    date: new Date("2026-06-01T04:00:00Z"),
+  });
+  const teamMap = await ensureTeams(env, competition, "AFLM", [historical]);
+  const venueMap = await ensureVenues(env, [historical]);
+  await upsertMatches(env, [historical], { seasonId: season, teamMap, venueMap });
+  await env.DB.prepare(
+    "INSERT INTO player_match_stats(match_id,player_id,team_id,kicks) SELECT id,10974,home_team_id,11 FROM matches WHERE external_afl_id='SPLIT-UNSELECTED-HISTORY'",
+  ).run();
+  const selected = await env.DB.prepare(
+    "SELECT id FROM matches WHERE external_afl_id='M-1'",
+  ).first<number>("id");
+  if (!selected) throw new Error("Missing fixture");
+  const evidence = request.evidence[0];
+  if (!evidence) throw new Error("Missing evidence");
+  const split = IdentityRepairRequestSchema.parse({
+    ...request,
+    kind: "reassign-appearances",
+    playerIds: [10974, 12000],
+    canonicalId: 12000,
+    matchIds: [selected],
+    providerIdentities: [{ provider: "afl-api", providerId: "B", evidence }],
+    newPerson: {
+      firstName: "Verified",
+      surname: "Separate person",
+      dateOfBirth: "2001-05-20",
+      evidence,
+    },
+  });
+  const preview = await repairPlayerIdentity(env, split);
+  if (!("manifestDigest" in preview) || !preview.manifestDigest) throw new Error("Missing preview");
+  expect(await env.DB.prepare("SELECT id FROM players WHERE id=12000").first("id")).toBeNull();
+  await env.DB.prepare(
+    "CREATE TRIGGER fail_split BEFORE UPDATE ON player_match_stats BEGIN SELECT RAISE(ABORT,'injected split failure'); END",
+  ).run();
+  try {
+    await expect(
+      repairPlayerIdentity(env, {
+        ...split,
+        dryRun: false,
+        manifestDigest: preview.manifestDigest,
+      }),
+    ).rejects.toThrow("injected split failure");
+    expect(await env.DB.prepare("SELECT id FROM players WHERE id=12000").first("id")).toBeNull();
+    expect(
+      await env.DB.prepare("SELECT player_id FROM player_provider_ids WHERE provider_id='B'").first(
+        "player_id",
+      ),
+    ).toBe(10974);
+  } finally {
+    await env.DB.prepare("DROP TRIGGER fail_split").run();
+  }
+  await repairPlayerIdentity(env, {
+    ...split,
+    dryRun: false,
+    manifestDigest: preview.manifestDigest,
+    resume: true,
+  });
+  expect(
+    await env.DB.prepare(
+      "SELECT date_of_birth,external_afl_player_id FROM players WHERE id=12000",
+    ).first(),
+  ).toEqual({ date_of_birth: "2001-05-20", external_afl_player_id: "B" });
+  expect(
+    await env.DB.prepare("SELECT player_id FROM player_match_stats WHERE player_id=12000").first(
+      "player_id",
+    ),
+  ).toBe(12000);
+  expect(await env.DB.prepare("SELECT id FROM players WHERE id=10974").first("id")).toBe(10974);
+  expect(
+    await env.DB.prepare(
+      "SELECT player_id,kicks FROM player_match_stats WHERE match_id=(SELECT id FROM matches WHERE external_afl_id='SPLIT-UNSELECTED-HISTORY')",
+    ).first(),
+  ).toEqual({ player_id: 10974, kicks: 11 });
+  expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_id_redirects").first("n")).toBe(0);
+  expect(
+    await repairPlayerIdentity(env, {
+      ...split,
+      dryRun: false,
+      manifestDigest: preview.manifestDigest,
+    }),
+  ).toMatchObject({ idempotent: true });
+  await expect(
+    repairPlayerIdentity(env, {
+      ...split,
+      newPerson: {
+        firstName: "Verified",
+        surname: "Separate person",
+        evidence,
+        dateOfBirth: "2002-05-20",
+      },
+      dryRun: false,
+      manifestDigest: preview.manifestDigest,
+    }),
+  ).rejects.toThrow();
+});
