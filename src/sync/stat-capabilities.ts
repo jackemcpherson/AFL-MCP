@@ -6,6 +6,10 @@ import samples from "./stat-field-capabilities.json";
  * must contain it. An all-null sample cannot establish source absence.
  * @param competition - Separate competition discriminator.
  * @param seasonKey - Canonical season selector, preserving AFLW season six/seven.
+
+ * @returns Verified field support, unknown fields and exact capture evidence.
+ * @example
+ * statFieldCapabilities("AFLW", "2022-S7");
  */
 export function statFieldCapabilities(competition: string, seasonKey: string) {
   const sample = samples.samples.find(

@@ -65,6 +65,11 @@ export function nextStatsRefresh(completedAt: Date, now: Date, failures: number)
  * Historical imports use the explicit admin queue rather than an unbounded cron sweep.
  * @param env - Worker bindings.
  * @param now - Observation time.
+
+ * @returns Resolves after persisting recent completed matches without resetting checkpoints.
+ * @throws If the queue write fails.
+ * @example
+ * await queueRecentStatsRefresh(writer, new Date());
  */
 export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void> {
   await env.DB.prepare(`INSERT INTO match_stats_refresh (match_id, completed_observed_at, next_retry_at)

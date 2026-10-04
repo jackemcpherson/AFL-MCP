@@ -6,6 +6,11 @@ import type { Env } from "../types";
  * findings are investigation candidates, never automatic repair instructions.
  * @param env - Worker bindings.
  * @param now - Audit observation time.
+
+ * @returns Resolves after persisting a bounded audit or skipping changing inputs.
+ * @throws If a database query or audit write fails.
+ * @example
+ * await auditNextSeason(env);
  */
 export async function auditNextSeason(env: Env, now = new Date()): Promise<void> {
   const season = await env.DB.prepare(`SELECT s.id, s.season_key, c.code

@@ -8,6 +8,11 @@ import type { Env } from "../types";
  * @param holder - Lease owner token.
  * @param now - Timestamp for recovery diagnostics.
  * @throws If another write is unfinished or the lease is no longer owned.
+
+ * @param operation - Persisted exact operation identity for recovery.
+ * @returns Resolves after acquiring the public marker.
+ * @example
+ * await beginPublicInputWrite(env, holder, new Date(), "stats:operation-id");
  */
 export async function beginPublicInputWrite(
   env: Env,
@@ -35,6 +40,10 @@ export async function beginPublicInputWrite(
  * @param env - Worker bindings.
  * @param holder - Lease owner token used to begin the write.
  * @throws If the marker or unexpired lease belongs to another operation.
+
+ * @returns Resolves after the current owner clears the marker.
+ * @example
+ * await finishPublicInputWrite(env, holder);
  */
 export async function finishPublicInputWrite(env: Env, holder: string): Promise<void> {
   const result = await env.DB.prepare(
@@ -57,6 +66,10 @@ export async function finishPublicInputWrite(env: Env, holder: string): Promise<
  * @param holder - Current lease owner.
  * @param operation - Persisted operation identity verified by the caller.
  * @throws If the marker belongs to another operation or the lease has expired.
+
+ * @returns Resolves after the new owner takes over the matching marker.
+ * @example
+ * await resumePublicInputWrite(env, holder, "stats:operation-id");
  */
 export async function resumePublicInputWrite(
   env: Env,
@@ -82,6 +95,9 @@ export async function resumePublicInputWrite(
  * @param env - Worker bindings.
  * @param holder - Lease owner responsible for this batch.
  * @returns Prepared assertion for an atomic write batch.
+
+ * @example
+ * env.DB.batch([publicInputWriteFence(env, holder), mutation]);
  */
 export function publicInputWriteFence(env: Env, holder: string): D1PreparedStatement {
   return env.DB.prepare(`UPDATE public_input_revision SET in_progress=CASE
@@ -99,6 +115,9 @@ export function publicInputWriteFence(env: Env, holder: string): D1PreparedState
  * @param env - Original Worker bindings.
  * @param holder - Owner of an active public write marker.
  * @returns Bindings for use inside the marked write operation.
+
+ * @example
+ * const writer = protectOperationWrites(env, holder);
  */
 export function protectOperationWrites(env: Env, holder: string): Env {
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();

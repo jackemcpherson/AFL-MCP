@@ -19,6 +19,10 @@ export const VERIFIED_MATCH_CORRECTIONS = {
  * Apply only reviewed source-ID corrections. Raw provider evidence is stored first.
  * @param match - Exact provider fixture.
  * @returns The fixture in the stored historical perspective, with known cancellation respected.
+
+ * @throws If reviewed Grand Final participants no longer match the provider fixture.
+ * @example
+ * const corrected = correctVerifiedMatch(providerMatch);
  */
 export function correctVerifiedMatch(match: Match): Match {
   if (match.competition !== "AFLM" || match.season !== 2015) return match;
