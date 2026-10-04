@@ -283,9 +283,9 @@ CREATE TABLE seasons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   competition_id INTEGER NOT NULL REFERENCES competitions(id),
   year INTEGER NOT NULL, is_complete INTEGER NOT NULL DEFAULT 0,
-  season_key TEXT,
+  season_key TEXT NOT NULL,
   display_name TEXT,
-  UNIQUE (competition_id, year)
+  CHECK(season_key=CAST(year AS TEXT) OR (year=2022 AND season_key IN ('2022-S6','2022-S7')))
 );
 
 CREATE TABLE sync_lease (
@@ -524,10 +524,6 @@ WHEN OLD.source_url IS NOT NEW.source_url AND EXISTS (
   UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
 END;
 
-CREATE TRIGGER public_input_season_update AFTER UPDATE OF year, competition_id ON seasons
-WHEN OLD.year IS NOT NEW.year OR OLD.competition_id IS NOT NEW.competition_id BEGIN
-  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
-END;
 
 CREATE TRIGGER public_input_team_update AFTER UPDATE OF name, competition_id ON teams
 WHEN OLD.name IS NOT NEW.name OR OLD.competition_id IS NOT NEW.competition_id BEGIN
@@ -898,11 +894,6 @@ CREATE TABLE season_provider_ids (
 INSERT INTO season_provider_ids (season_id, provider, provider_season_id)
 SELECT s.id, 'afl-api', '41' FROM seasons s JOIN competitions c ON c.id = s.competition_id
 WHERE c.code = 'AFLW' AND s.season_key = '2022-S6';
-CREATE TRIGGER seasons_legacy_key AFTER INSERT ON seasons WHEN NEW.season_key IS NULL BEGIN
-  UPDATE seasons SET season_key = CASE
-    WHEN NEW.year = 2022 AND NEW.competition_id = (SELECT id FROM competitions WHERE code = 'AFLW')
-      THEN '2022-S6' ELSE CAST(NEW.year AS TEXT) END WHERE id = NEW.id;
-END;
 CREATE TABLE stats_refresh_operations (
   id TEXT PRIMARY KEY,
   season_id INTEGER NOT NULL REFERENCES seasons(id),
@@ -1122,3 +1113,16 @@ BEGIN
     AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
   ON CONFLICT(season_id) DO NOTHING;
 END;
+CREATE TRIGGER seasons_explicit_key_insert BEFORE INSERT ON seasons
+WHEN (NEW.year=2022 AND NEW.competition_id=(SELECT id FROM competitions WHERE code='AFLW') AND NEW.season_key='2022')
+  OR (NEW.season_key IN ('2022-S6','2022-S7') AND NEW.competition_id<>(SELECT id FROM competitions WHERE code='AFLW'))
+BEGIN SELECT RAISE(ABORT,'Ambiguous or invalid competition season key'); END;
+CREATE TRIGGER seasons_explicit_key_update BEFORE UPDATE OF competition_id,year,season_key ON seasons
+WHEN (NEW.year=2022 AND NEW.competition_id=(SELECT id FROM competitions WHERE code='AFLW') AND NEW.season_key='2022')
+  OR (NEW.season_key IN ('2022-S6','2022-S7') AND NEW.competition_id<>(SELECT id FROM competitions WHERE code='AFLW'))
+BEGIN SELECT RAISE(ABORT,'Ambiguous or invalid competition season key'); END;
+CREATE TRIGGER public_input_season_update AFTER UPDATE OF year,competition_id,season_key ON seasons
+WHEN OLD.year IS NOT NEW.year OR OLD.competition_id IS NOT NEW.competition_id OR OLD.season_key IS NOT NEW.season_key BEGIN
+  UPDATE public_input_revision SET revision=revision+1 WHERE id=1;
+END;
+UPDATE public_input_revision SET revision=revision+1 WHERE id=1;

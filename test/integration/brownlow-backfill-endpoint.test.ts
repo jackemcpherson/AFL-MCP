@@ -69,8 +69,10 @@ async function seedSeason(year: number, date: string): Promise<SeededSeason> {
     "SELECT id FROM competitions WHERE code = 'AFLM'",
   ).first<{ id: number }>();
   if (!competition) throw new Error("AFLM fixture competition missing");
-  await authedEnv.DB.prepare("INSERT INTO seasons (competition_id, year) VALUES (?1, ?2)")
-    .bind(competition.id, year)
+  await authedEnv.DB.prepare(
+    "INSERT INTO seasons (competition_id, year, season_key) VALUES (?1, ?2, ?3)",
+  )
+    .bind(competition.id, year, String(year))
     .run();
   const season = await authedEnv.DB.prepare(
     "SELECT id FROM seasons WHERE competition_id = ?1 AND year = ?2",

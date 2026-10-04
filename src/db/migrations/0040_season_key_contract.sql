@@ -1,5 +1,4 @@
--- Stage two only: promote this file to the next numbered GitOps migration after
--- compatible readers and writers are deployed. Do not run it as an admin repair.
+-- Compatible MCP 4, Tipper 4 and footyBot 0.12 readers are deployed.
 PRAGMA defer_foreign_keys=ON;
 CREATE TABLE season_contract_backup AS SELECT * FROM seasons;
 CREATE TABLE season_sequence_backup AS SELECT seq FROM sqlite_sequence WHERE name='seasons';

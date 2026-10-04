@@ -6,7 +6,7 @@ import { acquireOperationLease } from "../../src/sync/lease";
 
 async function seed() {
   await env.DB.prepare(
-    "INSERT INTO seasons(id,competition_id,year) VALUES(1,1,2026),(2,2,2022)",
+    "INSERT INTO seasons(id,competition_id,year,season_key) VALUES(1,1,2026,'2026'),(2,2,2022,'2022-S6')",
   ).run();
 }
 

@@ -23,7 +23,9 @@ function profile(opponent = "Richmond", reversed = false): string {
 
 async function seed(): Promise<void> {
   await adminEnv.DB.batch([
-    adminEnv.DB.prepare("INSERT INTO seasons (id, competition_id, year) VALUES (900, 1, 2024)"),
+    adminEnv.DB.prepare(
+      "INSERT INTO seasons (id, competition_id, year, season_key) VALUES (900, 1, 2024, '2024')",
+    ),
     adminEnv.DB.prepare(
       "INSERT INTO teams (id, competition_id, name) VALUES (901, 1, 'Carlton'), (902, 1, 'Richmond')",
     ),
@@ -66,7 +68,7 @@ describe("authenticated coaching backfill on local D1", () => {
   it("repairs Bears references once while preserving match IDs and post-1996 Lions facts", async () => {
     await adminEnv.DB.batch([
       adminEnv.DB.prepare(
-        "INSERT INTO seasons (id, competition_id, year) VALUES (910, 1, 1996), (911, 1, 1997)",
+        "INSERT INTO seasons (id, competition_id, year, season_key) VALUES (910, 1, 1996, '1996'), (911, 1, 1997, '1997')",
       ),
       adminEnv.DB.prepare(
         "INSERT INTO teams (id, competition_id, name) VALUES (912, 1, 'Brisbane Lions'), (913, 1, 'Carlton')",

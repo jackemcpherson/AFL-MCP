@@ -11,8 +11,10 @@ async function seedMatchOnDate(dateYmd: string): Promise<void> {
   const competitionId = competition?.id;
   if (!competitionId) throw new Error("AFLM seed missing");
 
-  await env.DB.prepare("INSERT OR IGNORE INTO seasons (competition_id, year) VALUES (?, ?)")
-    .bind(competitionId, 2026)
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO seasons (competition_id, year, season_key) VALUES (?1, ?2, ?3)",
+  )
+    .bind(competitionId, 2026, "2026")
     .run();
   const season = await env.DB.prepare(
     "SELECT id FROM seasons WHERE competition_id = ? AND year = ?",
