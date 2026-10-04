@@ -178,81 +178,109 @@ it("blocks conflicting birth dates without reparenting appearances", async () =>
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_match_stats").first("n")).toBe(2);
 });
 
-it("reassigns exact appearances between separate people without merging their historical identities", async () => {
-  await seed();
-  const selected = await env.DB.prepare("SELECT id FROM matches LIMIT 1").first<number>("id");
-  if (!selected) throw new Error("Missing fixture");
-  const competition = await ensureCompetition(env, "AFLM");
-  const oldSeason = await ensureSeason(env, competition, 1990);
-  const oldMatch = makeMatch({
-    matchId: "SEPARATE-HISTORICAL-PERSON",
-    season: 1990,
-    date: new Date("1990-06-01T04:00:00Z"),
-  });
-  const teamMap = await ensureTeams(env, competition, "AFLM", [oldMatch]);
-  const venueMap = await ensureVenues(env, [oldMatch]);
-  await upsertMatches(env, [oldMatch], { seasonId: oldSeason, teamMap, venueMap });
-  await env.DB.batch([
-    env.DB.prepare(
-      "UPDATE players SET date_of_birth=CASE id WHEN 712 THEN '1984-05-14' ELSE '1961-10-01' END WHERE id IN (712,10974)",
-    ),
-    env.DB.prepare("UPDATE players SET external_afl_player_id='B' WHERE id=10974"),
-    env.DB.prepare(
-      "INSERT INTO player_provider_ids(provider,provider_id,player_id,evidence_json) VALUES('fryzigg','historical-person',10974,'{}')",
-    ),
-    env.DB.prepare(
-      "INSERT INTO player_match_stats(match_id,player_id,team_id,kicks) SELECT id,10974,home_team_id,11 FROM matches WHERE season_id=?1",
-    ).bind(oldSeason),
-  ]);
-  const scoped = IdentityRepairRequestSchema.parse({
-    ...request,
-    kind: "reassign-appearances",
-    matchIds: [selected],
-    providerIdentities: [{ provider: "afl-api", providerId: "B", evidence: request.evidence[0] }],
-  });
-  const preview = await repairPlayerIdentity(env, scoped);
-  if (!("manifestDigest" in preview) || !preview.manifestDigest) throw new Error("Missing preview");
-  expect(preview).toMatchObject({ biographyConflicts: [] });
-  await repairPlayerIdentity(env, {
-    ...scoped,
-    dryRun: false,
-    manifestDigest: preview.manifestDigest,
-  });
-  expect(await env.DB.prepare("SELECT COUNT(*) FROM player_id_redirects").first("COUNT(*)")).toBe(
-    0,
-  );
-  expect(
-    await env.DB.prepare("SELECT player_id FROM player_match_stats WHERE match_id=?1")
-      .bind(selected)
-      .first("player_id"),
-  ).toBe(712);
-  expect(
-    await env.DB.prepare(
-      "SELECT p.player_id FROM player_match_stats p JOIN matches m ON m.id=p.match_id WHERE m.season_id=?1",
-    )
-      .bind(oldSeason)
-      .first("player_id"),
-  ).toBe(10974);
-  expect(
-    await env.DB.prepare(
-      "SELECT player_id FROM player_provider_ids WHERE provider_id='historical-person'",
-    ).first("player_id"),
-  ).toBe(10974);
-  expect(
-    await env.DB.prepare("SELECT external_afl_player_id FROM players WHERE id=10974").first(
-      "external_afl_player_id",
-    ),
-  ).toBeNull();
-  expect(
-    await env.DB.prepare("SELECT external_afl_player_id FROM players WHERE id=712").first(
-      "external_afl_player_id",
-    ),
-  ).toBe("B");
-  expect(
+it.each([712, 10974])(
+  "reassigns exact appearances to explicit identity %i while preserving separate history",
+  async (canonicalId) => {
+    const historicalId = canonicalId === 712 ? 10974 : 712;
+    await seed();
+    const selected = await env.DB.prepare("SELECT id FROM matches LIMIT 1").first<number>("id");
+    if (!selected) throw new Error("Missing fixture");
+    const competition = await ensureCompetition(env, "AFLM");
+    const oldSeason = await ensureSeason(env, competition, 1990);
+    const oldMatch = makeMatch({
+      matchId: "SEPARATE-HISTORICAL-PERSON",
+      season: 1990,
+      date: new Date("1990-06-01T04:00:00Z"),
+    });
+    const teamMap = await ensureTeams(env, competition, "AFLM", [oldMatch]);
+    const venueMap = await ensureVenues(env, [oldMatch]);
+    await upsertMatches(env, [oldMatch], { seasonId: oldSeason, teamMap, venueMap });
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE players SET date_of_birth=CASE id WHEN 712 THEN '1984-05-14' ELSE '1961-10-01' END WHERE id IN (712,10974)",
+      ),
+      env.DB.prepare("UPDATE players SET external_afl_player_id='B' WHERE id=10974"),
+      env.DB.prepare(
+        "INSERT INTO player_provider_ids(provider,provider_id,player_id,evidence_json) VALUES('fryzigg','historical-person',?1,'{}')",
+      ).bind(historicalId),
+      env.DB.prepare(
+        "INSERT INTO player_match_stats(match_id,player_id,team_id,kicks) SELECT id,?2,home_team_id,11 FROM matches WHERE season_id=?1",
+      ).bind(oldSeason, historicalId),
+    ]);
+    const scoped = IdentityRepairRequestSchema.parse({
+      ...request,
+      kind: "reassign-appearances",
+      canonicalId,
+      matchIds: [selected],
+      providerIdentities: [{ provider: "afl-api", providerId: "B", evidence: request.evidence[0] }],
+    });
+    const preview = await repairPlayerIdentity(env, scoped);
+    if (!("manifestDigest" in preview) || !preview.manifestDigest)
+      throw new Error("Missing preview");
+    expect(preview).toMatchObject({ biographyConflicts: [] });
     await repairPlayerIdentity(env, {
       ...scoped,
       dryRun: false,
       manifestDigest: preview.manifestDigest,
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) FROM player_id_redirects").first("COUNT(*)")).toBe(
+      0,
+    );
+    expect(
+      await env.DB.prepare("SELECT player_id FROM player_match_stats WHERE match_id=?1")
+        .bind(selected)
+        .first("player_id"),
+    ).toBe(canonicalId);
+    expect(
+      await env.DB.prepare(
+        "SELECT p.player_id FROM player_match_stats p JOIN matches m ON m.id=p.match_id WHERE m.season_id=?1",
+      )
+        .bind(oldSeason)
+        .first("player_id"),
+    ).toBe(historicalId);
+    expect(
+      await env.DB.prepare(
+        "SELECT player_id FROM player_provider_ids WHERE provider_id='historical-person'",
+      ).first("player_id"),
+    ).toBe(historicalId);
+    expect(
+      await env.DB.prepare("SELECT external_afl_player_id FROM players WHERE id=10974").first(
+        "external_afl_player_id",
+      ),
+    ).toBe(canonicalId === 10974 ? "B" : null);
+    expect(
+      await env.DB.prepare("SELECT external_afl_player_id FROM players WHERE id=712").first(
+        "external_afl_player_id",
+      ),
+    ).toBe(canonicalId === 712 ? "B" : null);
+    expect(
+      await repairPlayerIdentity(env, {
+        ...scoped,
+        dryRun: false,
+        manifestDigest: preview.manifestDigest,
+      }),
+    ).toMatchObject({ idempotent: true });
+    await expect(
+      repairPlayerIdentity(env, {
+        ...scoped,
+        canonicalId: historicalId,
+        dryRun: false,
+        manifestDigest: preview.manifestDigest,
+      }),
+    ).rejects.toThrow();
+  },
+);
+
+it("rejects explicit targets outside scoped reassignment", async () => {
+  await seed();
+  await expect(repairPlayerIdentity(env, { ...request, canonicalId: 10974 })).rejects.toThrow();
+  await expect(
+    repairPlayerIdentity(env, {
+      ...request,
+      kind: "reassign-appearances",
+      canonicalId: 11000,
+      matchIds: [1],
     }),
-  ).toMatchObject({ idempotent: true });
+  ).rejects.toThrow();
+  expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_match_stats").first("n")).toBe(2);
 });

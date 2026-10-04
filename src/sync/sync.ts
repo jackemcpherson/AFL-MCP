@@ -61,6 +61,8 @@ export interface BackfillResult {
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {
+  /** Correct fixture metadata without importing player appearances. */
+  readonly fixturesOnly?: boolean;
   /** Explicitly recover the identical persisted sync scope. */
   readonly resume?: boolean;
   /** When provided alongside `toYear`, iterates seasons inclusively. */
@@ -120,13 +122,15 @@ export async function sync(
         scopes.push({ competition, season });
       }
     }
-    const operation = `sync:${JSON.stringify(scopes)}`;
+    const operation = `sync:${options?.fixturesOnly ? "fixtures:" : ""}${JSON.stringify(scopes)}`;
     if (options?.resume) await resumePublicInputWrite(env, holder, operation);
     else await beginPublicInputWrite(env, holder, now, operation);
     const writer = protectOperationWrites(env, holder);
     const results: BackfillResult[] = [];
     for (const { competition, season } of scopes)
-      results.push(await syncCompetition(writer, competition, season, isBackfill));
+      results.push(
+        await syncCompetition(writer, competition, season, isBackfill, options?.fixturesOnly),
+      );
 
     if (!isBackfill) await queueRecentStatsRefresh(writer, now);
     if (!isBackfill && now.getUTCMinutes() === 0) {
@@ -148,7 +152,7 @@ export async function sync(
     // Weather rides the same lease as match data but self-gates to
     // top-of-hour passes so the 5-minute cron adds no wasted Open-Meteo
     // calls (#138). Provider failures retry; database failures retain the marker.
-    if (now.getUTCMinutes() === 0) {
+    if (!options?.fixturesOnly && now.getUTCMinutes() === 0) {
       await runWeatherStage(writer, fetch, now);
     }
 
@@ -194,6 +198,7 @@ async function syncCompetition(
   competition: CompetitionCode,
   season: SeasonSelector,
   isBackfill: boolean,
+  fixturesOnly = false,
 ): Promise<BackfillResult> {
   try {
     const discovered = await fetchSeasons(competition);
@@ -253,12 +258,14 @@ async function syncCompetition(
       )
       .run();
 
-    const lineupBacklogRounds = await selectCompletedRoundsWithoutLineups(
-      env,
-      seasonId,
-      isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
-      isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
-    );
+    const lineupBacklogRounds = fixturesOnly
+      ? []
+      : await selectCompletedRoundsWithoutLineups(
+          env,
+          seasonId,
+          isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
+          isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
+        );
 
     const lineupRounds = new Set<number>(lineupBacklogRounds);
     const locked =
@@ -272,6 +279,7 @@ async function syncCompetition(
     for (const match of allMatches) {
       const remaining = match.date.getTime() - now;
       if (
+        fixturesOnly ||
         lockedIds.has(match.matchId) ||
         match.status !== "Upcoming" ||
         remaining <= 0 ||
@@ -323,7 +331,7 @@ async function syncCompetition(
     const matchMap = await buildMatchAflIdMap(env, seasonId);
 
     let statsAffected = 0;
-    if (isBackfill) {
+    if (isBackfill && !fixturesOnly) {
       await env.DB.prepare(`INSERT INTO match_stats_refresh(match_id, completed_observed_at, next_retry_at)
         SELECT id, ?1, ?1 FROM matches WHERE season_id = ?2 AND status = 'Complete' AND external_afl_id IS NOT NULL
         ON CONFLICT(match_id) DO NOTHING`)

@@ -1,0 +1,217 @@
+{
+  "match": {
+    "name": "Brisbane Lions Vs Geelong Cats",
+    "date": "2026-03-19T08:30:00.000+0000",
+    "status": "CONCLUDED",
+    "matchId": "M-1",
+    "venue": "CD_V20",
+    "utcStartTime": "2026-03-19T08:30:00",
+    "homeTeamId": "CD_T20",
+    "awayTeamId": "CD_T70",
+    "homeTeam": {
+      "name": "Carlton",
+      "timeZone": null,
+      "teamId": "CD_T20",
+      "abbr": "BL",
+      "nickname": "Lions",
+      "badgeAssetURL": "https://s.afl.com.au/staticfile/AFL%20Tenant/AFLMobile/Static%20Files/team_logos/400x400/brisbane_a.png",
+      "flagAssetURL": "https://s.afl.com.au/staticfile/AFL%20Tenant/AFLMobile/Static%20Files/team_flags/small/Brisbane.png"
+    },
+    "awayTeam": {
+      "name": "Richmond",
+      "timeZone": null,
+      "teamId": "CD_T70",
+      "abbr": "GEEL",
+      "nickname": "Cats",
+      "badgeAssetURL": "https://s.afl.com.au/staticfile/AFL%20Tenant/AFLMobile/Static%20Files/team_logos/400x400/geelong_a.png",
+      "flagAssetURL": "https://s.afl.com.au/staticfile/AFL%20Tenant/AFLMobile/Static%20Files/team_flags/small/Geelong.png"
+    },
+    "round": "TEST-R1",
+    "venueLocalStartTime": "2026-05-14T19:30:00",
+    "abbr": "BL V GEEL",
+    "thanksTicketLink": null,
+    "twitterHashTag": "#afllionscats"
+  },
+  "venue": {
+    "address": "Brisbane",
+    "name": "MCG",
+    "state": "QLD",
+    "timeZone": "Australia/Brisbane",
+    "venueId": "CD_V20",
+    "abbreviation": "G",
+    "imageURL": null,
+    "capacity": null,
+    "groundDimension": null,
+    "latitude": null,
+    "longitude": null,
+    "ticketProviderLink": null,
+    "androidStadiumLink": null,
+    "iosStadiumLink": null,
+    "landOwner": "Yuggera - Turrbal"
+  },
+  "round": {
+    "name": "Round 1",
+    "roundId": "TEST-R1",
+    "roundNumber": 1
+  },
+  "liveVideos": [],
+  "score": {
+    "status": "CONCLUDED",
+    "matchId": "CD_M20260141001",
+    "homeTeamScore": {
+      "matchScore": {
+        "totalScore": 76,
+        "goals": 11,
+        "behinds": 10,
+        "superGoals": null
+      },
+      "periodScore": [
+        {
+          "periodNumber": 1,
+          "score": {
+            "totalScore": 13,
+            "goals": 2,
+            "behinds": 1,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 2,
+          "score": {
+            "totalScore": 32,
+            "goals": 5,
+            "behinds": 2,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 3,
+          "score": {
+            "totalScore": 21,
+            "goals": 3,
+            "behinds": 3,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 4,
+          "score": {
+            "totalScore": 10,
+            "goals": 1,
+            "behinds": 4,
+            "superGoals": null
+          }
+        }
+      ],
+      "rushedBehinds": 1,
+      "minutesInFront": 0
+    },
+    "awayTeamScore": {
+      "matchScore": {
+        "totalScore": 117,
+        "goals": 17,
+        "behinds": 15,
+        "superGoals": null
+      },
+      "periodScore": [
+        {
+          "periodNumber": 1,
+          "score": {
+            "totalScore": 35,
+            "goals": 5,
+            "behinds": 5,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 2,
+          "score": {
+            "totalScore": 22,
+            "goals": 3,
+            "behinds": 4,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 3,
+          "score": {
+            "totalScore": 38,
+            "goals": 6,
+            "behinds": 2,
+            "superGoals": null
+          }
+        },
+        {
+          "periodNumber": 4,
+          "score": {
+            "totalScore": 22,
+            "goals": 3,
+            "behinds": 4,
+            "superGoals": null
+          }
+        }
+      ],
+      "rushedBehinds": 3,
+      "minutesInFront": 121
+    },
+    "matchClock": {
+      "periods": [
+        {
+          "periodNumber": 1,
+          "periodSeconds": 2081,
+          "periodCompleted": true,
+          "periodStart": null,
+          "nextPeriodStart": null
+        },
+        {
+          "periodNumber": 2,
+          "periodSeconds": 1937,
+          "periodCompleted": true,
+          "periodStart": null,
+          "nextPeriodStart": null
+        },
+        {
+          "periodNumber": 3,
+          "periodSeconds": 2013,
+          "periodCompleted": true,
+          "periodStart": null,
+          "nextPeriodStart": null
+        },
+        {
+          "periodNumber": 4,
+          "periodSeconds": 1640,
+          "periodCompleted": true,
+          "periodStart": null,
+          "nextPeriodStart": null
+        }
+      ]
+    },
+    "weather": {
+      "description": "Showers",
+      "tempInCelsius": 24,
+      "weatherType": "RAIN"
+    },
+    "scoreWorm": null,
+    "scoreMap": null,
+    "homeTeamScoreChart": {
+      "goals": 11,
+      "leftBehinds": 1,
+      "rightBehinds": 3,
+      "leftPosters": 1,
+      "rightPosters": 2,
+      "rushedBehinds": 1,
+      "touchedBehinds": 2
+    },
+    "awayTeamScoreChart": {
+      "goals": 17,
+      "leftBehinds": 4,
+      "rightBehinds": 4,
+      "leftPosters": 1,
+      "rightPosters": 1,
+      "rushedBehinds": 3,
+      "touchedBehinds": 2
+    },
+    "lastUpdated": "2026-05-14T12:36:50.223+0000"
+  },
+  "k2kSponsored": false
+}
