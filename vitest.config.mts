@@ -20,7 +20,7 @@ export default defineConfig(async () => {
               miniflare: {
                 compatibilityDate: "2026-04-01",
                 compatibilityFlags: ["nodejs_compat"],
-                d1Databases: ["DB", "UPGRADE_DB"],
+                d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,
                 },

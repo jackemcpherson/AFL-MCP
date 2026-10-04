@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.1] - 2026-10-04
+
+Version 3.8.1 prepares existing databases for the verified migration baseline.
+
+### Added in 3.8.1
+
+- A guarded GitOps adoption migration registers `0027_baseline.sql` only after
+  all 25 prerequisite migrations appear in the migration ledger.
+- Adoption checks preserve application schema, reference seeds and existing
+  data. A later release will replace the active migration history.
+
 ## [3.8.0] - 2026-10-04
 
 Version 3.8.0 adds coaching ingestion and consistent native input revisions.
