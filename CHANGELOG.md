@@ -14,12 +14,12 @@ consumers permit the separate season-key schema transition.
 ### Changed in 4.0.0
 
 - AFLW 2022 requests require `2022-S6` or `2022-S7`. Ordinary years remain
-valid.
+  valid.
   Coverage contract v4 exposes canonical selectors and ambiguity errors.
 - Statistics refresh per match with persisted retries and exact scopes that
-resume after interruption.
+  resume after interruption.
   Partial responses preserve known values and each pass fetches at most 20
-matches.
+  matches.
 - Verified player repairs require reviewed digests and recorded source evidence.
   Exact-match reassignment keeps separate people and their histories distinct.
 - Shared leases and public write markers fence all repair batches. Interrupted
@@ -31,7 +31,7 @@ matches.
 - Coverage includes source-backed field support, inventory denominators and
   unresolved refresh diagnostics. An hourly audit identifies specific records.
 - Windsor Park uses verified council coordinates. Historical Bears
-reconciliation
+  reconciliation
   requires a reviewed preview before coaching imports.
 - Fitzroy 6 replaces the prior library dependency. The unbounded PAV endpoint
   returns HTTP 410 and the obsolete `skipPav` backfill flag fails validation.
