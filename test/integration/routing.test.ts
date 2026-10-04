@@ -41,7 +41,9 @@ describe("root and unknown-path routing", () => {
 });
 
 it("returns a safe 409 for an unapproved PAV write", async () => {
-  await env.DB.prepare("INSERT INTO seasons(competition_id,year) VALUES(1,2026)").run();
+  await env.DB.prepare(
+    "INSERT INTO seasons(competition_id,year,season_key) VALUES(1,2026,'2026')",
+  ).run();
   const response = await worker.fetch(
     new Request("https://afl.test/mcp/admin/recalculate-pav", {
       method: "POST",

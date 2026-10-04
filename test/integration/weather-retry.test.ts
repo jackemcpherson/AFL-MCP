@@ -4,7 +4,9 @@ import { retryWeather, WeatherRetryRequestSchema } from "../../src/admin/weather
 
 it("retries only the reviewed match and rejects a stale diagnostic preview", async () => {
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO seasons(id,competition_id,year) VALUES(1,1,2026),(2,1,2025)"),
+    env.DB.prepare(
+      "INSERT INTO seasons(id,competition_id,year,season_key) VALUES(1,1,2026,'2026'),(2,1,2025,'2025')",
+    ),
     env.DB.prepare(
       "INSERT INTO teams(id,name,competition_id) VALUES(1,'Carlton',1),(2,'Richmond',1)",
     ),

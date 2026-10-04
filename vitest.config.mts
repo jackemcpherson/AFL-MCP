@@ -5,9 +5,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(import.meta.dirname, "src/db/migrations"));
 
-  const contractMigrations = await readD1Migrations(
-    path.resolve(import.meta.dirname, "deployment"),
-  );
+  const contractMigrations = migrations.filter((entry) => entry.name.startsWith("0040"));
+  const expansionMigrations = migrations.filter((entry) => !entry.name.startsWith("0040"));
 
   const legacyMigrations = await readD1Migrations(
     path.resolve(import.meta.dirname, "test/fixtures/legacy-migrations"),
@@ -28,10 +27,11 @@ export default defineConfig(async () => {
               miniflare: {
                 compatibilityDate: "2026-04-01",
                 compatibilityFlags: ["nodejs_compat"],
-                d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB", "FRESH_DB"],
+                d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB", "FRESH_DB", "CONTRACT_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,
                   TEST_CONTRACT_MIGRATIONS: contractMigrations,
+                  TEST_EXPANSION_MIGRATIONS: expansionMigrations,
                   TEST_LEGACY_MIGRATIONS: legacyMigrations,
                 },
               },

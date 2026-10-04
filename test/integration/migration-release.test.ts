@@ -44,7 +44,7 @@ describe("migration baseline paths", () => {
       await env.FRESH_DB.prepare(
         "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
       ).first(),
-    ).toEqual({ revision: 2, in_progress: 0 });
+    ).toEqual({ revision: 3, in_progress: 0 });
     await applyD1Migrations(env.FRESH_DB, [nextMigration]);
     expect(await env.FRESH_DB.prepare("SELECT release_test FROM coaches").all()).toMatchObject({
       results: [],
@@ -94,7 +94,7 @@ describe("migration baseline paths", () => {
     ).run();
     expect(
       await env.UPGRADE_DB.prepare("SELECT revision FROM public_input_revision WHERE id=1").first(),
-    ).toEqual({ revision: 4 });
+    ).toEqual({ revision: 5 });
   });
 });
 

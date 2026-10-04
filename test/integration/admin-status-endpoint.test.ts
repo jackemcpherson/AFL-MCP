@@ -217,7 +217,9 @@ async function seedIntegrityViolations(): Promise<void> {
     "SELECT id FROM competitions WHERE code = 'AFLM'",
   ).first<{ id: number }>();
   if (!competition) throw new Error("AFLM fixture missing");
-  await authedEnv.DB.prepare("INSERT INTO seasons (competition_id, year) VALUES (?1, 2026)")
+  await authedEnv.DB.prepare(
+    "INSERT INTO seasons (competition_id, year, season_key) VALUES (?1, 2026, '2026')",
+  )
     .bind(competition.id)
     .run();
   const season = await authedEnv.DB.prepare("SELECT id FROM seasons WHERE year = 2026").first<{

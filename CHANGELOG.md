@@ -5,6 +5,16 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - 2026-10-04
+
+Enable explicit season keys after deploying compatible consumers.
+
+### Changed in 4.0.1
+
+- Activate migration `0040` after deploying compatible consumers. Preserve
+  existing season IDs and pending derived work while allowing both AFLW 2022
+  seasons and rejecting ambiguous season keys.
+
 ## [4.0.0] - 2026-10-04
 
 Version 4 distinguishes competition seasons and adds reviewed repair operations.

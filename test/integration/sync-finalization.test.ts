@@ -40,7 +40,9 @@ it("reports finalization lease expiry, retains the marker and releases the lease
 });
 
 it("drains fixture PAV changes on a nonhour tick before clearing the marker", async () => {
-  await env.DB.prepare("INSERT INTO seasons(id,competition_id,year) VALUES(1,1,2026)").run();
+  await env.DB.prepare(
+    "INSERT INTO seasons(id,competition_id,year,season_key) VALUES(1,1,2026,'2026')",
+  ).run();
   await env.DB.prepare(
     "INSERT INTO pav_rebuild_queue(season_id,reason) VALUES(1,'statistics')",
   ).run();
