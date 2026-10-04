@@ -54,7 +54,9 @@ One row per `(competition, year)`.
     under one `player_id`. Resolve their competition through the match and
     season relationships.
 - Demographics: `first_name`, `surname`, `date_of_birth`, `height_cm`,
-  `weight_kg`, `is_retired`.
+  `weight_kg`. `is_retired` stays `NULL` until source evidence establishes the
+  status. `legacy_is_retired` preserves imported or defaulted bits without
+  treating them as verified activity or retirement.
 
 ## Match Data
 

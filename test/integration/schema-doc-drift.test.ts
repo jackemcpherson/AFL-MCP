@@ -15,6 +15,7 @@ const INTERNAL_TABLES = new Set([
   "identity_repair_operations",
   "pav_rebuild_queue",
   "weather_refresh_state",
+  "weather_repair_operations",
   "match_stats_refresh",
   "stats_refresh_operations",
   "stats_refresh_operation_matches",

@@ -5,6 +5,23 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.5] - 2026-10-04
+
+Correct lineup flags and expose unknown retirement status honestly. Support
+reviewed weather refresh after fixture corrections.
+
+### Fixed in 4.0.5
+
+- Correct interchange rows marked as dedicated substitutes. Retain genuine
+  `SUB` flags. Preserve imported retirement bits as `legacy_is_retired` and
+  leave `is_retired` unknown until source evidence establishes the status.
+- Recompute weather for one reviewed fixture with a digest-bound checkpoint,
+  exact-scope recovery and idempotent reruns. Source failures retain unknown
+  values and real daily retry schedules.
+- Invalidate cached weather when kickoff or canonical venue context changes.
+- Remove stale quarter-score and Brownlow year limits from coverage metadata.
+  Player metadata has partial coverage rather than a completeness guarantee.
+
 ## [4.0.4] - 2026-10-04
 
 Split verified people whose appearances share an existing identity.
