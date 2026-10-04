@@ -263,9 +263,38 @@ describe("extractHourlySeries", () => {
     );
   });
 
-  it("throws when the time axis is not all strings", () => {
+  it("throws when the time axis mixes strings and epochs", () => {
     expect(() =>
       extractHourlySeries({ hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] } }),
     ).toThrow(/Unexpected Open-Meteo payload/);
   });
+});
+
+it("counts both repeated hours from an absolute provider axis", () => {
+  const base = Date.UTC(2026, 3, 3, 13) / 1000;
+  const time = Array.from({ length: 72 }, (_, i) => base + i * 3600);
+  const fill = (value: number) => time.map(() => value);
+  const precipitation = fill(1);
+  precipitation[time.indexOf(Date.UTC(2026, 3, 4, 15) / 1000)] = 7;
+  precipitation[time.indexOf(Date.UTC(2026, 3, 4, 16) / 1000)] = 11;
+  const series = extractHourlySeries({
+    hourly: {
+      time,
+      temperature_2m: fill(15),
+      precipitation,
+      relative_humidity_2m: fill(60),
+      wind_speed_10m: fill(20),
+      wind_gusts_10m: fill(30),
+    },
+  });
+  expect(aggregateWeatherWindow(series, "2026-04-05T14:00")).toMatchObject({
+    precip24hPriorMm: 40,
+    precipMm: 3,
+    tempC: 15,
+  });
+  const ambiguous = {
+    ...series,
+    time: series.time.map((value, i) => (i === 0 ? "2026-04-04T00:00" : value)),
+  };
+  expect(() => aggregateWeatherWindow(ambiguous, "2026-04-05T14:00")).toThrow("Mixed provider");
 });

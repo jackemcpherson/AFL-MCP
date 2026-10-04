@@ -5,6 +5,18 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.8] - 2026-10-04
+
+Preserve distinct weather samples when local clocks repeat.
+
+### Fixed in 4.0.8
+
+- Request UTC epoch timestamps from Open-Meteo and aggregate exact elapsed-hour
+  samples across daylight saving changes. Legacy local-time captures retain
+  their conservative unknown values for ambiguous repeated hours.
+- Preserve existing daily retry deadlines so partial windows recover through
+  their scheduled retry rather than an invented observation time.
+
 ## [4.0.7] - 2026-10-04
 
 Keep historical backfills under explicit operator control.

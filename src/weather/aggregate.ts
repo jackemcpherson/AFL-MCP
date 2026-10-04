@@ -4,22 +4,32 @@
  * (src/weather/stage.ts) and the local backfill script
  * (scripts/backfill-weather.ts) so the two write paths cannot diverge.
  *
- * All timestamps are naive local strings: D1 stores Melbourne-local dates
- * and every Open-Meteo call passes `timezone=Australia/Melbourne`, so the
- * hourly `time` axis and scheduled start share a clock. Window offsets use
- * elapsed hours in Australia/Melbourne, including daylight-saving changes.
+ * Provider timestamps use UTC epoch seconds. Legacy captured local strings
+ * remain supported, with repeated hours kept unknown. D1 scheduled starts use
+ * Melbourne-local time. Window offsets measure elapsed hours across daylight
+ * saving changes.
  */
 
 import { z } from "zod";
 
 /**
- * Open-Meteo hourly payload: a local-time axis plus one value array per
+ * Open-Meteo hourly payload: UTC epochs or a legacy local axis, plus arrays per
  * requested variable (plain keys on single-model responses, model-suffixed
  * keys like `temperature_2m_era5_land` on dual-model archive responses).
  * Non-hourly top-level fields (latitude, elevation, ...) are ignored.
  */
 export const OpenMeteoPayloadSchema = z.object({
-  hourly: z.object({ time: z.array(z.string()) }).catchall(z.array(z.number().nullable())),
+  hourly: z
+    .object({
+      time: z
+        .array(z.union([z.string(), z.number().int()]))
+        .refine(
+          (time) =>
+            time.every((value) => typeof value === "string") ||
+            time.every((value) => typeof value === "number"),
+        ),
+    })
+    .catchall(z.array(z.number().nullable())),
 });
 
 /** Parsed Open-Meteo hourly payload (the external API boundary). */
@@ -27,8 +37,8 @@ export type OpenMeteoPayload = z.infer<typeof OpenMeteoPayloadSchema>;
 
 /** One hourly variable series extracted from an Open-Meteo response. */
 export interface HourlySeries {
-  /** Local hourly timestamps, e.g. "2026-07-18T19:00". */
-  readonly time: readonly string[];
+  /** UTC epoch seconds, or legacy local timestamps such as "2026-07-18T19:00". */
+  readonly time: readonly (string | number)[];
   readonly temperatureC: readonly (number | null)[];
   readonly precipitationMm: readonly (number | null)[];
   readonly humidityPct: readonly (number | null)[];
@@ -120,15 +130,24 @@ export function aggregateWeatherWindow(
   series: HourlySeries,
   scheduledStart: string,
 ): WeatherMetrics {
-  const index = new Map<string, number>();
-  for (const [i, t] of series.time.entries()) {
-    // A duplicated naive timestamp cannot distinguish the DST fall-back hours.
-    index.set(t, index.has(t) ? -1 : i);
+  const absolute = series.time.every((time) => typeof time === "number");
+  if (!absolute && series.time.some((time) => typeof time === "number"))
+    throw new Error("Mixed provider hourly timestamp formats");
+  const index = new Map<string | number, number>();
+  for (const [i, time] of series.time.entries()) {
+    const key = typeof time === "number" ? time * 1000 : time;
+    index.set(key, index.has(key) ? -1 : i);
   }
 
   const startHour = floorHour(scheduledStart);
-  const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index);
-  const priorWindow = windowIndexes(startHour, -PRIOR_WINDOW_HOURS, PRIOR_WINDOW_HOURS, index);
+  const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index, absolute);
+  const priorWindow = windowIndexes(
+    startHour,
+    -PRIOR_WINDOW_HOURS,
+    PRIOR_WINDOW_HOURS,
+    index,
+    absolute,
+  );
 
   return {
     tempC: round(mean(pick(series.temperatureC, matchWindow)), 1),
@@ -195,17 +214,19 @@ function windowIndexes(
   startEpochMs: number,
   offsetHours: number,
   count: number,
-  index: ReadonlyMap<string, number>,
+  index: ReadonlyMap<string | number, number>,
+  absolute: boolean,
 ): number[] {
   const hourMs = 60 * 60 * 1000;
   const found: number[] = [];
   for (let i = 0; i < count; i++) {
     const instant = startEpochMs + (offsetHours + i) * hourMs;
     const label = formatHour(instant);
-    // A naive provider axis cannot assign values to either repeated fall-back hour.
+    // Only legacy local axes lack the offset needed to distinguish repeated hours.
     const ambiguous =
-      formatHour(instant - hourMs) === label || formatHour(instant + hourMs) === label;
-    const at = ambiguous ? -1 : index.get(label);
+      !absolute &&
+      (formatHour(instant - hourMs) === label || formatHour(instant + hourMs) === label);
+    const at = ambiguous ? -1 : index.get(absolute ? instant : label);
     found.push(at ?? -1);
   }
   return found;

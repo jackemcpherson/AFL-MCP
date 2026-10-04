@@ -124,7 +124,10 @@ Historical Forecast row. After six days, the stage upgrades provenance to
 `era5_land+era5`.
 
 The stage removes rows for cancelled matches. It resolves coordinates through
-`venues.canonical_venue_id` and requests `timezone=Australia/Melbourne`.
+`venues.canonical_venue_id`. Requests use `timezone=Australia/Melbourne` for
+date bounds and `timeformat=unixtime` for UTC epoch hourly timestamps. Distinct
+epochs preserve both repeated daylight-saving hours. Existing retry deadlines
+remain unchanged.
 
 Provider weather failures persist diagnostics and daily retry schedules.
 After the initial failure and three unsuccessful daily retries, observations
