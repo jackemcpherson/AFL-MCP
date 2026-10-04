@@ -13,7 +13,8 @@ The migration bundle expands the existing production schema through migration
 
 1. Publish the candidate through the application repository's normal pipeline.
 2. Promote the pinned artefact through cloudflare-infra. Set `SYNC_PAUSED` to
-   `true` for the expansion deployment so scheduled writes wait for reader updates.
+   `true` for the expansion deployment so scheduled writes wait for reader
+   updates.
 3. Deploy Tipper and other consumers that understand explicit season keys and
    reject active or stale public write markers.
 4. Promote the separately staged `deployment/0040_season_key_contract.sql`
@@ -55,19 +56,24 @@ rerun of a completed digest changes nothing. Issued predictions remain intact.
 
 ## Field Capability Evidence
 
-`src/sync/stat-field-capabilities.json` records field support observed in 35 exact
+`src/sync/stat-field-capabilities.json` records field support observed in 35
+exact
 provider seasons. Each sample identifies its source URL and content digest.
 All-null samples remain unverified. They do not prove that a field is absent.
 No sample establishes availability in another era or guarantees every row.
 
 Coverage observations expose the matching capability evidence. Statistics
-refresh diagnostics count missing supported fields after preserving known values.
+refresh diagnostics count missing supported fields after preserving known
+values.
 
 ## Bounded Refresh and Recovery
 
 `POST /mcp/admin/refresh-statistics` previews an exact competition-season or
 match scope. Apply its digest, then continue using the persisted operation ID.
-Each pass fetches at most 20 due matches, oldest first. A failed match does not
+Each pass fetches at most 20 due matches, oldest first.
+It rebuilds at most 20 affected PAV seasons before clearing the public marker.
+Remaining rebuilds retain the marker and require explicit recovery. A failed
+match does not
 discard successful results for other matches.
 
 Completed matches refresh hourly through 48 hours, daily through day 14, and

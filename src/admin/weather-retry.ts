@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveStoredSeason } from "../db/seasons";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
+import { OperationConflictError } from "./errors";
 
 /** Targeted retry of an unavailable observation after reviewing its stored diagnostic. */
 export const WeatherRetryRequestSchema = z.strictObject({
@@ -49,9 +50,11 @@ export async function retryWeather(env: Env, request: z.infer<typeof WeatherRetr
         manifestDigest: digest,
       };
     if (!rows.results.length)
-      throw new Error("No unresolved weather observations in this exact match scope");
+      throw new OperationConflictError(
+        "No unresolved weather observations in this exact match scope",
+      );
     if (request.manifestDigest !== digest)
-      throw new Error("Weather retry preview missing or stale");
+      throw new OperationConflictError("Weather retry preview missing or stale");
     const result =
       await env.DB.prepare(`UPDATE weather_refresh_state SET failures=0,next_retry_at=?1
       WHERE match_id=?2 AND diagnostic IS NOT NULL
@@ -60,7 +63,7 @@ export async function retryWeather(env: Env, request: z.infer<typeof WeatherRetr
         .bind(new Date().toISOString(), request.matchId, holder)
         .all();
     if (result.results.length !== rows.results.length)
-      throw new Error("Weather retry lease lost or scope changed");
+      throw new OperationConflictError("Weather retry lease lost or scope changed");
     return { busy: false, dryRun: false, queued: result.results.length };
   } finally {
     await releaseOperationLease(env, holder);

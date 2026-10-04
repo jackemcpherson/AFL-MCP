@@ -39,3 +39,24 @@ describe("root and unknown-path routing", () => {
     expect(res.status).toBe(404);
   });
 });
+
+it("returns a safe 409 for an unapproved PAV write", async () => {
+  await env.DB.prepare("INSERT INTO seasons(competition_id,year) VALUES(1,2026)").run();
+  const response = await worker.fetch(
+    new Request("https://afl.test/mcp/admin/recalculate-pav", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-admin" },
+      body: JSON.stringify({ competition: "AFLM", season: 2026, dryRun: false }),
+    }),
+    { ...env, ADMIN_TOKEN: "test-admin" } as Env,
+    stubCtx,
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "PAV preview missing or stale",
+    code: "OPERATION_CONFLICT",
+  });
+  expect(
+    await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+  ).toBe(0);
+});

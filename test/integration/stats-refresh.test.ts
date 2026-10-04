@@ -170,3 +170,30 @@ it("recovers the captured 2026 Grand Final's 46 enriched appearances", async () 
     ).first("n"),
   ).toBe(46);
 });
+
+it("drains more than four affected seasons before reporting a consistent refresh", async () => {
+  const competitionId = await ensureCompetition(env, "AFLM");
+  for (let year = 2020; year < 2025; year++) {
+    const seasonId = await ensureSeason(env, competitionId, year);
+    await env.DB.prepare("INSERT INTO pav_rebuild_queue(season_id,reason) VALUES(?1,'statistics')")
+      .bind(seasonId)
+      .run();
+  }
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(5);
+  await refreshDueStats(env, new Date());
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(0);
+});
+
+it("fails with recoverable queued work when the bounded rebuild pass cannot finish", async () => {
+  const competitionId = await ensureCompetition(env, "AFLM");
+  for (let year = 2000; year < 2021; year++) {
+    const seasonId = await ensureSeason(env, competitionId, year);
+    await env.DB.prepare("INSERT INTO pav_rebuild_queue(season_id,reason) VALUES(?1,'statistics')")
+      .bind(seasonId)
+      .run();
+  }
+  await expect(refreshDueStats(env, new Date())).rejects.toThrow("resume the marked operation");
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(1);
+  await refreshDueStats(env, new Date());
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(0);
+});

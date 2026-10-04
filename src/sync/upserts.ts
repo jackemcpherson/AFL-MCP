@@ -658,9 +658,9 @@ function buildMatchUpsert(env: Env, m: Match, ctx: MatchUpsertContext): D1Prepar
 }
 
 /**
- * Upsert per-match player stats. Phantom rows (no time on ground AND no
- * disposals) are filtered — these are emergencies/late withdrawals who never
- * took the field but appear in the API.
+ * Upsert per-match player stats. New appearances with explicitly zero time
+ * on ground and disposals are filtered. Existing appearances and partial
+ * corrections with unknown participation fields are preserved.
  *
  * Rows whose team name cannot be resolved in `teamMap` are skipped rather than
  * batched with a `NULL` team_id (which would violate the NOT NULL constraint
@@ -680,9 +680,18 @@ export async function upsertStats(
   for (const s of stats) {
     const playerId = playerMap.get(s.playerId);
     if (!playerId) continue;
-    if (!s.timeOnGroundPercentage && !s.disposals) continue;
     const matchId = matchMap.get(s.matchId);
     if (!matchId) continue;
+    // Explicit zeroes prove nonparticipation only for a previously unseen appearance.
+    // Missing participation fields must not suppress authoritative partial corrections.
+    if (s.timeOnGroundPercentage === 0 && s.disposals === 0) {
+      const existing = await env.DB.prepare(
+        "SELECT 1 FROM player_match_stats WHERE match_id=?1 AND player_id=?2",
+      )
+        .bind(matchId, playerId)
+        .first();
+      if (!existing) continue;
+    }
     const teamId = teamMap.get(normaliseTeamForMatch(s.team, s.competition, s.season));
     if (teamId === undefined) {
       unmappedTeams.add(s.team);

@@ -9,6 +9,7 @@ import { resolveStoredSeason } from "../db/seasons";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { refreshDueStats } from "../sync/stats-refresh";
 import type { Env } from "../types";
+import { OperationConflictError } from "./errors";
 
 /** Explicit scope and resumable operation identity for historical corrections. */
 export const StatsRefreshRequestSchema = z.strictObject({
@@ -48,7 +49,7 @@ export async function operateStatsRefresh(
         .bind(season.id, request.matchId ?? null)
         .all();
     if (!matches.results.length)
-      throw new Error("No eligible completed matches in requested scope");
+      throw new OperationConflictError("No eligible completed matches in requested scope");
     const payload = JSON.stringify({ season, matches: matches.results });
     const digest = Array.from(
       new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))),
@@ -71,13 +72,15 @@ export async function operateStatsRefresh(
       operation &&
       (operation.season_id !== season.id || operation.match_id !== (request.matchId ?? null))
     ) {
-      throw new Error("Operation ID already belongs to a different scope");
+      throw new OperationConflictError("Operation ID already belongs to a different scope");
     }
     if (!operation && request.manifestDigest !== digest)
-      throw new Error("Preview digest missing or stale; preview again");
+      throw new OperationConflictError("Preview digest missing or stale; preview again");
     if (request.resume) {
       if ((operation?.manifest_digest ?? digest) !== request.manifestDigest)
-        throw new Error("Recovery requires the existing operation and its approved digest");
+        throw new OperationConflictError(
+          "Recovery requires the existing operation and its approved digest",
+        );
       await resumePublicInputWrite(env, holder, `stats:${request.operationId}`);
     } else await beginPublicInputWrite(env, holder, new Date(), `stats:${request.operationId}`);
     marked = true;

@@ -10,6 +10,7 @@ import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
+import { OperationConflictError } from "./errors";
 
 const EvidenceSchema = z.strictObject({
   url: z.url(),
@@ -60,7 +61,17 @@ interface Conflict {
   readonly values: readonly (string | number)[];
 }
 
-/** Merge appearances only after an operator has verified the people. Unknown values remain null. */
+/**
+ * Merge appearances only after an operator verifies the people. Unknown values remain null.
+ * @param table - Reviewed appearance table.
+ * @param rows - Captured appearances for the identity group.
+ * @param canonicalId - Retained internal identity.
+ * @param resolutions - Evidence-backed conflict resolutions.
+ * @returns Merged rows and unresolved conflicts.
+ * @throws {OperationConflictError} If resolutions are invalid or duplicated.
+ * @example
+ * mergeIdentityAppearances("player_match_stats", rows, 712, []);
+ */
 export function mergeIdentityAppearances(
   table: AppearanceTable,
   rows: readonly Row[],
@@ -94,7 +105,9 @@ export function mergeIdentityAppearances(
           const expectedType =
             table === "match_lineups" && field === "position" ? "string" : "number";
           if (typeof resolution.value !== expectedType)
-            throw new Error(`Resolution for ${table}.${field} must be ${expectedType}`);
+            throw new OperationConflictError(
+              `Resolution for ${table}.${field} must be ${expectedType}`,
+            );
           used.add(resolution);
           row[field] = resolution.value;
         } else conflicts.push({ table, matchId, field, values });
@@ -103,7 +116,9 @@ export function mergeIdentityAppearances(
     merged.push(row);
   }
   if (resolutions.some((entry) => entry.table === table && !used.has(entry)))
-    throw new Error("Resolution is duplicated or does not address a conflicting field");
+    throw new OperationConflictError(
+      "Resolution is duplicated or does not address a conflicting field",
+    );
   return { rows: merged, conflicts };
 }
 
@@ -120,22 +135,28 @@ async function hash(value: unknown): Promise<string> {
  * Preview or apply one approved identity group, then atomically replace affected PAV seasons.
  * The preview digest includes source rows, references and evidence. Mutated previews fail closed.
  * Issued prediction archives are never written by this operation.
+ * @param env - Worker bindings.
+ * @param request - Validated identity scope, evidence and approval digest.
+ * @returns Preview, completed repair report or lease contention result.
+ * @throws {OperationConflictError} If scope, evidence, conflicts or approval prevent a repair.
+ * @example
+ * await repairPlayerIdentity(env, IdentityRepairRequestSchema.parse(request));
  */
 export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
   const ids = [...new Set(request.playerIds)].sort((a, b) => a - b);
   const canonicalId = ids[0];
   if (ids.length < 2 || canonicalId === undefined)
-    throw new Error("At least two distinct player IDs are required");
+    throw new OperationConflictError("At least two distinct player IDs are required");
   const scoped = request.kind === "reassign-appearances";
   if (
     scoped &&
     (ids.length !== 2 || !request.matchIds.length || !request.providerIdentities.length)
   )
-    throw new Error(
+    throw new OperationConflictError(
       "Appearance reassignment requires two separate people, exact matches and verified provider identities",
     );
   if (!scoped && request.matchIds.length)
-    throw new Error("Whole-person merges cannot specify a partial match scope");
+    throw new OperationConflictError("Whole-person merges cannot specify a partial match scope");
   const scope = scoped
     ? JSON.stringify([...new Set(request.matchIds)].sort((a, b) => a - b))
     : null;
@@ -152,7 +173,8 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         .bind(request.manifestDigest)
         .first<{ status: string; manifest_json: string }>();
       if (prior?.status === "prepared") {
-        if (!request.resume) throw new Error("Prepared repair requires explicit resume");
+        if (!request.resume)
+          throw new OperationConflictError("Prepared repair requires explicit resume");
         prepared = true;
       }
       if (prior && !prepared) {
@@ -167,10 +189,12 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
           JSON.stringify(recorded.matchIds ?? []) !==
             JSON.stringify(scoped ? JSON.parse(scope ?? "[]") : [])
         )
-          throw new Error("Digest belongs to another identity group");
+          throw new OperationConflictError("Digest belongs to another identity group");
         if (prior.status !== "complete") {
           if (!request.resume)
-            throw new Error("Interrupted repair requires explicit resume with its approved digest");
+            throw new OperationConflictError(
+              "Interrupted repair requires explicit resume with its approved digest",
+            );
           await resumePublicInputWrite(env, holder, `identity:${request.manifestDigest}`);
           marked = true;
           const seasons =
@@ -242,11 +266,12 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       .bind(...ids)
       .all();
     if (redirected.results.length)
-      throw new Error(
+      throw new OperationConflictError(
         "Group includes a retired ID; use its approved repair digest or canonical ID",
       );
     const players = snapshots[0]?.results ?? [];
-    if (players.length !== ids.length) throw new Error("An identity group member no longer exists");
+    if (players.length !== ids.length)
+      throw new OperationConflictError("An identity group member no longer exists");
     const datesOfBirth = [
       ...new Set(
         players.flatMap((player) => (player.date_of_birth == null ? [] : [player.date_of_birth])),
@@ -266,7 +291,9 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         result.results.some((row) => !ids.includes(Number(row.player_id))),
       )
     )
-      throw new Error("Verified provider identity already belongs to a different player group");
+      throw new OperationConflictError(
+        "Verified provider identity already belongs to a different player group",
+      );
     if (scoped) {
       const official = request.providerIdentities.filter((item) => item.provider === "afl-api");
       const existing = players.find((player) => player.id === canonicalId)?.external_afl_player_id;
@@ -274,11 +301,11 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         official.length > 1 ||
         (existing != null && official.some((item) => item.providerId !== existing))
       )
-        throw new Error(
+        throw new OperationConflictError(
           "Appearance reassignment cannot overwrite a different canonical provider identity",
         );
       if (!(snapshots[2]?.results.length || snapshots[3]?.results.length))
-        throw new Error("No appearances in the reviewed reassignment scope");
+        throw new OperationConflictError("No appearances in the reviewed reassignment scope");
     }
     const stats = mergeIdentityAppearances(
       "player_match_stats",
@@ -321,11 +348,13 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         manifest,
       };
     if (conflicts.length)
-      throw new Error("Unresolved non-null appearance conflicts block this identity group");
+      throw new OperationConflictError(
+        "Unresolved non-null appearance conflicts block this identity group",
+      );
     if (!scoped && datesOfBirth.length > 1)
-      throw new Error("Conflicting dates of birth block this identity group");
+      throw new OperationConflictError("Conflicting dates of birth block this identity group");
     if (digest !== request.manifestDigest)
-      throw new Error("Identity repair preview is stale or not approved");
+      throw new OperationConflictError("Identity repair preview is stale or not approved");
     if (!prepared) {
       await env.DB.prepare(
         "INSERT INTO identity_repair_operations(manifest_digest, canonical_id, manifest_json, status, applied_at) VALUES(?1,?2,?3,'prepared',?4)",

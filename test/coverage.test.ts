@@ -31,7 +31,7 @@ function observationEnv() {
   const rows = [
     { id: 77, year: 2026, season_key: "2026", code: "VFLW" },
     { row_count: 2, n0: 2, n1: 1 },
-    { row_count: 4 },
+    { row_count: 4, known_totals: 3, unknown_totals: 1 },
     { row_count: 5, match_count: 2 },
     { row_count: 3, eligible_completed: 2, matches_with_statistics: 1 },
     { provider_matches: 4, observed_at: "2026-10-04T00:00:00Z" },
@@ -228,7 +228,7 @@ describe("coverage contract", () => {
       null: 0,
       ratio: 1,
     });
-    expect(first.pav).toEqual({ unit: "table_rows", rows: 4 });
+    expect(first.pav).toEqual({ unit: "table_rows", rows: 4, known_totals: 3, unknown_totals: 1 });
     expect(first.lineups).toEqual({
       unit: "match_presence",
       total_matches: 3,

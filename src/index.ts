@@ -2,6 +2,7 @@ import type { CompetitionCode } from "fitzroy";
 import { backfillBrownlow } from "./admin/brownlow";
 import { reconcileBearsIdentity } from "./admin/club-identities";
 import { backfillCoaches } from "./admin/coaching";
+import { OperationConflictError } from "./admin/errors";
 import { PavRepairRequestSchema, repairPav } from "./admin/pav";
 import { IdentityRepairRequestSchema, repairPlayerIdentity } from "./admin/player-identities";
 import { operateStatsRefresh, StatsRefreshRequestSchema } from "./admin/stats-refresh";
@@ -123,7 +124,24 @@ export default {
             { error: error.message, code: error.code, validSelectors: error.validSelectors },
             { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
           );
-        console.error(JSON.stringify({ event: "admin_route_error", path }));
+        if (error instanceof OperationConflictError)
+          return Response.json({ error: error.message, code: error.code }, { status: 409 });
+        // Never log upstream error messages, request bodies or credential-bearing URLs.
+        const frames =
+          error instanceof Error
+            ? error.stack
+                ?.split("\n")
+                .slice(1)
+                .flatMap((line) => line.match(/src\/[a-zA-Z0-9_./-]+:\d+:\d+/g) ?? [])
+            : [];
+        console.error(
+          JSON.stringify({
+            event: "admin_route_error",
+            path,
+            errorType: error instanceof TypeError ? "TypeError" : "Error",
+            frames,
+          }),
+        );
         return Response.json({ error: "internal error" }, { status: 500 });
       }
     }

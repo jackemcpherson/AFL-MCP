@@ -26,9 +26,9 @@ input_completeness AS (
     SELECT NOT EXISTS (
       SELECT 1 FROM matches m
       JOIN target_season ts ON m.season_id = ts.season_id
-      WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
-        AND (m.status = 'Complete' OR m.status IS NULL)
+      WHERE (m.status = 'Complete' OR m.status IS NULL)
         AND (
+          m.home_points IS NULL OR m.away_points IS NULL OR
           NOT EXISTS (SELECT 1 FROM player_match_stats pms
             WHERE pms.match_id = m.id AND pms.team_id = m.home_team_id)
           OR NOT EXISTS (SELECT 1 FROM player_match_stats pms

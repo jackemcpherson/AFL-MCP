@@ -182,3 +182,16 @@ describe("calculatePav for AFLW", () => {
     await expect(calculatePav(env, 2016, "AFLW")).rejects.toThrow(/AFLW is supported from 2017/);
   });
 });
+
+it("keeps season PAV unknown when another completed fixture has missing scores", async () => {
+  await seedAflwMatch(2025);
+  await calculatePav(env, 2025, "AFLW");
+  await env.DB.prepare(`INSERT INTO matches(season_id,round,round_number,date,home_team_id,away_team_id,status)
+    SELECT season_id,'Week 2',2,'2025-09-01',home_team_id,away_team_id,'Complete' FROM matches LIMIT 1`).run();
+  await calculatePav(env, 2025, "AFLW");
+  const rows = await env.DB.prepare("SELECT total_pav FROM player_season_pav").all<{
+    total_pav: number | null;
+  }>();
+  expect(rows.results).toHaveLength(6);
+  expect(rows.results.every((row) => row.total_pav === null)).toBe(true);
+});

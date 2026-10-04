@@ -161,16 +161,11 @@ export async function sync(
     consistent = true;
     return results;
   } finally {
-    if (consistent)
-      await finishPublicInputWrite(env, holder).catch(async () => {
-        await logSync(
-          env,
-          "sync:input-revision",
-          0,
-          "failed to clear active input write marker",
-        ).catch(() => undefined);
-      });
-    await releaseOperationLease(env, holder);
+    try {
+      if (consistent) await finishPublicInputWrite(env, holder);
+    } finally {
+      await releaseOperationLease(env, holder);
+    }
   }
 }
 

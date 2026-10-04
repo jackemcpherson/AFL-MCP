@@ -1,3 +1,4 @@
+import { OperationConflictError } from "../admin/errors";
 import type { Env } from "../types";
 
 /**
@@ -24,7 +25,9 @@ export async function beginPublicInputWrite(
     .bind(now.toISOString(), holder, operation)
     .run();
   if (result.meta.changes !== 1)
-    throw new Error("Input write requires an active lease and a recovered public marker");
+    throw new OperationConflictError(
+      "Input write requires an active lease and a recovered public marker",
+    );
 }
 
 /**
@@ -44,7 +47,7 @@ export async function finishPublicInputWrite(env: Env, holder: string): Promise<
     .bind(holder)
     .run();
   if (result.meta.changes !== 1)
-    throw new Error("Input write lease lost; marker retained for recovery");
+    throw new OperationConflictError("Input write lease lost; marker retained for recovery");
 }
 
 /**
@@ -67,7 +70,9 @@ export async function resumePublicInputWrite(
     .bind(holder, operation)
     .run();
   if (result.meta.changes !== 1)
-    throw new Error("Recovery requires the matching operation marker and active lease");
+    throw new OperationConflictError(
+      "Recovery requires the matching operation marker and active lease",
+    );
 }
 
 /**

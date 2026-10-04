@@ -10,6 +10,7 @@ import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
+import { OperationConflictError } from "./errors";
 
 /** One reviewed competition-season replacement; no implicit calendar-year scope. */
 export const PavRepairRequestSchema = z.strictObject({
@@ -39,7 +40,7 @@ export async function repairPav(env: Env, request: z.infer<typeof PavRepairReque
   try {
     const season = await resolveStoredSeason(env, request.competition, request.season);
     if (season.year < MIN_PAV_YEAR_BY_COMPETITION[request.competition])
-      throw new Error("PAV is unsupported for this competition-season");
+      throw new OperationConflictError("PAV is unsupported for this competition-season");
     const revision = await env.DB.prepare(
       "SELECT revision,in_progress,write_operation FROM public_input_revision WHERE id=1",
     ).first<{ revision: number; in_progress: number; write_operation: string | null }>();
@@ -53,14 +54,16 @@ export async function repairPav(env: Env, request: z.infer<typeof PavRepairReque
     ).join("");
     if (request.dryRun) {
       if (revision.in_progress)
-        throw new Error("Recover the active public write before previewing PAV");
+        throw new OperationConflictError("Recover the active public write before previewing PAV");
       return { busy: false, dryRun: true, ...preview, manifestDigest: digest };
     }
     if (request.resume) {
-      if (!request.manifestDigest) throw new Error("Recovery requires the approved preview digest");
+      if (!request.manifestDigest)
+        throw new OperationConflictError("Recovery requires the approved preview digest");
       await resumePublicInputWrite(env, holder, `pav:${season.id}:${request.manifestDigest}`);
     } else {
-      if (request.manifestDigest !== digest) throw new Error("PAV preview missing or stale");
+      if (request.manifestDigest !== digest)
+        throw new OperationConflictError("PAV preview missing or stale");
       await beginPublicInputWrite(env, holder, new Date(), `pav:${season.id}:${digest}`);
     }
     marked = true;

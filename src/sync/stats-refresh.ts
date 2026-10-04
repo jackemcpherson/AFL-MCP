@@ -202,8 +202,8 @@ export async function refreshDueStats(
   // A failed replacement leaves the queue intact, even if the match fetch checkpoint committed.
   const pending = await env.DB.prepare(`SELECT s.id, s.season_key, c.code FROM pav_rebuild_queue q
     JOIN seasons s ON s.id=q.season_id JOIN competitions c ON c.id=s.competition_id
-    WHERE (?1 IS NULL OR s.id=?1) AND q.reason='statistics' ORDER BY s.id LIMIT 4`)
-    .bind(seasonId ?? null)
+    WHERE (?1 IS NULL OR s.id=?1) AND q.reason='statistics' ORDER BY s.id LIMIT ?2`)
+    .bind(seasonId ?? null, MAX_STATS_REFRESH_MATCHES)
     .all<{ id: number; season_key: string; code: CompetitionCode }>();
   for (const season of pending.results) {
     if (season.code === "AFLM" || season.code === "AFLW")
@@ -212,5 +212,11 @@ export async function refreshDueStats(
       .bind(season.id)
       .run();
   }
+  const remaining = await env.DB.prepare(
+    "SELECT 1 FROM pav_rebuild_queue WHERE reason='statistics' AND (?1 IS NULL OR season_id=?1) LIMIT 1",
+  )
+    .bind(seasonId ?? null)
+    .first();
+  if (remaining) throw new Error("Statistics PAV rebuilds remain; resume the marked operation");
   return { attempted: due.results.length, succeeded, failed, changedRows };
 }

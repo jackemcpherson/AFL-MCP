@@ -6,6 +6,7 @@ import {
 } from "../db/public-inputs";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
+import { OperationConflictError } from "./errors";
 
 const BEARS_LAST_SEASON = 1996;
 
@@ -75,14 +76,16 @@ export async function reconcileBearsIdentity(
     ).join("");
     if (dryRun) {
       if (revision.in_progress)
-        throw new Error("Recover the active public write before previewing Bears");
+        throw new OperationConflictError("Recover the active public write before previewing Bears");
       return { busy: false, report, manifestDigest: digest, matchIds };
     }
     if (options.resume) {
-      if (!options.manifestDigest) throw new Error("Bears recovery requires the approved digest");
+      if (!options.manifestDigest)
+        throw new OperationConflictError("Bears recovery requires the approved digest");
       await resumePublicInputWrite(env, holder, `bears:${options.manifestDigest}`);
     } else {
-      if (options.manifestDigest !== digest) throw new Error("Bears preview missing or stale");
+      if (options.manifestDigest !== digest)
+        throw new OperationConflictError("Bears preview missing or stale");
       await beginPublicInputWrite(env, holder, new Date(), `bears:${digest}`);
     }
     marked = true;
@@ -164,7 +167,7 @@ async function findClubIds(
   const competition = await env.DB.prepare(
     "SELECT id FROM competitions WHERE code = 'AFLM'",
   ).first<{ id: number }>();
-  if (!competition) throw new Error("AFLM competition does not exist");
+  if (!competition) throw new OperationConflictError("AFLM competition does not exist");
   let bears = await env.DB.prepare(
     "SELECT id FROM teams WHERE competition_id = ?1 AND name = 'Brisbane Bears'",
   )
@@ -189,7 +192,8 @@ async function findClubIds(
   )
     .bind(competition.id)
     .first<{ id: number }>();
-  if (!lions || (!bears && !dryRun)) throw new Error("Brisbane team identity is missing");
+  if (!lions || (!bears && !dryRun))
+    throw new OperationConflictError("Brisbane team identity is missing");
   return { bearsId: bears?.id ?? -1, lionsId: lions.id };
 }
 
