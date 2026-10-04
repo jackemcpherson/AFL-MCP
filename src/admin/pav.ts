@@ -31,7 +31,9 @@ export const PavRepairRequestSchema = z.strictObject({
  * @param request - Exact season and approved preview digest.
  * @returns Input revision and scope preview, or replaced row count.
  * @throws When the preview is stale, recovery scope differs, or D1 fails.
- */
+
+ * @example
+ * await repairPav(env, PavRepairRequestSchema.parse(request)); */
 export async function repairPav(env: Env, request: z.infer<typeof PavRepairRequestSchema>) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };

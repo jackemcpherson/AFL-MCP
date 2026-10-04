@@ -70,7 +70,8 @@ only six-vote regular matches before the operation writes data.
   stored match date and canonical team, matching the AFL API standard.
 - Public `/health` and `/mcp/health` remain unchanged. Detailed status is
   private and aggregate-only.
-- No schema migration is required. Existing `brownlow_votes`, `sync_log`,
+- The operation requires no schema migration. Existing `brownlow_votes`,
+  `sync_log`,
   `sync_lease`, and five integrity views are sufficient.
 
 ## 2. Shared Operation Lease

@@ -82,8 +82,13 @@ export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void
  * @param now - Timestamp for attempts, successful fetches and retries.
  * @param fetchStats - Provider fetch function; injected for captured-fixture tests.
  * @param seasonId - Optional exact season scope for an operator refresh.
+ * @param operationId - Persisted operation whose pending matches restrict the fetch.
+ * @param holder - Lease owner used to fence explicit PAV replacements.
  * @returns Counts of independently completed fetches and changed statistic rows.
- */
+
+ * @throws If approval, recovery, lease ownership or a database operation fails.
+ * @example
+ * await refreshDueStats(writer, new Date(), undefined, seasonId, operationId, holder); */
 export async function refreshDueStats(
   env: Env,
   now: Date,
@@ -198,6 +203,25 @@ export async function refreshDueStats(
       .run();
     succeeded++;
   }
+  await rebuildQueuedStatsPav(env, seasonId, holder);
+  return { attempted: due.results.length, succeeded, failed, changedRows };
+}
+
+/**
+ * Finish bounded derived work for changed fixture or statistic inputs.
+ * @param env - Bindings under the public write marker.
+ * @param seasonId - Optional exact season scope.
+ * @param holder - Lease owner for explicit PAV replacement fencing.
+ * @returns Resolves after the scoped statistics queue is empty.
+ * @throws If replacement fails or bounded work remains. The caller must retain its marker.
+ * @example
+ * await rebuildQueuedStatsPav(writer, undefined, holder);
+ */
+export async function rebuildQueuedStatsPav(
+  env: Env,
+  seasonId?: number,
+  holder?: string,
+): Promise<void> {
   // Database triggers queue only changed PAV inputs, in the same transaction as the input.
   // A failed replacement leaves the queue intact, even if the match fetch checkpoint committed.
   const pending = await env.DB.prepare(`SELECT s.id, s.season_key, c.code FROM pav_rebuild_queue q
@@ -218,5 +242,4 @@ export async function refreshDueStats(
     .bind(seasonId ?? null)
     .first();
   if (remaining) throw new Error("Statistics PAV rebuilds remain; resume the marked operation");
-  return { attempted: due.results.length, succeeded, failed, changedRows };
 }

@@ -66,7 +66,7 @@ fitzroy 3.0.1's afl-api path (`node_modules/fitzroy/dist/index.js`):
     GET https://api.afl.com.au/cfs/afl/matchItems/round/{roundProviderId}
     ```
 
-3. Response items are parsed with `MatchItemSchema`, which includes:
+3. The parser uses `MatchItemSchema` for response items. The schema includes:
 
     ```ts
     weather: CfsWeatherSchema.nullable().optional(),
@@ -176,5 +176,5 @@ After the fix ships and D1 starts receiving weather, update
 | Question                                                                                                                                                                              | Who decides                                           |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | Does the AFL API return weather at any point for completed matches, or only during the live window? A curl of a known-historical `roundProviderId` during a live match would confirm. | fitzRoy-ts maintainer (needs live-window observation) |
-| Should `weatherTempCelsius` be dropped from D1 write path and schema doc if the 2026 AFL API fixture confirms temp is no longer included?                                             | Repo maintainer. wait for upstream investigation      |
+| Should maintainers remove `weatherTempCelsius` from D1 writes and schema documentation if the 2026 API fixture no longer supplies temperatures?                                       | Repo maintainer. wait for upstream investigation      |
 | Is the 2010-2025 fryzigg-sourced weather worth a re-backfill if the AFL API starts returning data for those years? Historical coverage is already complete. probably not worth it.    | Repo maintainer                                       |

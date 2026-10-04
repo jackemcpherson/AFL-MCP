@@ -25,6 +25,10 @@ export class SeasonSelectionError extends Error {
  * Reject ambiguous years and return an exact canonical key before any database write.
  * @param competition - Competition discriminator.
  * @param selector - Calendar year or canonical key.
+ * @returns Exact canonical season key.
+ * @throws {SeasonSelectionError} If the selector is invalid or ambiguous.
+ * @example
+ * seasonKey("AFLW", "2022-S7");
  */
 export function seasonKey(competition: string, selector: number | string): string {
   const key = String(selector);
@@ -44,7 +48,17 @@ export function seasonKey(competition: string, selector: number | string): strin
   return key;
 }
 
-/** Resolve a competition and selector to exactly one stored season. */
+/**
+ * Resolve a competition and selector to exactly one stored season.
+ * @param env - Database bindings.
+ * @param competition - Competition discriminator.
+ * @param selector - Calendar year or exact season key.
+ * @returns The stored season identity with its preserved internal ID.
+ * @throws {SeasonSelectionError} If the selector is invalid, ambiguous or absent.
+ * @throws If the database query fails.
+ * @example
+ * await resolveStoredSeason(env, "AFLW", "2022-S6");
+ */
 export async function resolveStoredSeason(
   env: Env,
   competition: string,

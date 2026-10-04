@@ -31,7 +31,10 @@ export const StatsRefreshRequestSchema = z.strictObject({
  * @param env - Worker bindings.
  * @param request - Validated operator scope and operation ID.
  * @returns Preview inventory, or batch progress. Repeating a completed ID is a no-op.
- */
+
+ * @throws If approval, recovery, lease ownership or a database operation fails.
+ * @example
+ * await operateStatsRefresh(env, StatsRefreshRequestSchema.parse(request)); */
 export async function operateStatsRefresh(
   env: Env,
   request: z.infer<typeof StatsRefreshRequestSchema>,

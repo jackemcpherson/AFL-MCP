@@ -103,19 +103,20 @@ Per-type ERA5 3h precip:
 Reading the asymmetry:
 
 - Precipitation presence is highly specific: dry-labelled matches almost never
-  show window rain (4 / 246 at ≥ 1 mm, 8 / 246 at ≥ 0.5 mm). Several of those
-  "false alarms" look like ground-truth errors, not ERA5 errors - e.g. match
+  show window rain (4 / 246 at ≥ 1 mm, 8 / 246 at ≥ 0.5 mm). Several false
+  alarms look like ground-truth errors. For example, match
   1446 (Adelaide Oval 2023-04-15, labelled MOSTLY_SUNNY) has 5.6 mm in the match
   window and 20.4 mm on the day. match 8139 (Gabba 2012-04-28, MOSTLY_SUNNY)
   sits on a 34.8 mm day.
-- Absence of window rain does not imply a dry label: 87 / 176 wet labels show <
-  0.2 mm in the 3h window - but 40 of those 87 had ≥ 1 mm elsewhere on match
-  day. The fryzigg label evidently encodes match-day / forecast conditions, not
+- Absence of window rain does not imply a dry label.
+  Of 176 wet labels, 87 show < 0.2 mm in the three-hour window.
+  Of those 87 matches, 40 had ≥ 1 mm elsewhere on match day. The fryzigg label
+  evidently encodes match-day / forecast conditions, not
   strictly the playing window, so window-recall understates ERA5 as much as it
   indicts it. Day-precip AUC (0.826) being clearly higher than window AUC
   (0.741) confirms this.
-- ERA5's known smoothing of convective showers on a 31 km grid (see §5)
-  plausibly accounts for much of the remaining miss rate, especially light
+- ERA5 smooths convective showers on a 31 km grid, as §5 describes.
+  Smoothing plausibly explains much of the remaining miss rate, especially
   drizzle around 0.1 - 0.3 mm/h.
 
 ### Wind (Secondary)
@@ -173,18 +174,19 @@ max, excluding TIO's placeholder rows, below): **MAE 2.10 °C, bias −0.89 °C*
 - TIO Stadium (Darwin) - ground truth is broken, not ERA5.: Sampled fryzigg
   temps are `33, 28, 26, 18, 18, 18, 18, 18, 35`. five consecutive 18 °C values
   for dry-season Darwin night games (where ERA5-Land reads 27 - 29 °C) are
-  clearly a placeholder/default. TIO should be excluded from any temp-agreement
-  claim and its fryzigg temps treated as suspect.
+  clearly a placeholder/default. Exclude TIO from temperature-agreement claims.
+  Treat its fryzigg temperatures as suspect.
 - Adelaide Oval: worst honest day-max MAE (3.54, n = 18) and the highest dry
   FPR. individual outliers in both directions suggest noisier fryzigg values
   here rather than a grid problem (Football Park, 11 km away, scores 2.25).
 - Manuka Oval: day-max bias −2.73 is the largest true negative bias. small
   sample (15) of mostly winter matches in a frost-hollow venue that a 9 km grid
   smooths over.
-- Largest single disagreements are label-side howlers, e.g. match 1409 (MCG
-  2023-03-18 19:25, fryzigg 37 °C vs ERA5-Land 19.7 °C - actual Melbourne
-  evening in March) and match 215 (Adelaide Oval 2017-03-26, fryzigg 18 °C vs
-  ERA5 31.1 °C).
+- The largest disagreements appear to be label errors.
+  Match 1409 at the MCG on 2023-03-18 at 19:25 has fryzigg 37 °C versus
+  ERA5-Land 19.7 °C.
+  Match 215 at Adelaide Oval on 2017-03-26 has fryzigg 18 °C versus ERA5 31.1
+  °C.
 
 ---
 
@@ -196,7 +198,7 @@ accuracy comparison** - only availability probes plus published assessments.
 **Measured availability (probe calls, MCG grid point):**
 
 - 1995-06-17: ERA5-Land hourly temperature and ERA5 hourly precipitation both
-  fully populated. The 1990s are served identically to the 2020s.
+  fully populated. The 1990s come identically to the 2020s.
 - ERA5-Land begins **1950-01-01** (1950-01-05 probe returns full 24 h. 1940
   probe returns `null` for `era5_land`).
 - ERA5 (0.25°) extends back to **1940** with temperature and precipitation
@@ -205,27 +207,36 @@ accuracy comparison** - only availability probes plus published assessments.
 **Published skill context:**
 
 - Lavers et al. 2022, _QJRMS_
-  ([doi:10.1002/qj.4351](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4351)) -
-  ERA5 precipitation evaluated against 5,637 gauges (2001 - 2020): smallest
-  random errors in the extratropics, largest in the tropics. recommended for
+([doi:10.1002/qj.4351](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4351))
+  -
+  The study evaluated ERA5 precipitation against 5,637 gauges for 2001 - 2020.
+  Random errors were smallest in the extratropics and largest in the tropics.
+  recommended for
   extratropical precipitation monitoring. All sampled venues except TIO Stadium
   (Darwin) and Cazalys (Cairns) are extratropical.
 - _HESS_ 2025, BARRA vs ERA5 over Australia
   ([hess-29-3527-2025](https://hess.copernicus.org/articles/29/3527/2025/)) -
-  ERA5 daily precipitation vs AGCD gridded obs: mean temporal correlation ~0.85,
-  Perkins skill > 0.9 over most of Australia, but **ERA5 underestimates dry days
-  and heavy rainfall** (consistent with the low wet-recall measured in §2).
+  ERA5 daily precipitation has mean temporal correlation ~0.85 against AGCD
+  gridded observations.
+  Perkins skill exceeds 0.9 over most of Australia.
+  ERA5 underestimates dry days and heavy rainfall, consistent with the low wet
+  recall measured in §2.
 - _Atmosphere_ 2023
   ([mdpi 2073-4433/14/6/913](https://www.mdpi.com/2073-4433/14/6/913)) - ERA5
   temperature over Australia captures mean and extreme indices reasonably well.
   skill worse for minimum temperature. warm bias stronger in western Australia.
 - ECMWF back-extension documentation
-  ([Bell et al. 2021](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4174),
-  [ERA5 data documentation](https://confluence.ecmwf.int/spaces/CKB/pages/76414402/ERA5+data+documentation),
-  [known-issue page for Australia pre-1970](<https://confluence.ecmwf.int/display/CKB/ERA5+back+extension+1950-1978+(Preliminary+version):+large+bias+in+surface+analysis+over+Australia+prior+to+1970>)) -
-  skill in the pre-satellite era (before TOVS assimilation, late 1978) is
-  **markedly lower over Australia/NZ than Europe**, improving dramatically
-  from 1979. a documented warm bias in the surface analysis over Australia prior
+  ([Bell et al.
+  2021](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4174),
+  [ERA5 data
+  documentation](https://confluence.ecmwf.int/spaces/CKB/pages/76414402/ERA5+data+documentation),
+  [known-issue page for Australia
+  pre-1970](<https://confluence.ecmwf.int/display/CKB/ERA5+back+extension+1950-1978+(Preliminary+version):+large+bias+in+surface+analysis+over+Australia+prior+to+1970>))
+  -
+  Before TOVS assimilation in late 1978, skill is markedly lower over
+  Australia/NZ than Europe.
+  Skill improves dramatically from 1979. a documented warm bias in the surface
+  analysis over Australia prior
   to ~1970 (ERA5 anomalies high vs ACORN-SAT/GISTEMP).
 
 **Inference (not measurement):** 1979 - 2009 backfill quality should resemble
@@ -237,16 +248,19 @@ pre-1950 only ERA5 (31 km) exists at all.
 
 ## 5. Limitations
 
-- The ground truth is itself imperfect.: fryzigg labels encode match-day /
-  forecast conditions (40 of 87 window-dry RAIN labels had measurable day rain),
-  temps are integer-quantised, behave as daily maxima, and contain outright
-  placeholders (TIO 18 °C runs) and howlers (§3). Every headline number above is
+- The ground truth is imperfect. Fryzigg labels encode match-day or forecast
+  conditions.
+  Of 87 window-dry RAIN labels, 40 had measurable day rain.
+  Integer-quantised temperatures behave as daily maxima and contain
+  placeholders, including TIO 18 °C runs, and other errors described in §3.
+  Every headline number above is
   a _disagreement_ rate, of which ERA5 error is only one component.
-- Wet types were deliberately oversampled. in-sample precision is inflated,
-  which is why prevalence-adjusted precision is reported alongside.
-- ERA5 precip is a 31 km grid-cell average: localised showers are smoothed,
-  depressing wet recall - a real limitation for reconstructing a categorical
-  RAIN label, less so for a continuous "wetness" feature.
+- Wet types were deliberately oversampled. Oversampling inflates in-sample
+  precision. The report also gives prevalence-adjusted precision.
+- ERA5 precipitation averages a 31 km grid cell. The grid smooths localised
+  showers and reduces wet recall.
+  Smoothing limits categorical RAIN reconstruction more than a continuous
+  wetness feature.
 - One grid point per venue, nearest-cell. no bias correction applied.
 - Marvel Stadium (695 labels, 21 % of the population) is unscoreable for
   precipitation by construction (roof), and small venues (< 20 matches) were not

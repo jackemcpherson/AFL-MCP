@@ -19,7 +19,7 @@ import { runWeatherStage } from "../weather/stage";
 import { acquireOperationLease, releaseOperationLease } from "./lease";
 import { logSync } from "./log";
 import { correctVerifiedMatch } from "./source-corrections";
-import { queueRecentStatsRefresh, refreshDueStats } from "./stats-refresh";
+import { queueRecentStatsRefresh, rebuildQueuedStatsPav, refreshDueStats } from "./stats-refresh";
 import {
   buildMatchAflIdMap,
   ensureCompetition,
@@ -158,6 +158,8 @@ export async function sync(
       .run()
       .catch(() => undefined);
 
+    // Fixture score/status changes also invalidate PAV on five-minute ticks.
+    await rebuildQueuedStatsPav(writer, undefined, holder);
     consistent = true;
     return results;
   } finally {

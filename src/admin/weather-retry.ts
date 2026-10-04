@@ -21,7 +21,10 @@ export const WeatherRetryRequestSchema = z.strictObject({
  * @param env - Worker bindings.
  * @param request - Validated exact match and season scope.
  * @returns Diagnostic preview or count of reset retry schedules.
- */
+
+ * @throws If approval, recovery, lease ownership or a database operation fails.
+ * @example
+ * await retryWeather(env, WeatherRetryRequestSchema.parse(request)); */
 export async function retryWeather(env: Env, request: z.infer<typeof WeatherRetryRequestSchema>) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };

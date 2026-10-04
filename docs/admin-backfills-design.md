@@ -2,7 +2,7 @@
 
 Plan 011 reached draft status on 2026-07-02.
 
-> **Brownlow section superseded (2026-07-12):** fitzroy-ts #117 is closed and
+> **Brownlow section superseded (2026-07-12):** fitzroy-ts closed #117 and
 > fitzroy 3.4 returns `{ stats, failedMatchIds }` with `brownlowVotes` parsed.
 > The Brownlow endpoint, lease-sharing, and private diagnostics contracts now
 > live in [`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
@@ -18,12 +18,12 @@ bypasses the Worker's upsert and lease machinery to use production D1 directly.
 | #   | File                         | Purpose                                                                                                                        | Tables / columns written                                                                                                                                                          | Upstream source                              | Last git touch       | Classification       | Idempotent?                                                                                          | Bypass `normaliseTeam`?                                                                                   |
 | --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | 1   | `backfill-brownlow.ts`       | Backfill `brownlow_votes` for AFLM seasons 1990 - present from AFL Tables                                                      | `player_match_stats.brownlow_votes`                                                                                                                                               | `fetchPlayerStats({ source: "afl-tables" })` | `34f9e7e` 2026-05-10 | **RECURRING**        | Yes - `WHERE brownlow_votes IS NULL OR brownlow_votes = 0` (line 268)                                | No - imports `normaliseTeam` from `src/lib/normalise`                                                     |
-| 2   | `backfill-dob.mts`           | Two-stage DOB backfill: Stage 1 via fryzigg external_id, Stage 2 via AFL Tables team roster pages                              | `players.date_of_birth`                                                                                                                                                           | `FryziggClient`, `AflTablesClient`           | `2042004` 2026-06-28 | **RECURRING**        | Yes - `WHERE date_of_birth IS NULL` on all UPDATEs (lines 211, 370)                                  | No - imports `normaliseTeamName` from `fitzroy`                                                           |
-| 3   | `backfill-lineups-early.ts`  | Lineup backfill for 2015 - 2019 seasons that lack `external_afl_id`. resolves matches via `year\|round_number\|home_team`      | `match_lineups`, `matches.external_afl_id`, `players`                                                                                                                             | `fetchLineup({ source: "afl-api" })`         | `cb4aa1c` 2026-05-09 | **ONE-SHOT-DONE**    | Partial - `ON CONFLICT (match_id, player_id) DO UPDATE SET` on lineups, but player INSERTs overwrite | Local `TEAM_NAME_MAP` - drift risk vs `normalise.ts`                                                      |
+| 2   | `backfill-dob.mts`           | Two-stage DOB backfill: Stage 1 via fryzigg external_id, Stage 2 via AFL Tables team roster pages                              | `players.date_of_birth`                                                                                                                                                           | `FryziggClient`, `AflTablesClient`           | `2042004` 2026-06-28 | **RECURRING**        | Yes - `WHERE date_of_birth IS NULL` on all updates (lines 211, 370)                                  | No - imports `normaliseTeamName` from `fitzroy`                                                           |
+| 3   | `backfill-lineups-early.ts`  | Lineup backfill for 2015 - 2019 seasons that lack `external_afl_id`. resolves matches via `year\|round_number\|home_team`      | `match_lineups`, `matches.external_afl_id`, `players`                                                                                                                             | `fetchLineup({ source: "afl-api" })`         | `cb4aa1c` 2026-05-09 | **ONE-SHOT-DONE**    | Partial - `ON CONFLICT (match_id, player_id) DO UPDATE SET` on lineups, but player inserts overwrite | Local `TEAM_NAME_MAP` - drift risk vs `normalise.ts`                                                      |
 | 4   | `backfill-lineups.ts`        | General lineup backfill for 2015+ using `external_afl_id` for match resolution                                                 | `match_lineups`, `players`                                                                                                                                                        | `fetchLineup({ source: "afl-api" })`         | `cb4aa1c` 2026-05-09 | **OPERATIONAL-KEEP** | Yes - `ON CONFLICT (match_id, player_id) DO UPDATE SET` (line 234)                                   | Local `TEAM_NAME_MAP` - drift risk vs `normalise.ts`                                                      |
 | 5   | `backfill-rounds.ts`         | Corrects `round`, `round_number`, `round_type` on matches by comparing D1 vs AFL API. default range 2024 - current             | `matches.round`, `matches.round_number`, `matches.round_type`                                                                                                                     | `fetchMatches({ source: "afl-api" })`        | `aaef468` 2026-05-10 | **ONE-SHOT-DONE**    | Yes - explicit diff check before emitting UPDATE (lines 109 - 117)                                   | No - imports `normaliseTeam` from `src/lib/normalise`                                                     |
 | 6   | `dedup-players.ts`           | Merge duplicate player records created when fryzigg and AFL API ingested the same person as separate rows. reassigns FKs       | `players`, `match_lineups`, `player_match_stats`, `player_season_pav`                                                                                                             | D1 only (no upstream fetch)                  | `668cd06` 2026-04-30 | **ONE-SHOT-DONE**    | Yes by design - re-run finds no remaining duplicates                                                 | n/a - no team normalisation needed                                                                        |
-| 7   | `diagnose-brownlow-gaps.ts`  | Read-only probe: finds Brownlow vote records in AFL Tables that cannot be matched to a D1 player, printing diagnostics         | none                                                                                                                                                                              | `fetchPlayerStats({ source: "afl-tables" })` | `34f9e7e` 2026-05-10 | **OPERATIONAL-KEEP** | n/a - read-only                                                                                      | No - imports `normaliseTeam` from `src/lib/normalise`                                                     |
+| 7   | `diagnose-brownlow-gaps.ts`  | Read-only probe: finds Brownlow vote records in AFL Tables that do not match a D1 player, printing diagnostics                 | none                                                                                                                                                                              | `fetchPlayerStats({ source: "afl-tables" })` | `34f9e7e` 2026-05-10 | **OPERATIONAL-KEEP** | n/a - read-only                                                                                      | No - imports `normaliseTeam` from `src/lib/normalise`                                                     |
 | 8   | `enrich-fryzigg.ts`          | Enriches `player_match_stats` with Brownlow and SuperCoach data, plus weather fields on `matches`                              | `player_match_stats.brownlow_votes`, `player_match_stats.supercoach_score`, `matches.weather_temp_c`, `matches.weather_type`, `matches.local_time`, `matches.external_fryzigg_id` | `FryziggClient.fetchPlayerStats("AFLM")`     | `668cd06` 2026-04-30 | **ONE-SHOT-DONE**    | Yes - `IS NULL` guards on all write targets (lines 228, 244 - 253)                                   | Local `FRYZIGG_TEAM_MAP` - also includes historical teams (Fitzroy, Brisbane Bears) not in `normalise.ts` |
 | 9   | `probe-afltables-lineups.ts` | Read-only probe: tests `fetchLineup({ source: "afl-tables" })` for specific rounds in 2015 - 2022                              | none                                                                                                                                                                              | `fetchLineup`                                | `06df36e` 2026-05-10 | **ONE-SHOT-DONE**    | n/a - read-only                                                                                      | n/a                                                                                                       |
 | 10  | `probe-missing-lineups.ts`   | Read-only probe: tests `fetchLineup({ source: "afl-api" })` for the known-missing rounds (2015/R4, 2017/R8, 2018/R9, 2019/R11) | none                                                                                                                                                                              | `fetchLineup`                                | `e222e8e` 2026-05-10 | **ONE-SHOT-DONE**    | n/a - read-only                                                                                      | n/a                                                                                                       |
@@ -54,8 +54,9 @@ remaining current-year gap lasts until the annual count. Each year contains
 about 450 to 600 player-game rows. The multi-stage name resolution also exceeds
 the five-minute cron budget.
 
-- the algorithm makes two D1 queries per year plus one AFL Tables fetch, which
-  is fine for a targeted request but too expensive to run on every tick. The
+- The algorithm makes two D1 queries per year and one AFL Tables fetch.
+  Targeted requests are practical. Running that work on every tick is too
+  expensive. The
   operator needs explicit year-range control, which maps naturally to the
   `BackfillRequestSchema` pattern already in `src/mcp/validation.ts`. Keep as a
   hardened script until the endpoint exists, then retire the script.
@@ -104,11 +105,11 @@ future dedup guide.
 The `weather_temp_c`/`weather_type` columns are at 100% coverage for 2010 - 2025
 (fryzigg weather enrichment decision: NO-ENRICH
 
-- no additional weather fields available). `brownlow_votes` is maintained by the
-  dedicated Brownlow backfill. `supercoach_score` and `brownlow_votes` are
-  written by the sync pipeline via `STAT_COLUMNS` with `kind: "coalesce"` guards
-  (`src/sync/upserts.ts:670 - 671`). `local_time` is populated by the sync
-  pipeline. `external_fryzigg_id` was a one-time population. The local
+- no additional weather fields available). The dedicated Brownlow backfill
+  maintains `brownlow_votes`. The sync pipeline writes `supercoach_score` and
+  `brownlow_votes` via `STAT_COLUMNS` with `kind: "coalesce"` guards
+  (`src/sync/upserts.ts:670 - 671`). The sync pipeline populates `local_time`.
+  `external_fryzigg_id` was a one-time population. The local
   `FRYZIGG_TEAM_MAP` (including defunct teams: Fitzroy, Brisbane Bears) diverges
   from `normalise.ts`
 - a maintenance risk if kept. Recommend deletion.
@@ -296,14 +297,15 @@ cron could insert new player rows while this endpoint is updating
 
 **Idempotency**: Every UPDATE uses `WHERE date_of_birth IS NULL` as its guard.
 Lines 211 and 370 of `backfill-dob.mts` show this condition. A repeat run emits
-zero writes. The AFL Tables stage checks `date_of_birth IS NULL` on the initial
-D1 query so it only fetches rosters for teams that still have players with
-missing DOBs.
+zero writes. The initial D1 query checks `date_of_birth IS NULL`.
+The AFL Tables stage fetches rosters only for teams with missing player birth
+dates.
 
 **Chunking contract**: For the AFL Tables stage, max 5 years per request.
 Recommended invocation pattern:
 
-1. `{ stage: "fryzigg", dryRun: false }` - one request, fills DOBs for players
+1. `{ stage: "fryzigg", dryRun: false }` - one request, fills dates of birth for
+   players
    with a fryzigg `external_id`.
 2. `{ stage: "afltables", fromYear: 1990, toYear: 1999 }`, then `2000 - 2009`,
    `2010 - 2025` - three requests for the backlog of players without fryzigg
@@ -313,8 +315,8 @@ Recommended invocation pattern:
 
 - Write `sync_log` rows with type `admin:dob-backfill` on completion.
 - NOT in the health-paging set.
-- Ambiguous and unmatched player counts surface in the response body. They are
-  expected (some common names genuinely cannot be resolved safely). The endpoint
+- Ambiguous and unmatched player counts surface in the response body. Common
+  names can prevent safe resolution. The endpoint
   logs them but does not error.
 
 **Implementation estimate**: M. Port the existing algorithm to the Worker.
@@ -348,28 +350,32 @@ design does not perform the deletion.
 
 1. **Typecheck coverage for OPERATIONAL-KEEP scripts**: Should
    `backfill-lineups.ts`, `refetch-lineups.ts`, and `diagnose-brownlow-gaps.ts`
-   be added to `tsconfig.json`? The current strict compiler config
+   enter `tsconfig.json`? The current strict compiler config
    (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) would catch latent
    bugs. The downside is that scripts use `node:child_process` and `node:fs`
    (not Web Standard APIs), which would need a separate `tsconfig.scripts.json`
    to avoid polluting the Worker tsconfig.
 
 2. **Brownlow endpoint: should it skip PAV?** The endpoint writes
-   `brownlow_votes`, which is not an input to the PAV formula (`src/sync/pav.ts`
-   uses kicks, handballs, goals, etc.). PAV recalculation after a Brownlow
-   backfill would be a no-op on the formula - but the current PAV gate
-   (`statsAffected > 0`) would fire if the endpoint's writes count as "stats
-   affected". Safest: set `skipPav: true` by default in the Brownlow endpoint
+   `brownlow_votes`.
+   These votes are not a PAV input.
+   `src/sync/pav.ts` uses kicks, handballs and goals. Recalculation after
+   Brownlow ingestion does not change the formula.
+   The gate examined in this design used `statsAffected > 0`.
+   Brownlow writes could therefore trigger unnecessary PAV work. Safest: set
+   `skipPav: true` by default in the Brownlow endpoint
    (not exposed to callers), or check the affected columns before triggering
    PAV.
 
 3. **DOB endpoint: fryzigg memory footprint**: The full fryzigg AFLM DataFrame
-   is large. If it exceeds Workers' memory ceiling (128 MB on the free plan,
-   higher on paid), the fryzigg stage must be chunked by season range or the
-   fryzigg DataFrame must be streamed. Worth profiling before implementation.
+   is large. If the DataFrame exceeds the memory ceiling, chunk the stage by
+   season range or stream the DataFrame.
+   The original design assumed a 128 MB free-plan ceiling and a higher paid-plan
+   ceiling. Worth profiling before implementation.
 
 4. **`diagnose-brownlow-gaps.ts` hard-coded years**: The script hard-codes
-   `[2022, 2023, 2024, 2025]` (line 47). If the Brownlow endpoint is built, this
+   `[2022, 2023, 2024, 2025]` (line 47). If maintainers build the Brownlow
+   endpoint, this
    diagnostic will need updating to cover the years callers are backfilling.
    Alternatively, promote it to a read-only
    `GET /mcp/admin/diagnose-brownlow-gaps?fromYear=&toYear=` endpoint so

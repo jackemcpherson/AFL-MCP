@@ -197,3 +197,29 @@ it("fails with recoverable queued work when the bounded rebuild pass cannot fini
   await refreshDueStats(env, new Date());
   expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(0);
 });
+
+it.each(["time_on_ground_pct", "disposals"])(
+  "queues participation-only corrections to %s",
+  async (field) => {
+    await seed();
+    await env.DB.prepare("DELETE FROM pav_rebuild_queue").run();
+    const fetchStats: typeof fetchPlayerStats = async (query) => ({
+      success: true,
+      data: {
+        stats: [
+          makePlayerStats({
+            matchId: query.matchId ?? "missing",
+            disposals: 10,
+            timeOnGroundPercentage: 80,
+          }),
+        ],
+        failedMatchIds: [],
+      },
+    });
+    const now = new Date("2026-09-02T00:00:00Z");
+    await queueRecentStatsRefresh(env, now);
+    await refreshDueStats(env, now, fetchStats);
+    await env.DB.prepare(`UPDATE player_match_stats SET ${field}=0`).run();
+    expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(1);
+  },
+);

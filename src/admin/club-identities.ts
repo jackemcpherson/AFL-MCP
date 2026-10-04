@@ -27,6 +27,7 @@ export interface BearsRepairReport {
  *
  * @param env - Worker bindings.
  * @param dryRun - Whether to return counts without changing team references.
+ * @param options - Approval digest and explicit recovery flag for this repair.
  * @returns Whether the operation lease was busy and the reference count report.
  * @throws If required AFLM team identities or a D1 operation is unavailable.
  * @example
