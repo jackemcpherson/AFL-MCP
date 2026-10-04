@@ -29,6 +29,14 @@ Keep the expansion release separate from the contract release. Do not
 restore the database automatically after a failed operation. Retain its marker
 and checkpoint, diagnose the failure, and resume the same scope.
 
+## Fixture Corrections
+
+Use `POST /mcp/admin/backfill` with an exact `competition`, `season` and
+`fixturesOnly: true` to refresh fixture metadata without ingesting player
+statistics or lineups. This mode skips weather requests and rebuilds affected
+PAV before clearing the public marker. A failed operation must resume with the
+same selector and refresh mode.
+
 ## Reviewed Identity Operations
 
 `POST /mcp/admin/repair-player-identity` defaults to `dryRun: true`. Provide
@@ -44,7 +52,11 @@ Names only identify candidates for review.
 
 Use `kind: "reassign-appearances"` for contaminated references between two
 separate people. Supply exact `matchIds` and verified `providerIdentities`.
-The lower ID receives those appearances. Both people retain their historical
+The lower ID receives those appearances by default. Set `canonicalId` to another
+ID in the verified group when the evidence identifies that person as the target.
+The repair digest binds this choice.
+
+Both people retain their historical
 identities. This mode creates no retired-ID redirect.
 
 Other appearances and

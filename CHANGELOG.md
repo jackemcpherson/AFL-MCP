@@ -5,6 +5,20 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.3] - 2026-10-04
+
+Separate fixture corrections from player ingestion and support scoped identity
+repairs with an explicit retained target.
+
+### Added in 4.0.3
+
+- Accept `fixturesOnly: true` for exact-season backfills. Refresh fixture
+  metadata without fetching statistics, lineups or weather. Rebuild affected
+  PAV and bind recovery to the same refresh mode.
+- Accept `canonicalId` for exact appearance reassignments between separate
+  people. Retain both historical identities and bind the target to the repair
+  digest. Whole-person merges still retain the lowest ID.
+
 ## [4.0.2] - 2026-10-04
 
 Complete historical coaching imports within the database request budget.

@@ -378,6 +378,7 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
         );
       const results = await sync(env, [exact.data.competition], {
         season: exact.data.season as import("fitzroy").SeasonSelector,
+        fixturesOnly: exact.data.fixturesOnly,
         skipShouldRunNow: exact.data.skipShouldRunNow,
         resume: exact.data.resume,
       });

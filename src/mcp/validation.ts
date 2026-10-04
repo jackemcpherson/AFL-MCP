@@ -104,6 +104,7 @@ export const BackfillRequestSchema = z.strictObject({
 
 /** Exact-season ingestion, including the two distinct AFLW 2022 seasons. */
 export const ExactSeasonBackfillRequestSchema = z.strictObject({
+  fixturesOnly: z.boolean().default(false),
   resume: z.boolean().default(false),
   competition: z.enum(COMPETITION_CODE_VALUES),
   season: z.union([z.number().int(), z.string()]),

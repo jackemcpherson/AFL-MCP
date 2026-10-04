@@ -20,6 +20,7 @@ const EvidenceSchema = z.strictObject({
 /** Evidence and explicit field decisions required for one verified identity group. */
 export const IdentityRepairRequestSchema = z.strictObject({
   kind: z.enum(["merge", "reassign-appearances"]).default("merge"),
+  canonicalId: z.number().int().positive().optional(),
   matchIds: z.array(z.number().int().positive()).max(500).default([]),
   playerIds: z.array(z.number().int().positive()).min(2).max(10),
   evidence: z.array(EvidenceSchema).min(1),
@@ -144,10 +145,14 @@ async function hash(value: unknown): Promise<string> {
  */
 export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
   const ids = [...new Set(request.playerIds)].sort((a, b) => a - b);
-  const canonicalId = ids[0];
+  const scoped = request.kind === "reassign-appearances";
+  if (request.canonicalId !== undefined && (!scoped || !ids.includes(request.canonicalId)))
+    throw new OperationConflictError(
+      "An explicit target must belong to an appearance reassignment group",
+    );
+  const canonicalId = request.canonicalId ?? ids[0];
   if (ids.length < 2 || canonicalId === undefined)
     throw new OperationConflictError("At least two distinct player IDs are required");
-  const scoped = request.kind === "reassign-appearances";
   if (
     scoped &&
     (ids.length !== 2 || !request.matchIds.length || !request.providerIdentities.length)
@@ -180,11 +185,13 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       if (prior && !prepared) {
         const recorded = JSON.parse(prior.manifest_json) as {
           ids: number[];
+          canonicalId?: number;
           kind?: string;
           matchIds?: number[];
         };
         if (
           JSON.stringify(recorded.ids) !== JSON.stringify(ids) ||
+          (recorded.canonicalId ?? ids[0]) !== canonicalId ||
           (recorded.kind ?? "merge") !== request.kind ||
           JSON.stringify(recorded.matchIds ?? []) !==
             JSON.stringify(scoped ? JSON.parse(scope ?? "[]") : [])
