@@ -38,7 +38,7 @@ One row per `(competition, year)`.
 ### `venues`
 
 - `name` UNIQUE. Shared across competitions (intentional - MCG hosts all four).
-- Geodata (migration 0014, seeded from `data/venue-geodata.csv`): `latitude`,
+- Geodata (migration [0014](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0014_weather.sql), seeded from `data/venue-geodata.csv`): `latitude`,
   `longitude`, `timezone` (IANA), `roof` (`'retractable'` - Marvel Stadium
   only - or `'none'`), and `canonical_venue_id` pointing sponsor-renamed aliases
   at the physical ground (self-referencing for canonical rows). All NULL (except
@@ -86,7 +86,7 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   for every competition. Venue-native time is intentionally not stored.
 - `kickoff_at` is nullable canonical UTC from the source match instant. Use it
   for publication deadlines. Unknown times remain `NULL`. Never combine `date`
-  and `local_time` to infer a deadline. Migration `0021` requires source refresh
+  and `local_time` to infer a deadline. Migration [0021](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0021_tipper_publication.sql) requires source refresh
   to populate forthcoming fixtures.
 - `lineups_observed_at` is the UTC observation time of the last valid complete
   lineup replacement. Legacy lineups without this metadata are not evidence
@@ -96,10 +96,10 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   API supplied no clock or the row predates refresh. Pair it with `status`. The
   five-minute sync does not make it a live siren signal.
 - Every row has a `status` (`Upcoming`, `Live`, `Complete`,
-  `Postponed`, `Cancelled`). Migration `0017` backfilled played matches as
+  `Postponed`, `Cancelled`). Migration [0017](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0017_backfill_match_status.sql) backfilled played matches as
   `Complete`. It marked the 38 score-less VFL/VFLW 2021 COVID-era matches
   `Cancelled`. NULL scores on a `Cancelled` row indicate cancellation.
-- Migration `0020` dropped the legacy `weather_temp_c` / `weather_type` columns.
+- Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy `weather_temp_c` / `weather_type` columns.
   These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
   Use `match_weather` for all weather analysis.
 
@@ -154,7 +154,7 @@ most two rows per match.
   `'historical_forecast'` provides interim observations until six days after the
   match. `'best_match'` identifies forecast rows.
 - Cancelled matches and the placeholder venue (17748) never get rows.
-- This table is the only weather source. Migration `0020` dropped the legacy
+- This table is the only weather source. Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy
   fryzigg `matches.weather_temp_c` / `weather_type` columns.
 
 ## Derived Data
@@ -198,7 +198,7 @@ Unlocked matches can refresh. Append-only captures retain publication history.
 
 ### Tipper Publication Records
 
-Migration `0021` adds these records under AFL-MCP schema ownership. Apply the
+Migration [0021](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0021_tipper_publication.sql) adds these records under AFL-MCP schema ownership. Apply the
 migration before activating the new publisher. Existing archives remain separate.
 
 | Table                | Retained Evidence                                                          |
@@ -236,9 +236,9 @@ team, including when the signed margin rounds to zero.
 probability, margin, and model-version fields. Existing predictions take
 precedence over a backfill.
 
-Migration `0023` consolidates the completed replay into `match_predictions` and
-removes the temporary reconstruction tables. Migration `0022` remains in the
-migration history. The offline replay archive retains the detailed inputs and
+Migration [0023](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0023_consolidate_tipper_backfill.sql) consolidates the completed replay into `match_predictions` and
+removes the temporary reconstruction tables. Migration [0022](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0022_tipper_reconstructions.sql) remains in the
+pre-baseline tag. The offline replay archive retains the detailed inputs and
 assumptions. Consumers need only the normal predictions table.
 
 ## Coaching Data
@@ -355,12 +355,15 @@ coaching diagnostics, conflicts or success timestamps.
 constraints, indexes, all five integrity views, triggers, and reference seeds.
 Column order and SQL formatting do not change the comparison.
 
-Migration `0025_venue_reference_seed.sql` supplies 106 reviewed venue names,
-geodata and canonical aliases. It preserves existing IDs and resolves aliases
-by name, so a fresh database has the same reference data before sync starts.
-The seed retains unknown coordinates for unclassified venues.
+The active `0027_baseline.sql` supplies 106 reviewed venue names, geodata and
+canonical aliases, plus competitions and operational singleton rows. The seed
+retains unknown coordinates for unclassified venues.
 
-Incident-specific data repairs remain in migration history. Recurring data
-operations belong on the authenticated admin surface. A later baseline deployment
-will preserve reference seeds and retain historical repair links through the
-pre-baseline tag.
+Production adopted this baseline through migration 0026 before history removal.
+Existing databases skip the baseline and preserve their rows and IDs. Fresh
+databases execute it. Real local D1 tests cover both paths and later migrations.
+
+Incident-specific repairs remain in the
+[`migrations-pre-baseline` tag](https://github.com/jackemcpherson/AFL-MCP/tree/migrations-pre-baseline/src/db/migrations).
+Recurring data operations belong on the authenticated admin surface. Required
+reference data belongs in fresh database seeds.

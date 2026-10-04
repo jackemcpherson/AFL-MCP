@@ -1,5 +1,6 @@
+-- Immutable 3.8.0 schema and seeds for existing-database upgrade tests.
 -- AFL-MCP D1 schema and reference seeds (SQLite).
--- Verified from migrations 0027_baseline.sql on 2026-10-04.
+-- Verified from migrations 0001 through 0025 on 2026-10-04.
 
 CREATE TABLE coach_backfill_progress (
   provider TEXT NOT NULL CHECK (provider IN ('afl-tables', 'footywire')),
@@ -870,3 +871,30 @@ UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Thom
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Cockburn ARC Oval') WHERE name = 'Victor George Kailis Oval';
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Blacktown ISP') WHERE name = 'Blacktown International Sportspark';
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Melbourne Avalon Airport Oval') WHERE name = 'Avalon Airport Oval';
+
+-- Immutable fixture: the deployed 3.8.0 ledger before baseline adoption.
+INSERT INTO d1_migrations(name) VALUES ('0001_initial.sql');
+INSERT INTO d1_migrations(name) VALUES ('0002_match_lineups.sql');
+INSERT INTO d1_migrations(name) VALUES ('0003_team_hygiene.sql');
+INSERT INTO d1_migrations(name) VALUES ('0004_integrity_views.sql');
+INSERT INTO d1_migrations(name) VALUES ('0005_seasons_is_complete.sql');
+INSERT INTO d1_migrations(name) VALUES ('0006_unused_venues.sql');
+INSERT INTO d1_migrations(name) VALUES ('0007_lineups_2021_2022_from_stats.sql');
+INSERT INTO d1_migrations(name) VALUES ('0008_round_abbreviation.sql');
+INSERT INTO d1_migrations(name) VALUES ('0009_remove_sdnr_ghost_teams.sql');
+INSERT INTO d1_migrations(name) VALUES ('0010_realign_aflm_2026_r16_r22.sql');
+INSERT INTO d1_migrations(name) VALUES ('0011_match_status.sql');
+INSERT INTO d1_migrations(name) VALUES ('0012_sync_lease.sql');
+INSERT INTO d1_migrations(name) VALUES ('0013_completed_quarter.sql');
+INSERT INTO d1_migrations(name) VALUES ('0014_weather.sql');
+INSERT INTO d1_migrations(name) VALUES ('0015_match_predictions.sql');
+INSERT INTO d1_migrations(name) VALUES ('0016_remove_finals_placeholder_teams.sql');
+INSERT INTO d1_migrations(name) VALUES ('0017_backfill_match_status.sql');
+INSERT INTO d1_migrations(name) VALUES ('0018_merge_duplicate_player_oea.sql');
+INSERT INTO d1_migrations(name) VALUES ('0019_players_is_retired_backfill.sql');
+INSERT INTO d1_migrations(name) VALUES ('0020_drop_legacy_weather_columns.sql');
+INSERT INTO d1_migrations(name) VALUES ('0021_tipper_publication.sql');
+INSERT INTO d1_migrations(name) VALUES ('0022_tipper_reconstructions.sql');
+INSERT INTO d1_migrations(name) VALUES ('0023_consolidate_tipper_backfill.sql');
+INSERT INTO d1_migrations(name) VALUES ('0024_coaching.sql');
+INSERT INTO d1_migrations(name) VALUES ('0025_venue_reference_seed.sql');

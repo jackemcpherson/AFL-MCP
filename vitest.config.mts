@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(import.meta.dirname, "src/db/migrations"));
 
+  const legacyMigrations = await readD1Migrations(
+    path.resolve(import.meta.dirname, "test/fixtures/legacy-migrations"),
+  );
+
   return {
     test: {
       projects: [
@@ -20,9 +24,10 @@ export default defineConfig(async () => {
               miniflare: {
                 compatibilityDate: "2026-04-01",
                 compatibilityFlags: ["nodejs_compat"],
-                d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB"],
+                d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB", "FRESH_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,
+                  TEST_LEGACY_MIGRATIONS: legacyMigrations,
                 },
               },
               wrangler: { configPath: "./wrangler.toml" },

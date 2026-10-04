@@ -78,8 +78,8 @@ function finalize() {
 describe("historical prediction backfill", () => {
   it("consolidates staging without overwriting an existing prediction and removes staging tables", async () => {
     const { first, second } = await seedFixtures();
-    const create = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0022"));
-    const cleanup = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0023"));
+    const create = env.TEST_LEGACY_MIGRATIONS.find((m) => m.name.startsWith("0022"));
+    const cleanup = env.TEST_LEGACY_MIGRATIONS.find((m) => m.name.startsWith("0023"));
     if (!create || !cleanup) throw new Error("Missing migration");
     await env.DB.batch(create.queries.map((sql) => env.DB.prepare(sql)));
     try {
