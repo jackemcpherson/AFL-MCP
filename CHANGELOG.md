@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.4] - 2026-10-04
+
+Split verified people whose appearances share an existing identity.
+
+### Added in 4.0.4
+
+- Allow scoped appearance reassignment to an unused explicit target with a
+  reviewed `newPerson` biography and source evidence. Create the person and
+  reassign references in one fenced transaction. A failure rolls back creation
+  and retains the exact operation marker for recovery.
+
 ## [4.0.3] - 2026-10-04
 
 Separate fixture corrections from player ingestion and support scoped identity
