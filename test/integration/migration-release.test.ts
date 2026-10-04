@@ -70,3 +70,46 @@ describe("coaching release migration paths", () => {
     ).toEqual({ revision: 1 });
   });
 });
+
+describe("baseline adoption", () => {
+  it("registers the future baseline only after every prerequisite migration", async () => {
+    const adoption = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith("0026"));
+    if (!adoption) throw new Error("Baseline adoption migration is missing");
+    await applyD1Migrations(
+      env.GUARD_DB,
+      env.TEST_MIGRATIONS.filter((entry) => entry.name < "0026"),
+    );
+    const prerequisite = "0025_venue_reference_seed.sql";
+    await env.GUARD_DB.prepare("DELETE FROM d1_migrations WHERE name=?").bind(prerequisite).run();
+    await expect(applyD1Migrations(env.GUARD_DB, [adoption])).rejects.toThrow();
+    expect(
+      await env.GUARD_DB.prepare(
+        "SELECT name FROM d1_migrations WHERE name='0027_baseline.sql'",
+      ).first(),
+    ).toBeNull();
+    expect(
+      await env.GUARD_DB.prepare(
+        "SELECT name FROM sqlite_master WHERE name='_baseline_adoption_guard'",
+      ).first(),
+    ).toBeNull();
+    await env.GUARD_DB.prepare("INSERT INTO d1_migrations(name) VALUES(?)")
+      .bind(prerequisite)
+      .run();
+    await applyD1Migrations(env.GUARD_DB, [adoption]);
+    expect(
+      await env.GUARD_DB.prepare(
+        "SELECT COUNT(*) AS n FROM d1_migrations WHERE name='0027_baseline.sql'",
+      ).first(),
+    ).toEqual({ n: 1 });
+    expect(await env.GUARD_DB.prepare("SELECT COUNT(*) AS n FROM venues").first()).toEqual({
+      n: 106,
+    });
+    // Replaying the migration cannot duplicate baseline registration.
+    await env.GUARD_DB.batch(adoption.queries.map((sql) => env.GUARD_DB.prepare(sql)));
+    expect(
+      await env.GUARD_DB.prepare(
+        "SELECT COUNT(*) AS n FROM d1_migrations WHERE name='0027_baseline.sql'",
+      ).first(),
+    ).toEqual({ n: 1 });
+  });
+});

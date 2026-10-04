@@ -72,8 +72,10 @@ def main() -> None:
     with sqlite3.connect(":memory:") as migrated, sqlite3.connect(":memory:") as consolidated:
         migrated.execute("PRAGMA foreign_keys=ON")
         consolidated.execute("PRAGMA foreign_keys=ON")
+        migrated.execute("CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)")
         for migration in sorted((ROOT / "src/db/migrations").glob("*.sql")):
             migrated.executescript(migration.read_text())
+            migrated.execute("INSERT INTO d1_migrations(name) VALUES (?)", (migration.name,))
         consolidated.executescript((ROOT / "src/db/schema.sql").read_text())
         left, right = snapshot(migrated), snapshot(consolidated)
         differences = sorted(key for key in left.keys() | right.keys() if left.get(key) != right.get(key))

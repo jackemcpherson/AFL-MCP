@@ -7,6 +7,7 @@ declare global {
     interface Env extends AppEnv {
       TEST_MIGRATIONS: D1Migration[];
       UPGRADE_DB: D1Database;
+      GUARD_DB: D1Database;
     }
   }
 }
