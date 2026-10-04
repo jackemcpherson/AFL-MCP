@@ -207,8 +207,7 @@ accuracy comparison** - only availability probes plus published assessments.
 **Published skill context:**
 
 - Lavers et al. 2022, _QJRMS_
-([doi:10.1002/qj.4351](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4351))
-  -
+  ([doi:10.1002/qj.4351](https://rmets.onlinelibrary.wiley.com/doi/10.1002/qj.4351))
   The study evaluated ERA5 precipitation against 5,637 gauges for 2001 - 2020.
   Random errors were smallest in the extratropics and largest in the tropics.
   recommended for
@@ -232,7 +231,6 @@ accuracy comparison** - only availability probes plus published assessments.
   documentation](https://confluence.ecmwf.int/spaces/CKB/pages/76414402/ERA5+data+documentation),
   [known-issue page for Australia
   pre-1970](<https://confluence.ecmwf.int/display/CKB/ERA5+back+extension+1950-1978+(Preliminary+version):+large+bias+in+surface+analysis+over+Australia+prior+to+1970>))
-  -
   Before TOVS assimilation in late 1978, skill is markedly lower over
   Australia/NZ than Europe.
   Skill improves dramatically from 1979. a documented warm bias in the surface

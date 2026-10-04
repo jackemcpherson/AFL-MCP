@@ -8,7 +8,7 @@ AFLW `2022` request returns an error listing those selectors.
 ## Deployment Order
 
 The migration bundle expands the existing production schema through migration
-0039. It retains uniqueness on competition and calendar year. Existing AFLW
+`0039`. It retains uniqueness on competition and calendar year. Existing AFLW
 2022 keeps its internal ID and becomes season six.
 
 1. Publish the candidate through the application repository's normal pipeline.
