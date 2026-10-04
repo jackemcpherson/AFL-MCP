@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.7] - 2026-10-04
+
+Keep historical backfills under explicit operator control.
+
+### Fixed in 4.0.7
+
+- Separate scheduled statistics checkpoints from historical operator work.
+  Recent fixtures retain their full day-30 schedule and failure retries.
+  Historical checkpoints require exact-season or approved operation requests
+  and cannot consume the hourly refresh budget.
+
 ## [4.0.6] - 2026-10-04
 
 Restore the verified season-seven lineup backfill.

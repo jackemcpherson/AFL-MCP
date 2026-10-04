@@ -95,7 +95,9 @@ Each valid match snapshot replaces its lineup rows in one native D1 batch.
 The replacement removes omitted players and records
 `matches.lineups_observed_at`
 in UTC. Invalid, incomplete, or failed upstream responses preserve the previous
-valid snapshot. The pre-2023 historical lineup guard remains in place.
+valid snapshot. The pre-2023 historical lineup guard remains in place, with the
+corroborated
+AFLW season-seven exception described in the schema guide.
 
 Fixture identity, venue, or kickoff changes atomically invalidate current
 `match_predictions` and Squiggle mappings, and clear lineup observation
@@ -350,3 +352,12 @@ trigger. That trigger invalidates current `match_predictions` and
 identities from the original prediction. A later source refresh
 rebuilds current mappings. Historical snapshots never become identity-repair
 inputs.
+
+### Historical Statistics Queue
+
+The recent 30-day queue marks admitted fixtures as scheduled work without
+resetting existing retry deadlines. Those fixtures retain their full schedule
+from first observed completion, including day 30 and failure retries.
+Historical checkpoints default to operator work and remain available to
+exact-season and approved requests. They cannot consume the hourly refresh
+budget or trigger a historical import when scheduled writes resume.

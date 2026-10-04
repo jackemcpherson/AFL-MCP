@@ -72,10 +72,10 @@ export function nextStatsRefresh(completedAt: Date, now: Date, failures: number)
  * await queueRecentStatsRefresh(writer, new Date());
  */
 export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void> {
-  await env.DB.prepare(`INSERT INTO match_stats_refresh (match_id, completed_observed_at, next_retry_at)
-    SELECT id, ?1, ?1 FROM matches WHERE status = 'Complete' AND external_afl_id IS NOT NULL
+  await env.DB.prepare(`INSERT INTO match_stats_refresh (match_id, completed_observed_at, next_retry_at, origin)
+    SELECT id, ?1, ?1, 'scheduled' FROM matches WHERE status = 'Complete' AND external_afl_id IS NOT NULL
     AND date >= date(?1, '-30 days') AND date <= date(?1)
-    ON CONFLICT(match_id) DO NOTHING`)
+    ON CONFLICT(match_id) DO UPDATE SET origin='scheduled'`)
     .bind(now.toISOString())
     .run();
 }
@@ -109,6 +109,7 @@ export async function refreshDueStats(
     JOIN seasons s ON s.id = m.season_id JOIN competitions c ON c.id = s.competition_id
     JOIN teams h ON h.id = m.home_team_id JOIN teams a ON a.id = m.away_team_id
     WHERE r.next_retry_at <= ?1 AND m.status = 'Complete' AND (?2 IS NULL OR s.id = ?2)
+    AND (?2 IS NOT NULL OR ?4 IS NOT NULL OR r.origin='scheduled')
     AND (?4 IS NULL OR EXISTS (SELECT 1 FROM stats_refresh_operation_matches o
       WHERE o.match_id = m.id AND o.operation_id = ?4 AND o.status = 'pending'))
     ORDER BY r.next_retry_at, m.id LIMIT ?3`)
