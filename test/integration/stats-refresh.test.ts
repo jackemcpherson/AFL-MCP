@@ -223,3 +223,66 @@ it.each(["time_on_ground_pct", "disposals"])(
     expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(1);
   },
 );
+
+it("keeps historical queued work outside cron while allowing an exact-season operator", async () => {
+  const seasonId = await seed();
+  const now = new Date("2026-09-02T00:00:00Z");
+  await queueRecentStatsRefresh(env, now);
+  await env.DB.prepare("UPDATE match_stats_refresh SET origin='operator'").run();
+  await env.DB.prepare("UPDATE matches SET date='2015-09-01' WHERE external_afl_id='M-0'").run();
+  let calls = 0;
+  const fetchStats: typeof fetchPlayerStats = async (query) => {
+    calls++;
+    return {
+      success: true,
+      data: {
+        stats: [
+          makePlayerStats({
+            matchId: query.matchId ?? "missing",
+            playerId: "historical-person",
+            disposals: 10,
+            timeOnGroundPercentage: 75,
+          }),
+        ],
+        failedMatchIds: [],
+      },
+    };
+  };
+  expect((await refreshDueStats(env, now, fetchStats)).attempted).toBe(0);
+  expect(calls).toBe(0);
+  expect(
+    await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM match_stats_refresh WHERE attempted_at IS NULL",
+    ).first("n"),
+  ).toBe(1);
+  expect((await refreshDueStats(env, now, fetchStats, seasonId)).attempted).toBe(1);
+  expect(calls).toBe(1);
+});
+
+it("retains a scheduled day-30 refresh after delayed completion observation", async () => {
+  await seed();
+  const observed = new Date("2026-09-02T00:00:00Z");
+  await queueRecentStatsRefresh(env, observed);
+  const due = new Date("2026-10-02T00:00:00Z");
+  await env.DB.prepare("UPDATE match_stats_refresh SET next_retry_at=?1")
+    .bind(due.toISOString())
+    .run();
+  const fetchStats: typeof fetchPlayerStats = async (query) => ({
+    success: true,
+    data: {
+      stats: [
+        makePlayerStats({
+          matchId: query.matchId ?? "missing",
+          playerId: "late-person",
+          disposals: 10,
+          timeOnGroundPercentage: 75,
+        }),
+      ],
+      failedMatchIds: [],
+    },
+  });
+  expect((await refreshDueStats(env, due, fetchStats)).succeeded).toBe(1);
+  expect(
+    await env.DB.prepare("SELECT next_retry_at FROM match_stats_refresh").first("next_retry_at"),
+  ).toBeNull();
+});

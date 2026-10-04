@@ -880,7 +880,8 @@ CREATE TABLE match_stats_refresh (
   provider_updated_at TEXT,
   failures INTEGER NOT NULL DEFAULT 0,
   participant_count INTEGER,
-  diagnostic TEXT
+  diagnostic TEXT,
+  origin TEXT NOT NULL DEFAULT 'operator' CHECK(origin IN ('operator','scheduled'))
 );
 CREATE INDEX idx_match_stats_refresh_due ON match_stats_refresh(next_retry_at, match_id);
 
