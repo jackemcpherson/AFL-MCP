@@ -42,6 +42,7 @@ describe("GET /mcp/admin/status", () => {
       "competitions",
       "integrity",
       "degradation",
+      "remediation",
       "coaching",
     ]);
     expect(body.status).toBe("ok");
@@ -173,7 +174,7 @@ describe("GET /mcp/admin/status", () => {
     expect(JSON.stringify(body)).not.toContain("secret");
   });
 
-  it("uses exactly thirteen fixed statements", async () => {
+  it("uses exactly fourteen fixed statements", async () => {
     let statementCount = 0;
     const countingDb = {
       prepare: authedEnv.DB.prepare.bind(authedEnv.DB),
@@ -184,7 +185,7 @@ describe("GET /mcp/admin/status", () => {
     } as D1Database;
     vi.spyOn(console, "log").mockImplementation(() => {});
     await getAdminStatus({ ...authedEnv, DB: countingDb }, new Date("2026-07-12T06:00:00.000Z"));
-    expect(statementCount).toBe(13);
+    expect(statementCount).toBe(14);
   });
 
   it("returns a sanitized 500 when a fixed query fails", async () => {

@@ -50,6 +50,7 @@ export const TEAM_NAME_MAP: Record<string, string> = {
 };
 
 export const VENUE_NAME_MAP: Record<string, string> = {
+  "Windsor Park Oval": "Windsor Park",
   "M.C.G.": "MCG",
   "S.C.G.": "SCG",
   Docklands: "Marvel Stadium",

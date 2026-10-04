@@ -29,21 +29,23 @@ source, no split needed.
 
 **Why not the others:**
 
-- BOM: has the most accurate station data (Olympic Park is ~700 m from the MCG)
-  but there is **no permitted programmatic path a Worker can use**: the website
-  actively blocks automated access and tells scrapers to "stop" (block page
-  captured below), the sanctioned free channel is **anonymous FTP** which
-  Cloudflare Workers cannot speak (fetch is HTTP(S) only), the undocumented
-  `api.weather.bom.gov.au` embeds "You must not use, copy or share it" in every
-  response, and historical _hourly_ observations are a paid Registered User data
-  service. BOM is disqualified on terms + transport, not on data quality.
-- Meteostat: is free (bulk CSVs, CC BY 4.0) but its hourly station inventory
-  fails exactly where AFL needs it most: **no hourly-inventory station within 18
-  km of the MCG** (nearest usable: Point Cook 18.3 km, Melbourne Airport 20.9
-  km - start 1973), **nothing usable near Kardinia Park**, and the RapidAPI JSON
-  tier is 500 calls/month - unusable for a 10k backfill. At ~20 km station
-  distance it is no more "venue-level" than an 11 km reanalysis grid, with worse
-  completeness and gz-CSV parsing in a Worker on top.
+- BOM station data is accurate. Olympic Park is about 700 m from the MCG.
+  The captured website blocks automated access and instructs scrapers to stop.
+  Its sanctioned free channel uses anonymous FTP. Workers' fetch supports
+  HTTP(S), so it cannot use that channel.
+  The captured `api.weather.bom.gov.au` responses forbid use, copying and
+  sharing.
+  Historical hourly observations require a paid Registered User service.
+  BOM terms and transport prevent its use here.
+- Meteostat offers free bulk CSVs under CC BY 4.0. The captured hourly inventory
+  has no usable station within 18 km of the MCG.
+  Point Cook is 18.3 km away. Melbourne Airport is 20.9 km away, with data
+  starting in 1973.
+  The captured inventory has no usable station near Kardinia Park.
+  RapidAPI's 500 monthly calls cannot support a 10,000-match backfill.
+  A station about 20 km away offers no closer venue measurement than an 11 km
+  reanalysis grid.
+  Its completeness is worse, and Workers must also parse gzipped CSV data.
 
 **Accuracy caveat (applies to the recommendation):** ERA5-Land is a ~11 km grid
 reanalysis, not a stadium rain gauge. Temperature, humidity and sustained wind
@@ -177,6 +179,7 @@ BOM offers high-quality station data but no suitable programmatic access path.
     - Melbourne Olympic Park obs). A default-UA request gets **HTTP 403** with
       this block page (captured live 2026-07-13):
 
+   <!-- vale off -->
    > "Your access is blocked due to the detection of a potential automated
    > access request. The Bureau of Meteorology website does not support web
    > scraping: if you are trying to access Bureau data through automated means,
@@ -184,12 +187,13 @@ BOM offers high-quality station data but no suitable programmatic access path.
    > anonymous FTP channel … subject to the default terms of the Bureau's
    > copyright notice … A Registered User service for continued use of Bureau
    > data if your activity does not comply with the default terms…"
+   <!-- vale on -->
 
    A spoofed browser user agent returns 200, but using one would circumvent the
    stated policy. An unattended scheduled job must not use this path.
 
 2. **Anonymous FTP** (`ftp://ftp.bom.gov.au/anon/gen/fwo/`) - verified live,
-   listing returns current product files. This is BOM's sanctioned free channel
+   listing returns current product files. BOM sanctions this free channel
    (<http://www.bom.gov.au/catalogue/anon-ftp.shtml>), **but Cloudflare Workers'
    fetch API is HTTP(S)-only - FTP is unreachable from the consumer.** It also
    only carries _current_ obs/forecast products (last ~72 h of observations),
@@ -198,9 +202,11 @@ BOM offers high-quality station data but no suitable programmatic access path.
 3. **`api.weather.bom.gov.au`** (the API behind the BOM app) - responds to plain
    curl, but every response embeds its own prohibition (captured live):
 
+   <!-- vale off -->
    > "This application programming interface (API) is owned by the Bureau of
    > Meteorology. **You must not use, copy or share it.** Find out more about
    > our data services at <https://www.bom.gov.au/resources/data-services>"
+   <!-- vale on -->
 
 4. **Historical data**: Climate Data Online offers per-station _daily_
    rainfall/temp as manual downloads. **hourly/sub-daily historical observations
@@ -208,9 +214,9 @@ BOM offers high-quality station data but no suitable programmatic access path.
    (<https://www.bom.gov.au/resources/data-services>). There is no free
    programmatic path to 1990 - 2025 hourly station obs.
 
-5. `reg.bom.gov.au` serves the same JSON feeds without the UA block, but it is
-   the Registered User host - using it unregistered is the same policy problem
-   with different DNS.
+5. `reg.bom.gov.au` serves the same JSON feeds without the UA block, but that
+   host requires registration. Using it without registration has the same policy
+   problem with different DNS.
 
 ### BOM Scores
 
@@ -235,7 +241,8 @@ Meteostat lacks suitable station coverage and sufficient free API capacity.
   returned 200. Source: <https://dev.meteostat.net/bulk/> (note: docs pages have
   moved. bulk endpoints verified directly).
 - License: CC BY 4.0 ("even commercially"), attribution "Source: Meteostat,
-  [Provider Name]". Meteostat does not own the data. it aggregates NOAA/DWD etc.
+  [Provider Name]". Meteostat does not own the data. it aggregates NOAA, DWD and
+  other providers
   and **fills gaps with model data**. Source:
   <https://dev.meteostat.net/license>
 
@@ -276,34 +283,40 @@ inside a Worker would add complexity for poorer data.
 
 **Backfill (~10,080 matches, one-off):**
 
-- One archive call per match: single day, 5 - 6 hourly variables to under both
-  weighting thresholds (<2 weeks, ≤10 variables) to **1.0 weighted call per
-  match**.
-- Total ≈ 10,080 calls vs caps of 10,000/day and 300,000/month to **run at
-  ~5,000/day over 2 days** (also clears 5,000/hour. pace ≤2 req/s to stay far
-  under 600/min). Batching per venue-season (e.g. 180 days × 6 vars ≈ 13
-  weighted calls covering ~11 home matches) saves little and complicates retry
-  logic - per-match calls are the right shape.
+- Use one archive call per match with a single day and 5 - 6 hourly variables.
+  The request stays below both weighting thresholds: two weeks and ten
+  variables.
+  Each match costs 1.0 weighted call.
+- About 10,080 calls fit the 10,000 daily and 300,000 monthly caps over two days
+  at about 5,000 calls daily.
+  Stay below 5,000 hourly calls and two requests per second, well below 600 per
+  minute.
+  A 180-day venue-season with six variables costs about 13 weighted calls for
+  about 11 home matches.
+  That batching saves little and complicates retries. Per-match requests keep
+  retries simple.
 
 **Steady state (5-min cron, ≤15 upcoming matches in window):**
 
 - Naive per-tick fetch: 15 × 288 = 4,320 calls/day - legal but wasteful.
-- Recommended: refresh forecasts on the top-of-hour tick only (the tick
-  `shouldRunNow` already always runs): 15 × 24 = **360 calls/day**, plus a
-  handful of archive/historical-forecast calls to write final observed weather
-  ~5+ days post-match. Two orders of magnitude of headroom.
+- Refresh forecasts at the top of each hour, when `shouldRunNow` always runs.
+  Fifteen matches at 24 hourly checks give 360 calls per day.
+  Add a few archive or historical-forecast calls for observed weather about five
+  days after each match.
+  The resulting demand has about two orders of magnitude of headroom.
 
 ---
 
 ## Open Risks
 
-1. **Grid vs stadium rain.** ERA5-Land hourly precipitation is a ~11 km cell
-   average. brief showers can be under/over-stated at the ground. **Before
-   trusting the backfill, validate against D1's fryzigg ground truth (AFLM
-   2010 - 2025, ~3,000 matches):** e.g. distribution of match-window
-   precipitation for `RAIN`/`WINDY_RAIN` vs `SUNNY`/`MOSTLY_SUNNY` labels, and
-   MAE of match-time temp vs `weather_temp_c`. Ship the backfill only if
-   separation is clean.
+1. **Grid vs stadium rain.** ERA5-Land hourly precipitation averages an
+   approximately 11 km cell.
+   Brief showers can differ at the ground.
+   Validate against D1's fryzigg labels before trusting the backfill.
+   The validation population covers AFLM 2010 - 2025, about 3,000 matches.
+   Compare match-window precipitation distributions for wet and dry labels.
+   Compare match-time temperature errors against `weather_temp_c`.
+   Ship the backfill only if separation is clear.
 2. **Roofed venues.** Marvel Stadium (and `ROOF_CLOSED` labels generally):
    ambient weather ≠ playing conditions. Store the Open-Meteo values as ambient
    observations in separate columns. never overwrite the AFL-sourced
@@ -311,18 +324,22 @@ inside a Worker would add complexity for poorer data.
 3. **ERA5 5-day lag.** Matches from the last ~5 days are not in the archive yet.
    Use the Historical Forecast API as the bridge, or simply delay the
    observation write until T+6 days (a cron no-op either way).
-4. **Shared-IP throttling from Workers.** Open-Meteo's free tier is enforced
-   without keys, so presumably per-IP. Cloudflare Workers egress IPs are shared
-   pools. At ~400 calls/day this is unlikely to trip anything, but the backfill
-   (~5k/day) should be run from a residential machine (a Bun script hitting
-   archive-api, writing via wrangler), not from the Worker. Open-Meteo
-   "reserve[s] the right to block applications and IP addresses that misuse our
-   service without prior notice" (<https://open-meteo.com/en/terms>).
-5. **Free-tier durability.** The pricing page markets the Historical API under
-   paid "restricted APIs". in practice the keyless archive endpoint serves
-   non-commercial traffic today (verified live). If Open-Meteo ever key-gates
-   it, fallback is the paid tier or re-running validation against Meteostat bulk
-   for the SCG/Gabba subset - no schema change either way.
+4. **Shared-IP throttling from Workers.** Open-Meteo enforces its free tier
+   without keys, presumably per IP.
+   Cloudflare Workers share egress IP pools.
+   About 400 daily calls seem unlikely to trigger throttling.
+   Run the approximately 5,000-call daily backfill from a residential machine.
+   The original design proposed a Bun archive client writing through Wrangler.
+   Open-Meteo can block applications or IP addresses that misuse its service
+   without notice.
+   See the captured [terms](https://open-meteo.com/en/terms).
+5. **Free-tier durability.** The captured pricing page lists the Historical API
+   among paid restricted APIs.
+   The keyless archive endpoint served non-commercial traffic during this
+   investigation.
+   If keyless access ends, use the paid tier or repeat Meteostat validation for
+   the SCG/Gabba subset.
+   Neither option requires a schema change.
 6. **Attribution.** CC-BY 4.0: add "Weather data by Open-Meteo.com"
    (<https://open-meteo.com/>) to the README and the public ecosystem doc when
    the integration ships.

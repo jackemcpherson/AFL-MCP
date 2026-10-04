@@ -6,8 +6,8 @@
  *
  * All timestamps are naive local strings: D1 stores Melbourne-local dates
  * and every Open-Meteo call passes `timezone=Australia/Melbourne`, so the
- * hourly `time` axis and the scheduled start already share a clock and no
- * timezone math happens here.
+ * hourly `time` axis and scheduled start share a clock. Window offsets use
+ * elapsed hours in Australia/Melbourne, including daylight-saving changes.
  */
 
 import { z } from "zod";
@@ -37,8 +37,8 @@ export interface HourlySeries {
 }
 
 /**
- * The six `match_weather` metrics. A metric is null when every hour in its
- * window was null or missing (nulls pass through rather than becoming 0).
+ * The six `match_weather` metrics. A metric is null when any hour in its
+ * window is null, missing, or ambiguous (nulls pass through rather than becoming 0).
  */
 export interface WeatherMetrics {
   readonly tempC: number | null;
@@ -108,20 +108,23 @@ export function extractHourlySeries(payload: unknown): HourlySeries {
  * crossing midnight when the fixture does). The prior window is the 24
  * hourly samples immediately before the match window. Temperature and
  * humidity are means, precipitation is a total, wind speed and gust are
- * maxima. Null or missing hours are skipped; a window with no data at all
- * yields null.
+ * maxima. A missing or null sample makes that metric null; a partial sum
+ * must not appear to cover a complete window.
  *
  * @param series - Hourly series from {@link extractHourlySeries}.
  * @param scheduledStart - Melbourne-local start, "YYYY-MM-DDTHH:MM:SS"
  *   ("T" or space separated; seconds optional).
- * @returns The six metrics, each null when its window had no data.
+ * @returns The six metrics, each null when its window has incomplete data.
  */
 export function aggregateWeatherWindow(
   series: HourlySeries,
   scheduledStart: string,
 ): WeatherMetrics {
   const index = new Map<string, number>();
-  for (const [i, t] of series.time.entries()) index.set(t, i);
+  for (const [i, t] of series.time.entries()) {
+    // A duplicated naive timestamp cannot distinguish the DST fall-back hours.
+    index.set(t, index.has(t) ? -1 : i);
+  }
 
   const startHour = floorHour(scheduledStart);
   const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index);
@@ -154,20 +157,40 @@ function readSeries(
   return fallback ?? new Array<number | null>(length).fill(null);
 }
 
-/** Truncate "YYYY-MM-DD[T ]HH:MM(:SS)" to its hour as UTC-interpreted parts. */
+/** Melbourne wall-clock labels used by the provider's hourly axis. */
+const MELBOURNE_CLOCK = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Australia/Melbourne",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  hourCycle: "h23",
+});
+
+function formatHour(epochMs: number): string {
+  const parts = Object.fromEntries(
+    MELBOURNE_CLOCK.formatToParts(epochMs).map((p) => [p.type, p.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+}
+
+/** Resolve an unambiguous Melbourne hour to an instant before measuring elapsed time. */
 function floorHour(dateTime: string): number {
   const parts = dateTime.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2})/);
   if (!parts) throw new Error(`Unparseable scheduled start: ${dateTime}`);
   const [, y, mo, d, h] = parts;
-  return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h));
+  const wallHour = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h));
+  const label = `${y}-${mo}-${d}T${h}:00`;
+  // Melbourne uses UTC+10 or UTC+11 throughout the supported match eras.
+  const candidates = [10, 11]
+    .map((offset) => wallHour - offset * 3_600_000)
+    .filter((instant) => formatHour(instant) === label);
+  if (candidates.length !== 1 || candidates[0] === undefined)
+    throw new Error(`Ambiguous or nonexistent Melbourne kickoff hour: ${dateTime}`);
+  return candidates[0];
 }
 
-/** Format a UTC-interpreted epoch back to Open-Meteo's "YYYY-MM-DDTHH:00". */
-function formatHour(epochMs: number): string {
-  return `${new Date(epochMs).toISOString().slice(0, 13)}:00`;
-}
-
-/** Series array indexes for the hours of a window that are present at all. */
+/** Series indexes for every hour; -1 denotes an absent or ambiguous hour. */
 function windowIndexes(
   startEpochMs: number,
   offsetHours: number,
@@ -177,8 +200,13 @@ function windowIndexes(
   const hourMs = 60 * 60 * 1000;
   const found: number[] = [];
   for (let i = 0; i < count; i++) {
-    const at = index.get(formatHour(startEpochMs + (offsetHours + i) * hourMs));
-    if (at !== undefined) found.push(at);
+    const instant = startEpochMs + (offsetHours + i) * hourMs;
+    const label = formatHour(instant);
+    // A naive provider axis cannot assign values to either repeated fall-back hour.
+    const ambiguous =
+      formatHour(instant - hourMs) === label || formatHour(instant + hourMs) === label;
+    const at = ambiguous ? -1 : index.get(label);
+    found.push(at ?? -1);
   }
   return found;
 }
@@ -187,7 +215,8 @@ function pick(values: readonly (number | null)[], indexes: readonly number[]): n
   const out: number[] = [];
   for (const i of indexes) {
     const value = values[i];
-    if (value !== null && value !== undefined) out.push(value);
+    if (value === null || value === undefined) return [];
+    out.push(value);
   }
   return out;
 }

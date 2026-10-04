@@ -104,8 +104,8 @@ async function seedWeatherRow(row: {
   tempC?: number | null;
 }): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO match_weather (match_id, kind, temp_c, source, fetched_at)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO match_weather (match_id, kind, temp_c, source, fetched_at, precip_mm, precip_24h_prior_mm, wind_speed_kmh, wind_gust_kmh, humidity_pct)
+     VALUES (?, ?, ?, ?, ?, 0, 0, 10, 15, 60)`,
   )
     .bind(row.matchId, row.kind, row.tempC ?? 99, row.source, row.fetchedAt)
     .run();
@@ -517,7 +517,27 @@ describe("runWeatherStage — observed", () => {
 });
 
 describe("runWeatherStage — failure and hygiene", () => {
-  it("fails soft on an API error: no throw, sync_log row, and success on the next pass", async () => {
+  it("propagates a database failure instead of classifying it as unavailable weather", async () => {
+    const seasonId = await seedSeason();
+    await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+    const match = await seedMatch({ seasonId, date: "2026-07-16" });
+    await env.DB.prepare(
+      "CREATE TRIGGER fail_weather_write BEFORE INSERT ON match_weather BEGIN SELECT RAISE(ABORT, 'injected weather write failure'); END",
+    ).run();
+    try {
+      await expect(runWeatherStage(env, stubFetch().impl, NOW)).rejects.toThrow(
+        "injected weather write failure",
+      );
+      expect(await weatherRows(match)).toHaveLength(0);
+      expect(
+        await env.DB.prepare("SELECT count(*) AS n FROM weather_refresh_state").first("n"),
+      ).toBe(0);
+    } finally {
+      await env.DB.prepare("DROP TRIGGER fail_weather_write").run();
+    }
+  });
+
+  it("persists an API failure and retries on the next daily pass", async () => {
     const seasonId = await seedSeason();
     await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
     const match = await seedMatch({ seasonId, date: "2026-07-16" });
@@ -529,9 +549,11 @@ describe("runWeatherStage — failure and hygiene", () => {
     const log = await syncLogRows();
     expect(log.some((r) => r.type === "sync:weather" && r.error !== null)).toBe(true);
 
-    // Next hourly pass: the needs-work query self-heals, no retry state.
+    // Hourly passes respect persisted backoff; a daily pass can recover.
     const working = stubFetch();
     await runWeatherStage(env, working.impl, new Date("2026-07-13T03:00:00Z"));
+    expect(working.calls).toHaveLength(0);
+    await runWeatherStage(env, working.impl, new Date("2026-07-14T02:00:00Z"));
     expect(await weatherRows(match)).toHaveLength(1);
   });
 
@@ -558,4 +580,65 @@ describe("runWeatherStage — failure and hygiene", () => {
     expect(await weatherRows(cancelled)).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
+});
+
+it("retries partial final observations three times, then exposes unavailable values", async () => {
+  const seasonId = await seedSeason();
+  await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+  const match = await seedMatch({
+    seasonId,
+    date: "2026-07-01",
+    status: "Complete",
+    homePoints: 80,
+  });
+  await seedWeatherRow({
+    matchId: match,
+    kind: "observed",
+    source: "era5_land+era5",
+    fetchedAt: NOW.toISOString(),
+  });
+  await env.DB.prepare("UPDATE match_weather SET wind_gust_kmh=NULL WHERE match_id=?")
+    .bind(match)
+    .run();
+  let calls = 0;
+  const partial: typeof fetch = async () => {
+    calls++;
+    return Response.json({ hourly: { time: ["2026-07-01T19:00"], temperature_2m: [10] } });
+  };
+  for (let day = 0; day < 6; day++)
+    await runWeatherStage(env, partial, new Date(NOW.getTime() + day * 86400000));
+  expect(calls).toBe(4);
+  expect(
+    await env.DB.prepare(
+      "SELECT failures,next_retry_at,diagnostic FROM weather_refresh_state WHERE match_id=?",
+    )
+      .bind(match)
+      .first(),
+  ).toEqual({
+    failures: 4,
+    next_retry_at: null,
+    diagnostic: "unavailable-after-three-retries: partial: missing-weather-metrics",
+  });
+  expect((await weatherRows(match))[0]?.wind_gust_kmh).toBeNull();
+});
+
+it("keeps unknown kickoff weather unavailable without inventing a time", async () => {
+  const seasonId = await seedSeason();
+  await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+  const match = await seedMatch({
+    seasonId,
+    date: "2026-07-01",
+    status: "Complete",
+    homePoints: 80,
+  });
+  await env.DB.prepare("UPDATE matches SET local_time=NULL WHERE id=?").bind(match).run();
+  const provider = stubFetch();
+  await runWeatherStage(env, provider.impl, NOW);
+  expect(provider.calls).toHaveLength(0);
+  expect(await weatherRows(match)).toEqual([]);
+  expect(
+    await env.DB.prepare("SELECT diagnostic FROM weather_refresh_state WHERE match_id=?")
+      .bind(match)
+      .first("diagnostic"),
+  ).toBe("unavailable: kickoff-time-unknown");
 });

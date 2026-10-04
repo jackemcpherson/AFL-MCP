@@ -1,3 +1,5 @@
+import { resolveStoredSeason } from "../../db/seasons";
+import { statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
 /** Describes the product's expected availability for a field and season range. */
@@ -9,7 +11,7 @@ export type CoverageExpectation =
   | "not-applicable";
 
 /** Version included in responses and cache keys. */
-export const COVERAGE_CONTRACT_VERSION = 3;
+export const COVERAGE_CONTRACT_VERSION = 4;
 /** Date on which static source expectations were last reviewed. */
 export const COVERAGE_REVIEW_DATE = "2026-10-04";
 /** Competition codes supported by the typed contract. */
@@ -156,7 +158,10 @@ const STAT_COLUMNS = [
 /** Analytics tables and real columns materialized into the coverage response. */
 export const ANALYTICS_COLUMNS = {
   competitions: ["id", "code", "name"],
-  seasons: ["id", "competition_id", "year", "is_complete"],
+  player_provider_ids: ["provider", "provider_id", "player_id", "evidence_json"],
+  player_id_redirects: ["retired_id", "canonical_id", "manifest_digest"],
+  seasons: ["id", "competition_id", "year", "is_complete", "season_key", "display_name"],
+  season_provider_ids: ["season_id", "provider", "provider_season_id"],
   teams: ["id", "name", "abbreviation", "competition_id"],
   venues: ["id", "name", "latitude", "longitude", "timezone", "roof", "canonical_venue_id"],
   players: [
@@ -198,7 +203,14 @@ export const ANALYTICS_COLUMNS = {
     "away_points",
   ],
   match_coaches: ["match_id", "team_id", "coach_id", "observation_id", "updated_at"],
-  public_input_revision: ["id", "revision", "in_progress", "write_started_at"],
+  public_input_revision: [
+    "id",
+    "revision",
+    "in_progress",
+    "write_started_at",
+    "write_holder",
+    "write_operation",
+  ],
   matches: MATCH_COLUMNS,
   player_match_stats: STAT_COLUMNS,
   player_season_pav: [
@@ -383,6 +395,9 @@ export const COVERAGE_EXPECTATIONS = {
     ...COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
+    player_provider_ids: { ...CORE, expected: "partial" },
+    player_id_redirects: { ...CORE, expected: "partial" },
+    season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
     players: CORE,
@@ -404,11 +419,22 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "1990..current",
       source: ["afl-api", "fryzigg"],
-      expected: "complete",
+      expected: "partial",
+      notes: [
+        "Historical fields vary by provider and era. No blanket completeness guarantee; inspect observed non-null counts.",
+      ],
       overrides: AFLM_STAT_OVERRIDES,
       ranges: AFLM_STAT_RANGES,
     },
-    player_season_pav: { ...CORE, range: "1998..current", source: ["derived-pav"] },
+    player_season_pav: {
+      ...CORE,
+      range: "1998..current",
+      source: ["derived-pav"],
+      expected: "partial",
+      notes: [
+        "Missing required season inputs leave derived values unknown; cancelled and live matches are excluded.",
+      ],
+    },
     match_lineups: {
       ...CORE,
       range: "2015..current",
@@ -424,6 +450,9 @@ export const COVERAGE_EXPECTATIONS = {
     ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
+    player_provider_ids: { ...CORE, expected: "partial" },
+    player_id_redirects: { ...CORE, expected: "partial" },
+    season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
     players: CORE,
@@ -440,7 +469,15 @@ export const COVERAGE_EXPECTATIONS = {
       expected: "partial",
       overrides: { brownlow_votes: "not-applicable", supercoach_score: "absent", subbed: "absent" },
     },
-    player_season_pav: { ...CORE, range: "2017..current", source: ["derived-pav"] },
+    player_season_pav: {
+      ...CORE,
+      range: "2017..current",
+      source: ["derived-pav"],
+      expected: "partial",
+      notes: [
+        "Missing required season inputs leave derived values unknown; cancelled and live matches are excluded.",
+      ],
+    },
     match_lineups: {
       ...CORE,
       // Pre-2023 AFL API rosters are announced teams, not who played, so
@@ -456,6 +493,9 @@ export const COVERAGE_EXPECTATIONS = {
     ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
+    player_provider_ids: { ...CORE, expected: "partial" },
+    player_id_redirects: { ...CORE, expected: "partial" },
+    season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
     players: CORE,
@@ -493,6 +533,9 @@ export const COVERAGE_EXPECTATIONS = {
     ...UNSUPPORTED_COACHING_TABLES,
     competitions: CORE,
     seasons: CORE,
+    player_provider_ids: { ...CORE, expected: "partial" },
+    player_id_redirects: { ...CORE, expected: "partial" },
+    season_provider_ids: { ...CORE, expected: "partial" },
     teams: CORE,
     venues: VENUES,
     players: CORE,
@@ -557,7 +600,7 @@ export function competitionYears(competition: CoverageCompetition): string {
 export interface CoverageOptions {
   readonly includeObserved?: boolean;
   readonly competition?: CoverageCompetition | undefined;
-  readonly season?: number | undefined;
+  readonly season?: number | string | undefined;
 }
 
 interface RowObservation {
@@ -569,6 +612,8 @@ interface RowObservation {
 }
 
 interface TableRowsObservation {
+  readonly known_totals: number;
+  readonly unknown_totals: number;
   readonly unit: "table_rows";
   readonly rows: number;
 }
@@ -744,37 +789,58 @@ async function queryCoachingObservation(
 
 type NumericRow = Record<string, number>;
 
-async function queryObservation(env: Env, competition: CoverageCompetition, season: number) {
-  const seasonRow = await env.DB.prepare(
-    "SELECT s.id FROM seasons s JOIN competitions c ON c.id = s.competition_id WHERE c.code = ? AND s.year = ?",
-  )
-    .bind(competition, season)
-    .first<{ id: number }>();
-  if (!seasonRow) throw new Error(`No ${competition} season ${season} exists`);
+async function queryObservation(
+  env: Env,
+  competition: CoverageCompetition,
+  season: number | string,
+) {
+  const seasonRow = await resolveStoredSeason(env, competition, season);
 
   const select = OBSERVED_STAT_COLUMNS.flatMap((column, index) => [
     `COUNT(${column}) AS n${index}`,
   ]).join(", ");
-  const statRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS row_count, ${select} FROM player_match_stats WHERE match_id IN (SELECT id FROM matches WHERE season_id = ?)`,
-  )
-    .bind(seasonRow.id)
-    .first<NumericRow>();
-  const pav = await env.DB.prepare(
-    "SELECT COUNT(*) AS row_count FROM player_season_pav WHERE season_id = ?",
-  )
-    .bind(seasonRow.id)
-    .first<NumericRow>();
-  const lineups = await env.DB.prepare(
-    "SELECT COUNT(*) AS row_count, COUNT(DISTINCT match_id) AS match_count FROM match_lineups WHERE match_id IN (SELECT id FROM matches WHERE season_id = ?)",
-  )
-    .bind(seasonRow.id)
-    .first<NumericRow>();
-  const matches = await env.DB.prepare(
-    "SELECT COUNT(*) AS row_count FROM matches WHERE season_id = ?",
-  )
-    .bind(seasonRow.id)
-    .first<NumericRow>();
+  const results = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(*) AS row_count, ${select} FROM player_match_stats
+      WHERE match_id IN (SELECT id FROM matches WHERE season_id = ?1)`).bind(seasonRow.id),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS row_count,COUNT(total_pav) AS known_totals,SUM(total_pav IS NULL) AS unknown_totals FROM player_season_pav WHERE season_id=?1",
+    ).bind(seasonRow.id),
+    env.DB.prepare(`SELECT COUNT(*) AS row_count,COUNT(DISTINCT match_id) AS match_count
+      FROM match_lineups WHERE match_id IN (SELECT id FROM matches WHERE season_id=?1)`).bind(
+      seasonRow.id,
+    ),
+    env.DB.prepare(`SELECT COUNT(*) AS row_count,
+      COUNT(CASE WHEN status='Complete' THEN 1 END) AS eligible_completed,
+      COUNT(CASE WHEN status='Complete' AND EXISTS(SELECT 1 FROM player_match_stats p WHERE p.match_id=matches.id) THEN 1 END) AS matches_with_statistics
+      FROM matches WHERE season_id=?1`).bind(seasonRow.id),
+    env.DB.prepare(`SELECT json_array_length(matches_json) AS provider_matches,observed_at
+      FROM season_provider_inventory WHERE season_id=?1 AND provider='afl-api'`).bind(seasonRow.id),
+    env.DB.prepare(`SELECT COUNT(CASE WHEN r.failures>0 THEN 1 END) AS failures,
+      COUNT(CASE WHEN r.diagnostic IS NOT NULL THEN 1 END) AS unresolved,
+      COUNT(CASE WHEN r.next_retry_at <= ?2 THEN 1 END) AS overdue
+      FROM match_stats_refresh r JOIN matches m ON m.id=r.match_id WHERE m.season_id=?1`).bind(
+      seasonRow.id,
+      new Date().toISOString(),
+    ),
+    env.DB.prepare("SELECT revision,in_progress FROM public_input_revision WHERE id=1"),
+  ]);
+  const statRow = results[0]?.results[0] as NumericRow | undefined;
+  const pav = results[1]?.results[0] as NumericRow | undefined;
+  const lineups = results[2]?.results[0] as NumericRow | undefined;
+  const matches = results[3]?.results[0] as NumericRow | undefined;
+  const inventory = results[4]?.results[0] as
+    | { provider_matches: number; observed_at: string }
+    | undefined;
+  const refresh = results[5]?.results[0] as NumericRow | undefined;
+  const marker = results[6]?.results[0] as NumericRow | undefined;
+  if (marker?.in_progress !== 0)
+    throw new Error("Coverage observation blocked by an unfinished input write");
+  const coaches = await queryCoachingObservation(env, competition, seasonRow.year);
+  const after = await env.DB.prepare(
+    "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
+  ).first<NumericRow>();
+  if (after?.in_progress !== 0 || after.revision !== marker.revision)
+    throw new Error("Coverage inputs changed during observation; retry");
 
   const rows = statRow?.row_count ?? 0;
   const scalar: Record<string, RowObservation> = {};
@@ -791,7 +857,25 @@ async function queryObservation(env: Env, competition: CoverageCompetition, seas
   return {
     measured_at: new Date().toISOString(),
     scalar,
-    pav: { unit: "table_rows", rows: pav?.row_count ?? 0 } satisfies TableRowsObservation,
+    coaches,
+    inventory: {
+      provider_matches: inventory?.provider_matches ?? null,
+      provider_observed_at: inventory?.observed_at ?? null,
+      stored_matches: matches?.row_count ?? 0,
+      eligible_completed_matches: matches?.eligible_completed ?? 0,
+      matches_with_statistics: matches?.matches_with_statistics ?? 0,
+      participant_rows: rows,
+      refresh_failures: refresh?.failures ?? 0,
+      unresolved_refreshes: refresh?.unresolved ?? 0,
+      overdue_refreshes: refresh?.overdue ?? 0,
+      input_revision: marker.revision,
+    },
+    pav: {
+      unit: "table_rows",
+      rows: pav?.row_count ?? 0,
+      known_totals: pav?.known_totals ?? 0,
+      unknown_totals: pav?.unknown_totals ?? 0,
+    } satisfies TableRowsObservation,
     lineups: {
       unit: "match_presence",
       total_matches: matches?.row_count ?? 0,
@@ -806,7 +890,7 @@ async function queryObservation(env: Env, competition: CoverageCompetition, seas
 export async function observeCoverage(
   env: Env,
   competition: CoverageCompetition,
-  season: number,
+  season: number | string,
   cache: Cache | undefined = typeof caches === "undefined" ? undefined : caches.default,
 ) {
   const key = new Request(
@@ -824,14 +908,17 @@ export async function observeCoverage(
 
 /** Measured coverage for one competition-season, attached beside the static contract. */
 interface ObservedBlock {
+  readonly field_capabilities: ReturnType<typeof statFieldCapabilities>;
   readonly competition: CoverageCompetition;
   readonly season: number;
+  readonly seasonKey: string;
   readonly measured_at: string;
   readonly notes: readonly string[];
   readonly player_match_stats: Readonly<Record<string, RowObservation>>;
   readonly player_season_pav: TableRowsObservation;
   readonly match_lineups: MatchPresenceObservation;
   readonly match_coaches: CoachingObservation;
+  readonly inventory: Awaited<ReturnType<typeof queryObservation>>["inventory"];
 }
 
 /**
@@ -847,17 +934,25 @@ export async function coverageContract(options: CoverageOptions, env?: Env) {
     const measured = await observeCoverage(env, options.competition, options.season);
     observed = {
       competition: options.competition,
-      season: options.season,
+      season: Number(String(options.season).slice(0, 4)),
+      seasonKey: String(options.season),
       measured_at: measured.measured_at,
       notes: ["Measured; not a guarantee.", "Zero non-null counts cannot establish field absence."],
+      field_capabilities: statFieldCapabilities(options.competition, String(options.season)),
       player_match_stats: measured.scalar,
       player_season_pav: measured.pav,
       match_lineups: measured.lineups,
-      match_coaches: await queryCoachingObservation(env, options.competition, options.season),
+      match_coaches: measured.coaches,
+      inventory: measured.inventory,
     };
   }
   return {
     version: COVERAGE_CONTRACT_VERSION,
+    season_selectors: {
+      ordinary: "YYYY",
+      AFLW_2022: ["2022-S6", "2022-S7"],
+      ambiguous: "AFLW 2022 requests are rejected; competition and exact season key are required",
+    },
     review_date: COVERAGE_REVIEW_DATE,
     how_to_read: COVERAGE_HOW_TO_READ,
     coaching_contract: {

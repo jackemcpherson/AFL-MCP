@@ -1,3 +1,5 @@
+import { publicInputWriteFence } from "../db/public-inputs";
+import { resolveStoredSeason } from "../db/seasons";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import type { Env } from "../types";
 import { logSync } from "./log";
@@ -15,7 +17,26 @@ target_season AS (
     SELECT s.id AS season_id
     FROM seasons s
     JOIN competitions c ON s.competition_id = c.id
-    WHERE s.year = ? AND c.code = ?
+    WHERE s.id = ? AND c.code = ?
+),
+
+-- A partial input must not become a measured zero or a partial season total.
+-- Retain derived identities with unknown values until the season is computable.
+input_completeness AS (
+    SELECT NOT EXISTS (
+      SELECT 1 FROM matches m
+      JOIN target_season ts ON m.season_id = ts.season_id
+      WHERE (m.status = 'Complete' OR m.status IS NULL)
+        AND (
+          m.home_points IS NULL OR m.away_points IS NULL OR
+          NOT EXISTS (SELECT 1 FROM player_match_stats pms
+            WHERE pms.match_id = m.id AND pms.team_id = m.home_team_id)
+          OR NOT EXISTS (SELECT 1 FROM player_match_stats pms
+            WHERE pms.match_id = m.id AND pms.team_id = m.away_team_id)
+          OR EXISTS (SELECT 1 FROM player_match_stats pms
+            WHERE pms.match_id = m.id AND (pms.goals IS NULL OR pms.behinds IS NULL OR pms.hitouts IS NULL OR pms.goal_assists IS NULL OR pms.inside_fifties IS NULL OR pms.marks_inside_fifty IS NULL OR pms.free_kicks_for IS NULL OR pms.free_kicks_against IS NULL OR pms.rebounds IS NULL OR pms.one_percenters IS NULL OR pms.marks IS NULL OR pms.clearances IS NULL OR pms.tackles IS NULL))
+        )
+    ) AS complete
 ),
 
 -- Step 1a: Aggregate inside 50s per team per match
@@ -25,7 +46,8 @@ team_match_i50 AS (
     FROM player_match_stats pms
     JOIN matches m ON pms.match_id = m.id
     JOIN target_season ts ON m.season_id = ts.season_id
-    WHERE m.home_points IS NOT NULL
+    WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
+      AND (m.status = 'Complete' OR m.status IS NULL)
     GROUP BY pms.match_id, pms.team_id
 ),
 
@@ -49,7 +71,8 @@ team_season AS (
             ON h.match_id = m.id AND h.team_id = m.home_team_id
         JOIN team_match_i50 a
             ON a.match_id = m.id AND a.team_id = m.away_team_id
-        WHERE m.home_points IS NOT NULL
+        WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
+      AND (m.status = 'Complete' OR m.status IS NULL)
         UNION ALL
         -- Away games
         SELECT m.away_team_id,
@@ -61,7 +84,8 @@ team_season AS (
             ON h.match_id = m.id AND h.team_id = m.home_team_id
         JOIN team_match_i50 a
             ON a.match_id = m.id AND a.team_id = m.away_team_id
-        WHERE m.home_points IS NOT NULL
+        WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
+      AND (m.status = 'Complete' OR m.status IS NULL)
     ) sub
     GROUP BY sub.team_id
 ),
@@ -139,7 +163,8 @@ player_match AS (
     FROM player_match_stats pms
     JOIN matches m ON pms.match_id = m.id
     JOIN target_season ts ON m.season_id = ts.season_id
-    WHERE m.home_points IS NOT NULL
+    WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
+      AND (m.status = 'Complete' OR m.status IS NULL)
       AND (pms.time_on_ground_pct > 0 OR pms.disposals > 0)
 ),
 
@@ -190,33 +215,23 @@ SELECT
     pp.player_id,
     ts.season_id,
     pp.team_id,
-    ROUND(pp.off_pav, 2) AS off_pav,
-    ROUND(pp.mid_pav, 2) AS mid_pav,
-    ROUND(pp.def_pav, 2) AS def_pav,
-    ROUND(pp.off_pav + pp.mid_pav + pp.def_pav, 2) AS total_pav
+    CASE WHEN ic.complete THEN ROUND(pp.off_pav, 2) END AS off_pav,
+    CASE WHEN ic.complete THEN ROUND(pp.mid_pav, 2) END AS mid_pav,
+    CASE WHEN ic.complete THEN ROUND(pp.def_pav, 2) END AS def_pav,
+    CASE WHEN ic.complete THEN ROUND(pp.off_pav + pp.mid_pav + pp.def_pav, 2) END AS total_pav
 FROM player_pavs pp
 CROSS JOIN target_season ts
-`;
-
-const PAV_UPSERT_SQL = `
-INSERT INTO player_season_pav
-    (player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (player_id, season_id, team_id) DO UPDATE SET
-    off_pav   = EXCLUDED.off_pav,
-    mid_pav   = EXCLUDED.mid_pav,
-    def_pav   = EXCLUDED.def_pav,
-    total_pav = EXCLUDED.total_pav
+CROSS JOIN input_completeness ic
 `;
 
 interface PavRow {
   player_id: number;
   season_id: number;
   team_id: number;
-  off_pav: number;
-  mid_pav: number;
-  def_pav: number;
-  total_pav: number;
+  off_pav: number | null;
+  mid_pav: number | null;
+  def_pav: number | null;
+  total_pav: number | null;
 }
 
 /**
@@ -231,9 +246,11 @@ interface PavRow {
  */
 export async function calculatePav(
   env: Env,
-  year: number,
+  selector: number | string,
   competition: PavCompetition,
+  holder?: string,
 ): Promise<number> {
+  const year = Number(String(selector).slice(0, 4));
   const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
   if (year < minYear) {
     throw new Error(
@@ -241,29 +258,22 @@ export async function calculatePav(
     );
   }
 
-  const { results } = await env.DB.prepare(PAV_SELECT_SQL).bind(year, competition).all<PavRow>();
-
-  if (results.length === 0) return 0;
-
-  let totalAffected = 0;
-  for (let i = 0; i < results.length; i += 500) {
-    const chunk = results.slice(i, i + 500);
-    const stmts = chunk.map((row) =>
-      env.DB.prepare(PAV_UPSERT_SQL).bind(
-        row.player_id,
-        row.season_id,
-        row.team_id,
-        row.off_pav,
-        row.mid_pav,
-        row.def_pav,
-        row.total_pav,
-      ),
-    );
-    const batchResults = await env.DB.batch(stmts);
-    totalAffected += batchResults.filter((r) => r.success).length;
-  }
-
-  return totalAffected;
+  const season = await resolveStoredSeason(env, competition, selector);
+  const seasonId = season.id;
+  const { results } = await env.DB.prepare(PAV_SELECT_SQL)
+    .bind(seasonId, competition)
+    .all<PavRow>();
+  await env.DB.batch([
+    ...(holder ? [publicInputWriteFence(env, holder)] : []),
+    env.DB.prepare("DELETE FROM player_season_pav WHERE season_id = ?1").bind(seasonId),
+    env.DB.prepare(`INSERT INTO player_season_pav
+      (player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav)
+      SELECT json_extract(value, '$.player_id'), json_extract(value, '$.season_id'),
+        json_extract(value, '$.team_id'), json_extract(value, '$.off_pav'),
+        json_extract(value, '$.mid_pav'), json_extract(value, '$.def_pav'), json_extract(value, '$.total_pav')
+      FROM json_each(?1)`).bind(JSON.stringify(results)),
+  ]);
+  return results.length;
 }
 
 /**
@@ -274,7 +284,7 @@ export async function calculatePav(
 export async function recalculatePav(
   env: Env,
   competition: PavCompetition,
-  year: number = new Date().getFullYear(),
+  year: number | string = new Date().getFullYear(),
 ): Promise<void> {
   try {
     const changes = await calculatePav(env, year, competition);
@@ -299,22 +309,22 @@ export async function recalculatePav(
 export async function calculateAllPav(
   env: Env,
   competitions: readonly PavCompetition[] = ["AFLM", "AFLW"] as const,
-): Promise<Record<PavCompetition, Record<number, number>>> {
-  const out: Record<PavCompetition, Record<number, number>> = { AFLM: {}, AFLW: {} };
+): Promise<Record<PavCompetition, Record<string, number>>> {
+  const out: Record<PavCompetition, Record<string, number>> = { AFLM: {}, AFLW: {} };
 
   for (const competition of competitions) {
     const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
     const { results } = await env.DB.prepare(
-      `SELECT DISTINCT s.year FROM seasons s
+      `SELECT s.season_key FROM seasons s
        JOIN competitions c ON s.competition_id = c.id
        WHERE c.code = ? AND s.year >= ?
-       ORDER BY s.year`,
+       ORDER BY s.year, s.season_key`,
     )
       .bind(competition, minYear)
-      .all<{ year: number }>();
+      .all<{ season_key: string }>();
 
     for (const row of results) {
-      out[competition][row.year] = await calculatePav(env, row.year, competition);
+      out[competition][row.season_key] = await calculatePav(env, row.season_key, competition);
     }
   }
 

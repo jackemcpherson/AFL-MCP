@@ -34,53 +34,55 @@ changing the polling cadence only requires touching one function.
 
 ## Pipeline (`syncCompetition`)
 
-For each `(competition, year)` pair (cron uses current year. The backfill
-endpoint iterates a year range):
+Each pass uses an exact competition-season selector. Cron discovers the active
+season for each competition.
+Backfills accept explicit season keys, including `2022-S6` and `2022-S7` for
+AFLW.
 
-1. **Fetch matches** for the season from the `afl-api` source.
-2. **Ensure** competition + season rows exist. resolve `seasonId`. Unknown
-   competitions (such as VFL on first sync after a fresh deploy) are auto-upserted
-   via `ensureCompetition`.
-3. **Detect new completed matches** by comparing the API's count of completed
-   matches against `selectCompletedCount(seasonId)`, and asking
-   `selectHasCompletedMatchWithoutStats(seasonId)` whether any previously
-   completed match still lacks stats. The backlog
-   check makes the pipeline self-healing: it recovers from same-day multi-match
-   completions and from any partial write failure. Cron ticks limit lineup
-   retries to rounds played in the last 14 days. This prevents repeated fetches
-   for rosters that never publish upstream.
-   Admin backfills lift the bound and sweep up to 40 lineup-less rounds per
-   season.
-4. **Conditionally fetch** lineups and player stats (if the API has more
-   completed matches than the database, OR a stats backlog exists) - both in
-   parallel. Select lineup rounds from freshly fetched upcoming fixtures
-   within five days, including later matches in rounds already underway.
-   Refresh every fifteen minutes, increasing to every five minutes within
-   ninety minutes of an upcoming kickoff. A 404 is the expected
-   not-yet-published state and does not write a `sync_log` error row.
-5. **Quarantine** placeholder finals fixtures (`isPlaceholderTeamName`:
-   "1st", "Winner of QF1", "Highest-ranked WF Winner", ...) so they never
-   become team or match rows, then **upsert** teams, venues, players,
-   matches, stats, lineups (in dependency
-   order - `upserts.ts` handles the foreign-key wiring). Match upserts retain
-   the AFL API's `completedQuarter` as nullable `completed_quarter` (0 - 4).
-   `COALESCE` preserves the last authoritative value if the upstream clock is
-   transiently absent.
-6. **Recalculate PAV** when `statsAffected > 0` AND the competition is in
-   `{AFLM, AFLW}` AND `skipPav` is not set. Skip VFL/VFLW because the AFL
-   API does not populate the PAV formula's required inputs (`goal_assists`,
-   `marks_inside_50`, `one_percenters`).
-7. **Log** to `sync_log` only when the tick produced new stats or lineup rows.
+1. Fetch the season inventory from `afl-api`. Store its raw snapshot separately
+   from reviewed fixture corrections.
+2. Resolve the competition and season IDs. Preserve existing IDs and record the
+   provider season link.
+3. Select upcoming lineup rounds within five days and completed rounds with
+   missing lineups.
+   Cron limits historical lineup retries to three rounds from the last 14 days.
+   Admin backfills select up to 40 rounds.
+4. Fetch the selected lineups. Upcoming snapshots refresh every fifteen minutes,
+   or every five minutes within ninety minutes of kickoff.
+   A provider 404 means the roster has not published. It does not erase a stored
+   snapshot.
+5. Quarantine placeholder finals participants. Upsert teams, venues, players,
+   fixtures and validated lineups in dependency order.
+6. Queue recent completed matches for statistics refresh. Hourly passes fetch at
+   most 20 due matches across competitions.
+   Admin backfills queue their exact season and also fetch at most 20 matches
+   per pass.
+   Each match has persisted success, failure and retry checkpoints. Match-count
+   increases do not gate corrections.
+7. Rebuild changed statistics' PAV seasons before clearing the public write
+   marker.
+   A pass rebuilds at most 20 queued seasons. Remaining rebuilds fail the pass
+   and retain the marker for explicit recovery.
+   AFLM and AFLW use the canonical formula. Other competitions retain unknown
+   derived values where required inputs lack verification.
+8. Run hourly coaching and weather work under the same lease, then finish the
+   public write marker.
+   Finalisation failures propagate and retain the marker. The lease releases
+   even when finalisation fails.
 
-The pipeline logs fetch errors to `sync_log` with `rows_affected = 0`, then
-continues to the next `(competition, year)` pair.
+Provider statistics failures retain successful match results and persist
+retries.
+Database failures retain the public write marker and require recovery with the
+identical operation scope.
 
 ## Publication Inputs
 
 Match refresh stores `matches.kickoff_at` directly from the source match
 instant as a canonical UTC timestamp. Unknown kickoff times remain `NULL`.
 Never construct a deadline by joining the UTC `date` with Melbourne
-`local_time`. Migration [0021](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0021_tipper_publication.sql) leaves legacy deadlines unavailable until a
+`local_time`. Migration
+[0021](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0021_tipper_publication.sql)
+leaves legacy deadlines unavailable until a
 source fixture refresh supplies them.
 
 For AFLM and AFLW, a lineup replacement requires both complete team selections.
@@ -90,19 +92,23 @@ substitute players count toward those totals. Review the sizes against the
 published 2027 rules before launch.
 
 Each valid match snapshot replaces its lineup rows in one native D1 batch.
-The replacement removes omitted players and records `matches.lineups_observed_at`
+The replacement removes omitted players and records
+`matches.lineups_observed_at`
 in UTC. Invalid, incomplete, or failed upstream responses preserve the previous
 valid snapshot. The pre-2023 historical lineup guard remains in place.
 
 Fixture identity, venue, or kickoff changes atomically invalidate current
-`match_predictions` and Squiggle mappings, and clear lineup observation metadata.
-Historical Tipper captures remain intact. Tipper owns its recorded kickoff locks.
+`match_predictions` and Squiggle mappings, and clear lineup observation
+metadata.
+Historical Tipper captures remain intact. Tipper owns its recorded kickoff
+locks.
 A source correction cannot reopen a prediction after its recorded deadline.
 
 AFL-MCP owns the additive publication migrations. Apply them before activating
 the new Tipper Worker, then refresh forthcoming AFLM and AFLW fixtures. Tipper
 writes through its native D1 binding and preserves the current prediction fields
-used by AFL-MCP and FootyBot. See [the schema reference](./schema.md#match_predictions)
+used by AFL-MCP and FootyBot. See [the schema
+reference](./schema.md#match_predictions)
 for the capture link and source revision identity.
 
 ## Weather Stage
@@ -118,9 +124,14 @@ Historical Forecast row. After six days, the stage upgrades provenance to
 The stage removes rows for cancelled matches. It resolves coordinates through
 `venues.canonical_venue_id` and requests `timezone=Australia/Melbourne`.
 
-Weather failures add a bounded `sync:weather` row to `sync_log` without stopping
-sync. The next hourly pass retries the work. Use `scripts/backfill-weather.ts`
-for historical bulk loading.
+Provider weather failures persist diagnostics and daily retry schedules.
+After the initial failure and three unsuccessful daily retries, observations
+remain unavailable.
+The authenticated `retry-weather` operation previews an exact match before
+scheduling another attempt.
+Database failures propagate and retain the public marker.
+`scripts/backfill-weather.ts` captures sources and produces review artefacts. It
+does not write production weather.
 
 ## Backfill Endpoint
 
@@ -129,20 +140,18 @@ loads. Body:
 
 ```json
 {
-    "competitions": ["AFLM", "AFLW", "VFL", "VFLW"],
-    "fromYear": 2021,
-    "toYear": 2025,
-    "skipShouldRunNow": true,
-    "skipPav": false
+    "competition": "AFLW",
+    "season": "2022-S7",
+    "skipShouldRunNow": true
 }
 ```
 
 `skipShouldRunNow` (default `true`) bypasses the cadence gate so the backfill
-runs immediately. `skipPav` (default `false`) is useful for label-only re-syncs
-(such as relabelling an existing AFLM season) where stats are not changing and
-PAV recalculation would be wasteful.
+runs immediately. PAV rebuilds only when its inputs change. The major release
+removes `skipPav`. Requests containing it fail validation. Set `resume: true`
+to recover an interrupted operation with the identical competition-season scope.
 
-The endpoint iterates `(competition, year)` pairs and returns per-tick results:
+The endpoint returns results for each exact competition-season scope:
 
 ```json
 {
@@ -159,10 +168,10 @@ The endpoint iterates `(competition, year)` pairs and returns per-tick results:
 }
 ```
 
-Cloudflare Workers cap execution time at 30 seconds per request. The caller is
-responsible for chunking year ranges. A single year per request is safe for
-AFLM. The smaller competitions (AFLW, VFL, VFLW) can typically run a few years
-in one call.
+Use one exact competition-season per request and repeat bounded statistics
+refresh operations until their remaining count reaches zero.
+Lineup and provider work can exceed an individual request's limits. A failed
+marked operation requires explicit recovery.
 
 Cron, manual sync, and annual Brownlow ingestion share the single `sync_lease`
 row. Acquisition is atomic, holders expire after ten minutes, and release checks
@@ -196,7 +205,12 @@ competitions - AFLM R1 is March, AFLW R1 is August, VFL R1 is April.
 
 `recalculatePav(env, competition, year?)` in `src/sync/pav.ts` writes to
 `player_season_pav`. The sync pipeline runs it after updating player statistics
-for AFLM or AFLW, unless `skipPav` is set.
+for AFLM or AFLW through the persisted rebuild queue.
+
+Cancelled and live matches do not contribute to PAV. Missing completed-match
+scores, required inputs
+or a missing team participant population leave derived season values null.
+The model does not interpret unknown statistics as measured zeroes.
 
 Per-competition floor years are in `MIN_PAV_YEAR_BY_COMPETITION`
 (`src/lib/constants.ts`):
@@ -276,7 +290,8 @@ match headings to establish coverage. Dry-run is the default.
 Repeating a request is idempotent by provider key. Stored page status records
 the latest outcome. AFL Tables alone writes canonical `match_coaches` rows.
 
-FootyWire observations remain separate. A partial unbounded import can add successful
+FootyWire observations remain separate. A partial unbounded import can add
+successful
 observations and assignments but cannot remove prior canonical facts. A fully
 successful AFL Tables season pass can remove stale canonical facts absent from
 the source snapshot. The importer records unresolved or contradictory joins
@@ -320,7 +335,8 @@ match mapping write. It rejects duplicate participant assignments and verifies
 both participant names and corresponding scores in either orientation. Only a
 complete authoritative season permits canonical removals. Unresolved imports
 retain their diagnostics for review. A returned final summary clears the page
-checkpoint, including unresolved imports, so the next cycle can fetch corrections
+checkpoint, including unresolved imports, so the next cycle can fetch
+corrections
 from earlier profiles. A thrown write failure retains its checkpoint for retry.
 
 Public health clears a competition-level error after a later successful sync

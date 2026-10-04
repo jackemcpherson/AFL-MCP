@@ -13,8 +13,8 @@
  *   identical provenance to the backfill, so `match_weather` converges.
  * - Cancelled matches get any stray weather rows deleted.
  *
- * Fail-soft: any error ends the stage for this pass with a `sync_log` row
- * and no retry state — the needs-work queries self-heal next hour.
+ * Provider failures are isolated per match and persisted for daily retries.
+ * After three failed retries, missing values retain an explicit diagnostic.
  */
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
@@ -22,7 +22,6 @@ import type { Env } from "../types";
 import { aggregateWeatherWindow, extractHourlySeries } from "./aggregate";
 import {
   ARCHIVE_API,
-  FALLBACK_LOCAL_TIME,
   FORECAST_API,
   HISTORICAL_FORECAST_API,
   MATCH_WEATHER_UPSERT,
@@ -71,8 +70,8 @@ const CANONICAL_VENUE_JOIN = `
 
 /**
  * Run the weather stage once: cleanup, needs-work selection, Open-Meteo
- * fetches, and `match_weather` upserts. Never throws — failures are logged
- * to `sync_log` and retried by the next top-of-hour pass.
+ * fetches, and `match_weather` upserts. Provider failures are recorded with
+ * bounded daily retries; a final source label does not imply complete metrics.
  *
  * @param env - Worker bindings.
  * @param fetchImpl - `fetch` in production; a stub in tests.
@@ -86,17 +85,47 @@ export async function runWeatherStage(env: Env, fetchImpl: typeof fetch, now: Da
     // Sequential on purpose: one in-flight request at a time keeps the
     // stage gentle on Open-Meteo's free tier (not a Promise.all candidate).
     for (const job of jobs) {
-      await fetchAndStore(env, fetchImpl, job, now);
-      written++;
+      const retry = await env.DB.prepare(`SELECT failures,next_retry_at FROM weather_refresh_state
+        WHERE match_id=?1 AND kind=?2 AND source=?3`)
+        .bind(job.candidate.match_id, job.kind, job.source)
+        .first<{ failures: number; next_retry_at: string | null }>();
+      if (
+        retry &&
+        retry.failures > 0 &&
+        (!retry.next_retry_at || retry.next_retry_at > now.toISOString())
+      )
+        continue;
+      const diagnostic = await fetchAndStore(env, fetchImpl, job, now);
+      if (diagnostic) await logSync(env, "sync:weather", 0, diagnostic);
+      else written++;
+      const failures = diagnostic ? (retry?.failures ?? 0) + 1 : 0;
+      // Initial attempt plus three daily retries, then retain the source limitation.
+      const nextRetry =
+        failures > 0 && failures <= 3 ? new Date(now.getTime() + 86400000).toISOString() : null;
+      await env.DB.prepare(`INSERT INTO weather_refresh_state(match_id,kind,source,attempted_at,next_retry_at,failures,diagnostic)
+        VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(match_id,kind,source) DO UPDATE SET
+        attempted_at=excluded.attempted_at,next_retry_at=excluded.next_retry_at,failures=excluded.failures,diagnostic=excluded.diagnostic`)
+        .bind(
+          job.candidate.match_id,
+          job.kind,
+          job.source,
+          now.toISOString(),
+          nextRetry,
+          failures,
+          failures > 3 ? `unavailable-after-three-retries: ${diagnostic}` : diagnostic,
+        )
+        .run();
     }
     if (written > 0 || cleaned > 0) {
       await logSync(env, "sync:weather", written + cleaned);
     }
   } catch (err) {
-    // Fail-soft (#127): never block match-data sync on an Open-Meteo outage.
+    // Provider failures are handled per match. A database failure can leave
+    // partial state and must retain the caller's public write marker.
     await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) =>
       console.error("weather stage: failed to record sync_log row", logErr),
     );
+    throw err;
   }
 }
 
@@ -202,13 +231,16 @@ async function selectFastObservedCandidates(env: Env, now: Date): Promise<Candid
      ${CANONICAL_VENUE_JOIN}
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
      WHERE m.status = 'Complete'
-       AND w.match_id IS NULL
+       AND (w.match_id IS NULL OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND m.date > ?1
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
+         AND r.kind='observed' AND r.source='historical_forecast' AND r.failures>0
+         AND (r.next_retry_at IS NULL OR r.next_retry_at > ?3))
      ORDER BY m.date DESC, m.id
      LIMIT ?2`,
   )
-    .bind(finalCutoffDate(now), MAX_FETCHES_PER_QUERY)
+    .bind(finalCutoffDate(now), MAX_FETCHES_PER_QUERY, now.toISOString())
     .all<CandidateRow>();
   return rows.results;
 }
@@ -236,12 +268,15 @@ async function selectFinalObservedCandidates(env: Env, now: Date): Promise<Candi
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
      WHERE (m.status = 'Complete' OR (m.status IS NULL AND m.home_points IS NOT NULL))
        AND m.date <= ?1
-       AND (w.match_id IS NULL OR w.source <> ?2)
+       AND (w.match_id IS NULL OR w.source <> ?2 OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
+         AND r.kind='observed' AND r.source=?2 AND r.failures>0
+         AND (r.next_retry_at IS NULL OR r.next_retry_at > ?4))
      ORDER BY m.date DESC, m.id
      LIMIT ?3`,
   )
-    .bind(finalCutoffDate(now), OBSERVED_FINAL_SOURCE, MAX_FETCHES_PER_QUERY)
+    .bind(finalCutoffDate(now), OBSERVED_FINAL_SOURCE, MAX_FETCHES_PER_QUERY, now.toISOString())
     .all<CandidateRow>();
   return rows.results;
 }
@@ -251,15 +286,21 @@ async function fetchAndStore(
   fetchImpl: typeof fetch,
   job: WeatherJob,
   now: Date,
-): Promise<void> {
-  const url = openMeteoUrl(job.apiBase, job.candidate, job.isDualModel);
-  const response = await fetchImpl(url);
-  if (!response.ok) {
-    throw new Error(`Open-Meteo ${response.status} for match ${job.candidate.match_id}`);
+): Promise<string | null> {
+  if (!job.candidate.local_time) return "unavailable: kickoff-time-unknown";
+  let metrics: ReturnType<typeof aggregateWeatherWindow>;
+  try {
+    const url = openMeteoUrl(job.apiBase, job.candidate, job.isDualModel);
+    const response = await fetchImpl(url);
+    if (!response.ok) {
+      throw new Error(`Open-Meteo ${response.status} for match ${job.candidate.match_id}`);
+    }
+    const series = extractHourlySeries(await response.json());
+    const scheduledStart = `${job.candidate.date}T${job.candidate.local_time}`;
+    metrics = aggregateWeatherWindow(series, scheduledStart);
+  } catch (error) {
+    return describeError(error);
   }
-  const series = extractHourlySeries(await response.json());
-  const scheduledStart = `${job.candidate.date}T${job.candidate.local_time ?? FALLBACK_LOCAL_TIME}`;
-  const metrics = aggregateWeatherWindow(series, scheduledStart);
   await env.DB.prepare(MATCH_WEATHER_UPSERT)
     .bind(
       job.candidate.match_id,
@@ -269,6 +310,9 @@ async function fetchAndStore(
       now.toISOString(),
     )
     .run();
+  return weatherMetricValues(metrics).some((value) => value === null)
+    ? "partial: missing-weather-metrics"
+    : null;
 }
 
 function describeError(err: unknown): string {

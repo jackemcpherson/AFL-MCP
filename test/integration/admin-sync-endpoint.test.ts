@@ -62,3 +62,21 @@ describe("POST /mcp/admin/sync — response shape", () => {
     expect(Array.isArray(body.results)).toBe(true);
   });
 });
+
+describe("POST /mcp/admin/sync request validation", () => {
+  it.each(['{"resume":"true"}', '{"season":2022}', "{"])(
+    "rejects invalid recovery input %s before acquiring a lease",
+    async (body) => {
+      const request = new Request("https://afl.test/mcp/admin/sync", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+        body,
+      });
+      const response = await worker.fetch(request, authedEnv, stubCtx);
+      expect(response.status).toBe(400);
+      expect(
+        await (env as Env).DB.prepare("SELECT holder FROM sync_lease WHERE id = 1").first("holder"),
+      ).toBeNull();
+    },
+  );
+});

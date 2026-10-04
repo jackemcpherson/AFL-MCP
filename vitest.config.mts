@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(import.meta.dirname, "src/db/migrations"));
 
+  const contractMigrations = await readD1Migrations(
+    path.resolve(import.meta.dirname, "deployment"),
+  );
+
   const legacyMigrations = await readD1Migrations(
     path.resolve(import.meta.dirname, "test/fixtures/legacy-migrations"),
   );
@@ -27,6 +31,7 @@ export default defineConfig(async () => {
                 d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB", "FRESH_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,
+                  TEST_CONTRACT_MIGRATIONS: contractMigrations,
                   TEST_LEGACY_MIGRATIONS: legacyMigrations,
                 },
               },

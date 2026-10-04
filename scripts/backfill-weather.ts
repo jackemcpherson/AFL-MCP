@@ -2,7 +2,8 @@
  * One-off local backfill of observed match-window weather for every eligible
  * completed match, from Open-Meteo's free reanalysis archive (#138, spec
  * locked in #128). Follows the backfill-lineups.ts pattern: fetch locally,
- * generate batched SQL artifacts, apply via `wrangler d1 execute`.
+ * generate batched SQL artifacts for review. Production writes use the
+ * authenticated retry-weather operation and the leased weather stage.
  *
  * Phases (resume is free at every phase):
  *   1. FETCH    — eligibility query against remote D1; one 3-day dual-model
@@ -11,7 +12,6 @@
  *                 by match id (re-runs skip cached matches).
  *   2. GENERATE — cache -> batched upsert SQL under data/sql-weather/,
  *                 inspectable before apply.
- *   3. APPLY    — per-file `wrangler d1 execute afl-stats --remote`.
  *
  * Modes (each phase is separately inspectable and abortable):
  *   --dry-run        Eligibility counts per competition/season plus a call
@@ -48,7 +48,6 @@ import {
 } from "../src/weather/aggregate";
 import {
   ARCHIVE_API,
-  FALLBACK_LOCAL_TIME,
   matchWeatherUpsertSql,
   OBSERVED_FINAL_SOURCE,
   openMeteoUrl,
@@ -98,13 +97,6 @@ function queryD1<T>(sql: string, rowSchema: z.ZodType<T>): T[] {
   });
   const output = D1ExecuteOutputSchema.parse(JSON.parse(raw));
   return z.array(rowSchema).parse(output[0]?.results ?? []);
-}
-
-function executeSQL(filePath: string): void {
-  execSync(`npx wrangler d1 execute afl-stats --remote --file "${filePath}"`, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -220,7 +212,8 @@ const CacheEntrySchema = z.object({ fetchedAt: z.string(), payload: z.unknown() 
 function metricsFromCache(match: EligibleMatch): { metrics: WeatherMetrics; fetchedAt: string } {
   const cached = CacheEntrySchema.parse(JSON.parse(readFileSync(cachePath(match.id), "utf-8")));
   const series = extractHourlySeries(cached.payload);
-  const scheduledStart = `${match.date}T${match.local_time ?? FALLBACK_LOCAL_TIME}`;
+  if (match.local_time === null) throw new Error(`Match ${match.id}: kickoff time unavailable`);
+  const scheduledStart = `${match.date}T${match.local_time}`;
   return { metrics: aggregateWeatherWindow(series, scheduledStart), fetchedAt: cached.fetchedAt };
 }
 
@@ -251,19 +244,6 @@ function generatePhase(matches: EligibleMatch[]): number {
   console.log(`Generated ${statements.length} upserts in ${files} files under ${SQL_DIR}`);
   if (missing > 0) console.log(`Skipped ${missing} matches with no cached payload`);
   return files;
-}
-
-// ── Phase 3: apply ───────────────────────────────────────────────────
-
-function applyPhase(): void {
-  console.log("\nPhase 3: applying SQL to remote D1...");
-  const files = readdirSync(SQL_DIR)
-    .filter((f) => f.startsWith("weather_"))
-    .sort();
-  for (const f of files) {
-    console.log(`  ${f}`);
-    executeSQL(join(SQL_DIR, f));
-  }
 }
 
 // ── Verify ───────────────────────────────────────────────────────────
@@ -350,12 +330,13 @@ async function verifySpotCheck(): Promise<void> {
   );
   let mismatches = 0;
   for (const row of rows) {
+    if (row.local_time === null) {
+      console.log(`Match ${row.id}: kickoff time unavailable; comparison skipped`);
+      continue;
+    }
     const payload = await fetchArchivePayload(row);
     const series = extractHourlySeries(payload);
-    const fresh = aggregateWeatherWindow(
-      series,
-      `${row.date}T${row.local_time ?? FALLBACK_LOCAL_TIME}`,
-    );
+    const fresh = aggregateWeatherWindow(series, `${row.date}T${row.local_time}`);
     const diffs: string[] = [];
     const compare = (label: string, stored: number | null, live: number | null, tol: number) => {
       if (stored === null && live === null) return;
@@ -423,18 +404,13 @@ async function main() {
   }
   const files = generatePhase(matches);
   if (files === 0) {
-    console.log("Nothing to apply.");
+    console.log("No review artifacts generated.");
     return;
   }
-  if (generateOnly) {
-    console.log(
-      `\nGenerate-only complete. Inspect ${SQL_DIR}, then re-run without flags to apply.`,
-    );
-    return;
-  }
-  console.log(`\nInspect the SQL under ${SQL_DIR} if desired; applying now.`);
-  applyPhase();
-  console.log("\nDone! Run with --verify to check coverage, ranges, and a spot sample.");
+  console.log(
+    `\nReview artifacts are in ${SQL_DIR}. This script does not write production data. ` +
+      "Use /mcp/admin/retry-weather to schedule selected matches for the leased weather stage.",
+  );
 }
 
 main().catch((err) => {

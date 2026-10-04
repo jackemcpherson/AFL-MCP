@@ -137,6 +137,33 @@ describe("calculatePav for AFLW", () => {
     expect(rows.results.some((r) => r.total_pav > 0)).toBe(true);
   });
 
+  it("replaces derived totals with unknown values when a required input disappears", async () => {
+    await seedAflwMatch(2025);
+    await calculatePav(env, 2025, "AFLW");
+    await env.DB.prepare(
+      "UPDATE player_match_stats SET goal_assists = NULL WHERE id = (SELECT MIN(id) FROM player_match_stats)",
+    ).run();
+    await calculatePav(env, 2025, "AFLW");
+    const rows = await env.DB.prepare("SELECT total_pav FROM player_season_pav").all<{
+      total_pav: number | null;
+    }>();
+    expect(rows.results).toHaveLength(6);
+    expect(rows.results.every((row) => row.total_pav === null)).toBe(true);
+  });
+
+  it.each(["Cancelled", "Live"])(
+    "excludes %s matches even when partial scores exist",
+    async (status) => {
+      await seedAflwMatch(2025);
+      await calculatePav(env, 2025, "AFLW");
+      await env.DB.prepare("UPDATE matches SET status = ?1").bind(status).run();
+      expect(await calculatePav(env, 2025, "AFLW")).toBe(0);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_season_pav").first("n")).toBe(
+        0,
+      );
+    },
+  );
+
   it("does NOT produce PAV rows for AFLM if only AFLW data is seeded", async () => {
     await seedAflwMatch(2025);
     await calculatePav(env, 2025, "AFLW");
@@ -154,4 +181,17 @@ describe("calculatePav for AFLW", () => {
   it("rejects calculatePav for AFLW years before 2017", async () => {
     await expect(calculatePav(env, 2016, "AFLW")).rejects.toThrow(/AFLW is supported from 2017/);
   });
+});
+
+it("keeps season PAV unknown when another completed fixture has missing scores", async () => {
+  await seedAflwMatch(2025);
+  await calculatePav(env, 2025, "AFLW");
+  await env.DB.prepare(`INSERT INTO matches(season_id,round,round_number,date,home_team_id,away_team_id,status)
+    SELECT season_id,'Week 2',2,'2025-09-01',home_team_id,away_team_id,'Complete' FROM matches LIMIT 1`).run();
+  await calculatePav(env, 2025, "AFLW");
+  const rows = await env.DB.prepare("SELECT total_pav FROM player_season_pav").all<{
+    total_pav: number | null;
+  }>();
+  expect(rows.results).toHaveLength(6);
+  expect(rows.results.every((row) => row.total_pav === null)).toBe(true);
 });

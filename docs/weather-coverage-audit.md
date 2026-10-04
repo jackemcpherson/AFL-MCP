@@ -63,9 +63,10 @@ ORDER BY s.year
 Notes:
 
 - 2020 has 162 matches (COVID-shortened season) - coverage is still 100%.
-- 2026 is the in-progress current season. Fryzigg's coverage window ends
-  at 2025. the AFL API sync does return weather for some 2026 rounds (see
-  fixtures), but the current ingest path does not write it to
+- 2026 is the in-progress current season. Fryzigg's coverage window ends at
+  2025.
+  The captured AFL API fixtures contain weather for some 2026 rounds.
+  The ingestion path examined by this audit does not write those values to
   `matches.weather_*`.
 - All queries executed against `--remote` (production D1, database ID
   `fe1c1a89-805f-481d-9ba0-b9f8dee04a36`, region OC/MEL).
@@ -122,7 +123,8 @@ available round fixtures:
 
 - `test/fixtures/afl-api-round-1-2025.json`: weather objects contain
   `{ "description": "...", "tempInCelsius": N, "weatherType": "..." }`. The
-  `description` is a free-text string (e.g. "Cloudy", "Shower or two") - not a
+  `description` is a free-text string (for example, "Cloudy", "Shower or two") -
+  not a
   structured numeric field.
 - `test/fixtures/afl-api-round-10-2026.json`: weather objects contain only
   `{ "weatherType": "..." }` - no temp, no description.
@@ -153,10 +155,12 @@ Neither upstream source exposes discrete rainfall, wind, or humidity fields.
 
 Recorded verbatim before examining coverage results:
 
-> ENRICH iff the source provides either (a) materially denser coverage of the
-> existing two fields (fills a season block 2016 - 2025 that is mostly null in
-> D1), OR (b) at least one new field plausibly tied to scoring (rainfall or
-> wind) at usable coverage (≥60% for seasons 2016 - 2025). OTHERWISE NO-ENRICH -
+> Enrich if the source supplies materially denser coverage of the existing two
+> fields.
+> It must fill a mostly-null D1 season block within 2016 - 2025.
+> Alternatively, enrich if a new scoring-related field reaches ≥60% coverage for
+> 2016 - 2025.
+> Rainfall and wind are candidate fields. OTHERWISE NO-ENRICH -
 > D1 already holds what the source has. report current coverage to 002b and
 > stop. NO-ENRICH is a valid, useful outcome.
 

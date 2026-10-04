@@ -6,6 +6,9 @@ MCP server for Australian football statistics covering AFL Men's, AFL Women's,
 VFL, and VFLW. Powered by Cloudflare Workers and D1, with cron-triggered sync
 from the AFL API via [fitzroy](https://www.npmjs.com/package/fitzroy).
 
+Version 4 migration and operator procedures are in
+[the remediation guide](docs/remediation.md).
+
 ## Coverage
 
 | Competition          | Years           | Matches | Stats |   Lineups   |  PAV  |
@@ -149,11 +152,9 @@ For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
 
 ```json
 {
-    "competitions": ["AFLW"],
-    "fromYear": 2017,
-    "toYear": 2025,
-    "skipShouldRunNow": true,
-    "skipPav": false
+    "competition": "AFLW",
+    "season": "2022-S7",
+    "skipShouldRunNow": true
 }
 ```
 

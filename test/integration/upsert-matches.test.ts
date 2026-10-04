@@ -24,6 +24,38 @@ async function setup() {
 }
 
 describe("upsertMatches", () => {
+  it.each([
+    ["2026-07-18T15:20:00Z", "2026-07-19", "01:20:00"],
+    ["2026-10-03T15:30:00Z", "2026-10-04", "01:30:00"],
+    ["2026-10-03T16:30:00Z", "2026-10-04", "03:30:00"],
+    ["2026-04-04T16:30:00Z", "2026-04-05", "02:30:00"],
+  ])(
+    "stores Melbourne date and time together across midnight and DST: %s",
+    async (instant, date, time) => {
+      const { competitionId, seasonId } = await setup();
+      const match = makeMatch({ date: new Date(instant) });
+      const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
+      const venueMap = await ensureVenues(env, [match]);
+      await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+      expect(
+        await env.DB.prepare("SELECT date,local_time,kickoff_at FROM matches").first(),
+      ).toEqual({ date, local_time: time, kickoff_at: new Date(instant).toISOString() });
+    },
+  );
+
+  it("queues derived repair after a score correction without changed player rows", async () => {
+    const { competitionId, seasonId } = await setup();
+    const match = makeMatch();
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
+    const venueMap = await ensureVenues(env, [match]);
+    await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+    await env.DB.prepare("DELETE FROM pav_rebuild_queue").run();
+    await upsertMatches(env, [{ ...match, homePoints: 99 }], { seasonId, teamMap, venueMap });
+    expect(await env.DB.prepare("SELECT season_id FROM pav_rebuild_queue").all()).toMatchObject({
+      results: [{ season_id: seasonId }],
+    });
+  });
+
   it("inserts a completed match with scores", async () => {
     const { competitionId, seasonId } = await setup();
     const match = makeMatch();

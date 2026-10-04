@@ -275,13 +275,16 @@ CREATE TABLE public_input_revision (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL DEFAULT 0,
   in_progress INTEGER NOT NULL DEFAULT 0 CHECK (in_progress IN (0, 1)),
-  write_started_at TEXT
+  write_started_at TEXT,
+  write_holder TEXT
 );
 
 CREATE TABLE seasons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   competition_id INTEGER NOT NULL REFERENCES competitions(id),
   year INTEGER NOT NULL, is_complete INTEGER NOT NULL DEFAULT 0,
+  season_key TEXT,
+  display_name TEXT,
   UNIQUE (competition_id, year)
 );
 
@@ -341,7 +344,8 @@ CREATE TABLE tipper_reports (
 CREATE TABLE tipper_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   competition TEXT NOT NULL CHECK (competition IN ('AFLM','AFLW')),
-  season INTEGER NOT NULL, round INTEGER NOT NULL,
+  season INTEGER NOT NULL,
+  season_key TEXT, round INTEGER NOT NULL,
   started_at TEXT NOT NULL, source_revision TEXT NOT NULL, model_version TEXT NOT NULL,
   published_at TEXT, published_count INTEGER,
   finalized INTEGER NOT NULL DEFAULT 1 CHECK (finalized = 1)
@@ -870,3 +874,251 @@ UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Thom
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Cockburn ARC Oval') WHERE name = 'Victor George Kailis Oval';
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Blacktown ISP') WHERE name = 'Blacktown International Sportspark';
 UPDATE venues SET canonical_venue_id = (SELECT id FROM venues WHERE name = 'Melbourne Avalon Airport Oval') WHERE name = 'Avalon Airport Oval';
+CREATE TABLE match_stats_refresh (
+  match_id INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
+  completed_observed_at TEXT NOT NULL,
+  attempted_at TEXT,
+  succeeded_at TEXT,
+  next_retry_at TEXT,
+  provider_updated_at TEXT,
+  failures INTEGER NOT NULL DEFAULT 0,
+  participant_count INTEGER,
+  diagnostic TEXT
+);
+CREATE INDEX idx_match_stats_refresh_due ON match_stats_refresh(next_retry_at, match_id);
+
+CREATE UNIQUE INDEX idx_seasons_competition_key ON seasons(competition_id, season_key);
+CREATE TABLE season_provider_ids (
+  season_id INTEGER NOT NULL REFERENCES seasons(id),
+  provider TEXT NOT NULL,
+  provider_season_id TEXT NOT NULL,
+  PRIMARY KEY (provider, provider_season_id),
+  UNIQUE (season_id, provider)
+);
+INSERT INTO season_provider_ids (season_id, provider, provider_season_id)
+SELECT s.id, 'afl-api', '41' FROM seasons s JOIN competitions c ON c.id = s.competition_id
+WHERE c.code = 'AFLW' AND s.season_key = '2022-S6';
+CREATE TRIGGER seasons_legacy_key AFTER INSERT ON seasons WHEN NEW.season_key IS NULL BEGIN
+  UPDATE seasons SET season_key = CASE
+    WHEN NEW.year = 2022 AND NEW.competition_id = (SELECT id FROM competitions WHERE code = 'AFLW')
+      THEN '2022-S6' ELSE CAST(NEW.year AS TEXT) END WHERE id = NEW.id;
+END;
+CREATE TABLE stats_refresh_operations (
+  id TEXT PRIMARY KEY,
+  season_id INTEGER NOT NULL REFERENCES seasons(id),
+  match_id INTEGER REFERENCES matches(id),
+  manifest_digest TEXT NOT NULL,
+  requested_at TEXT NOT NULL
+);
+CREATE TABLE stats_refresh_operation_matches (
+  operation_id TEXT NOT NULL REFERENCES stats_refresh_operations(id),
+  match_id INTEGER NOT NULL REFERENCES matches(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'complete')),
+  PRIMARY KEY(operation_id, match_id)
+);
+CREATE TABLE season_provider_inventory (
+  season_id INTEGER NOT NULL REFERENCES seasons(id),
+  provider TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  matches_json TEXT NOT NULL CHECK(json_valid(matches_json)),
+  PRIMARY KEY(season_id, provider)
+);
+
+CREATE TRIGGER public_input_player_match_stats_insert AFTER INSERT ON player_match_stats BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_player_match_stats_update AFTER UPDATE ON player_match_stats
+WHEN OLD.match_id IS NOT NEW.match_id OR OLD.player_id IS NOT NEW.player_id OR OLD.team_id IS NOT NEW.team_id OR OLD.guernsey_number IS NOT NEW.guernsey_number OR OLD.player_position IS NOT NEW.player_position OR OLD.subbed IS NOT NEW.subbed OR OLD.time_on_ground_pct IS NOT NEW.time_on_ground_pct OR OLD.kicks IS NOT NEW.kicks OR OLD.handballs IS NOT NEW.handballs OR OLD.disposals IS NOT NEW.disposals OR OLD.effective_disposals IS NOT NEW.effective_disposals OR OLD.disposal_efficiency_pct IS NOT NEW.disposal_efficiency_pct OR OLD.marks IS NOT NEW.marks OR OLD.bounces IS NOT NEW.bounces OR OLD.tackles IS NOT NEW.tackles OR OLD.one_percenters IS NOT NEW.one_percenters OR OLD.clangers IS NOT NEW.clangers OR OLD.contested_possessions IS NOT NEW.contested_possessions OR OLD.uncontested_possessions IS NOT NEW.uncontested_possessions OR OLD.goals IS NOT NEW.goals OR OLD.behinds IS NOT NEW.behinds OR OLD.goal_assists IS NOT NEW.goal_assists OR OLD.shots_at_goal IS NOT NEW.shots_at_goal OR OLD.score_involvements IS NOT NEW.score_involvements OR OLD.score_launches IS NOT NEW.score_launches OR OLD.centre_clearances IS NOT NEW.centre_clearances OR OLD.stoppage_clearances IS NOT NEW.stoppage_clearances OR OLD.clearances IS NOT NEW.clearances OR OLD.contested_marks IS NOT NEW.contested_marks OR OLD.marks_inside_fifty IS NOT NEW.marks_inside_fifty OR OLD.intercept_marks IS NOT NEW.intercept_marks OR OLD.marks_on_lead IS NOT NEW.marks_on_lead OR OLD.free_kicks_for IS NOT NEW.free_kicks_for OR OLD.free_kicks_against IS NOT NEW.free_kicks_against OR OLD.hitouts IS NOT NEW.hitouts OR OLD.hitouts_to_advantage IS NOT NEW.hitouts_to_advantage OR OLD.hitout_win_pct IS NOT NEW.hitout_win_pct OR OLD.ruck_contests IS NOT NEW.ruck_contests OR OLD.inside_fifties IS NOT NEW.inside_fifties OR OLD.rebounds IS NOT NEW.rebounds OR OLD.turnovers IS NOT NEW.turnovers OR OLD.intercepts IS NOT NEW.intercepts OR OLD.metres_gained IS NOT NEW.metres_gained OR OLD.pressure_acts IS NOT NEW.pressure_acts OR OLD.def_half_pressure_acts IS NOT NEW.def_half_pressure_acts OR OLD.tackles_inside_fifty IS NOT NEW.tackles_inside_fifty OR OLD.spoils IS NOT NEW.spoils OR OLD.contest_def_losses IS NOT NEW.contest_def_losses OR OLD.contest_def_one_on_ones IS NOT NEW.contest_def_one_on_ones OR OLD.contest_off_one_on_ones IS NOT NEW.contest_off_one_on_ones OR OLD.contest_off_wins IS NOT NEW.contest_off_wins OR OLD.effective_kicks IS NOT NEW.effective_kicks OR OLD.ground_ball_gets IS NOT NEW.ground_ball_gets OR OLD.f50_ground_ball_gets IS NOT NEW.f50_ground_ball_gets OR OLD.brownlow_votes IS NOT NEW.brownlow_votes OR OLD.rating_points IS NOT NEW.rating_points OR OLD.afl_fantasy_score IS NOT NEW.afl_fantasy_score OR OLD.supercoach_score IS NOT NEW.supercoach_score OR OLD.goal_accuracy IS NOT NEW.goal_accuracy OR OLD.goal_efficiency IS NOT NEW.goal_efficiency OR OLD.shot_efficiency IS NOT NEW.shot_efficiency OR OLD.kick_efficiency IS NOT NEW.kick_efficiency OR OLD.kick_to_handball_ratio IS NOT NEW.kick_to_handball_ratio OR OLD.contested_possession_rate IS NOT NEW.contested_possession_rate OR OLD.contest_def_loss_pct IS NOT NEW.contest_def_loss_pct OR OLD.contest_off_wins_pct IS NOT NEW.contest_off_wins_pct OR OLD.centre_bounce_attendances IS NOT NEW.centre_bounce_attendances OR OLD.kickins IS NOT NEW.kickins OR OLD.kickins_playon IS NOT NEW.kickins_playon OR OLD.interchange_counts IS NOT NEW.interchange_counts OR OLD.total_possessions IS NOT NEW.total_possessions BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_player_match_stats_delete AFTER DELETE ON player_match_stats BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_lineups_insert AFTER INSERT ON match_lineups BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_lineups_update AFTER UPDATE ON match_lineups
+WHEN OLD.match_id IS NOT NEW.match_id OR OLD.player_id IS NOT NEW.player_id OR OLD.team_id IS NOT NEW.team_id OR OLD.guernsey_number IS NOT NEW.guernsey_number OR OLD.position IS NOT NEW.position OR OLD.is_emergency IS NOT NEW.is_emergency OR OLD.is_substitute IS NOT NEW.is_substitute BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_lineups_delete AFTER DELETE ON match_lineups BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_player_season_pav_insert AFTER INSERT ON player_season_pav BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_player_season_pav_update AFTER UPDATE ON player_season_pav
+WHEN OLD.player_id IS NOT NEW.player_id OR OLD.season_id IS NOT NEW.season_id OR OLD.team_id IS NOT NEW.team_id OR OLD.off_pav IS NOT NEW.off_pav OR OLD.mid_pav IS NOT NEW.mid_pav OR OLD.def_pav IS NOT NEW.def_pav OR OLD.total_pav IS NOT NEW.total_pav BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_player_season_pav_delete AFTER DELETE ON player_season_pav BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_players_insert AFTER INSERT ON players BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_players_update AFTER UPDATE ON players
+WHEN OLD.first_name IS NOT NEW.first_name OR OLD.surname IS NOT NEW.surname OR OLD.external_id IS NOT NEW.external_id OR OLD.external_afl_player_id IS NOT NEW.external_afl_player_id OR OLD.date_of_birth IS NOT NEW.date_of_birth OR OLD.height_cm IS NOT NEW.height_cm OR OLD.weight_kg IS NOT NEW.weight_kg OR OLD.is_retired IS NOT NEW.is_retired BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_players_delete AFTER DELETE ON players BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_venues_insert AFTER INSERT ON venues BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_venues_update AFTER UPDATE ON venues
+WHEN OLD.name IS NOT NEW.name OR OLD.latitude IS NOT NEW.latitude OR OLD.longitude IS NOT NEW.longitude OR OLD.timezone IS NOT NEW.timezone OR OLD.roof IS NOT NEW.roof OR OLD.canonical_venue_id IS NOT NEW.canonical_venue_id BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_venues_delete AFTER DELETE ON venues BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_weather_insert AFTER INSERT ON match_weather BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_weather_update AFTER UPDATE ON match_weather
+WHEN OLD.match_id IS NOT NEW.match_id OR OLD.kind IS NOT NEW.kind OR OLD.temp_c IS NOT NEW.temp_c OR OLD.precip_mm IS NOT NEW.precip_mm OR OLD.precip_24h_prior_mm IS NOT NEW.precip_24h_prior_mm OR OLD.wind_speed_kmh IS NOT NEW.wind_speed_kmh OR OLD.wind_gust_kmh IS NOT NEW.wind_gust_kmh OR OLD.humidity_pct IS NOT NEW.humidity_pct OR OLD.source IS NOT NEW.source OR OLD.fetched_at IS NOT NEW.fetched_at BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER public_input_match_weather_delete AFTER DELETE ON match_weather BEGIN
+  UPDATE public_input_revision SET revision = revision + 1 WHERE id = 1;
+END;
+CREATE TABLE player_provider_ids (
+  provider TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+  PRIMARY KEY(provider, provider_id)
+);
+INSERT INTO player_provider_ids(provider, provider_id, player_id, evidence_json)
+SELECT 'afl-api', external_afl_player_id, id, '{"kind":"existing-provider-key"}'
+FROM players WHERE external_afl_player_id IS NOT NULL;
+CREATE TABLE player_id_redirects (
+  retired_id INTEGER PRIMARY KEY REFERENCES players(id),
+  canonical_id INTEGER NOT NULL REFERENCES players(id),
+  manifest_digest TEXT NOT NULL,
+  CHECK(retired_id > canonical_id)
+);
+CREATE TABLE identity_repair_operations (
+  manifest_digest TEXT PRIMARY KEY,
+  canonical_id INTEGER NOT NULL REFERENCES players(id),
+  manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
+  status TEXT NOT NULL CHECK(status IN ('prepared','reparented','complete')),
+  applied_at TEXT NOT NULL
+);
+CREATE TABLE pav_rebuild_queue (
+  season_id INTEGER PRIMARY KEY REFERENCES seasons(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL
+);
+
+ALTER TABLE public_input_revision ADD COLUMN write_operation TEXT;
+
+CREATE TRIGGER pav_stats_insert AFTER INSERT ON player_match_stats
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id, reason)
+  SELECT s.id, 'statistics' FROM matches m JOIN seasons s ON s.id=m.season_id
+  JOIN competitions c ON c.id=s.competition_id WHERE m.id=NEW.match_id
+  AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;
+
+CREATE TRIGGER pav_stats_update AFTER UPDATE ON player_match_stats
+WHEN OLD.match_id IS NOT NEW.match_id OR OLD.player_id IS NOT NEW.player_id OR OLD.team_id IS NOT NEW.team_id OR OLD.goals IS NOT NEW.goals OR OLD.behinds IS NOT NEW.behinds OR OLD.hitouts IS NOT NEW.hitouts OR OLD.goal_assists IS NOT NEW.goal_assists OR OLD.inside_fifties IS NOT NEW.inside_fifties OR OLD.marks_inside_fifty IS NOT NEW.marks_inside_fifty OR OLD.free_kicks_for IS NOT NEW.free_kicks_for OR OLD.free_kicks_against IS NOT NEW.free_kicks_against OR OLD.rebounds IS NOT NEW.rebounds OR OLD.one_percenters IS NOT NEW.one_percenters OR OLD.marks IS NOT NEW.marks OR OLD.clearances IS NOT NEW.clearances OR OLD.tackles IS NOT NEW.tackles OR OLD.time_on_ground_pct IS NOT NEW.time_on_ground_pct OR OLD.disposals IS NOT NEW.disposals
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id, reason)
+  SELECT s.id, 'statistics' FROM matches m JOIN seasons s ON s.id=m.season_id
+  JOIN competitions c ON c.id=s.competition_id WHERE m.id=OLD.match_id
+  AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+  INSERT INTO pav_rebuild_queue(season_id, reason)
+  SELECT s.id, 'statistics' FROM matches m JOIN seasons s ON s.id=m.season_id
+  JOIN competitions c ON c.id=s.competition_id WHERE m.id=NEW.match_id
+  AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;
+
+CREATE TRIGGER pav_stats_delete AFTER DELETE ON player_match_stats
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id, reason)
+  SELECT s.id, 'statistics' FROM matches m JOIN seasons s ON s.id=m.season_id
+  JOIN competitions c ON c.id=s.competition_id WHERE m.id=OLD.match_id
+  AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;
+
+CREATE TABLE weather_refresh_state (
+  match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('observed','forecast')),
+  source TEXT NOT NULL,
+  attempted_at TEXT NOT NULL,
+  next_retry_at TEXT,
+  failures INTEGER NOT NULL DEFAULT 0,
+  diagnostic TEXT,
+  PRIMARY KEY(match_id,kind,source)
+);
+
+-- Council facility map: https://www.wtc.tas.gov.au/facility/windsor-park/
+-- Published map pin: longitude 147.0908651, latitude -41.402883.
+-- Preserve any existing venue ID and roof value. This is the Riverside TAS ground.
+INSERT INTO venues(name,latitude,longitude,timezone)
+VALUES('Windsor Park',-41.402883,147.0908651,'Australia/Hobart')
+ON CONFLICT(name) DO UPDATE SET latitude=excluded.latitude,longitude=excluded.longitude,timezone=excluded.timezone;
+UPDATE venues SET canonical_venue_id=id WHERE name='Windsor Park';
+UPDATE venues SET canonical_venue_id=(SELECT id FROM venues WHERE name='Windsor Park')
+WHERE name='Windsor Park Oval';
+
+CREATE TRIGGER public_input_matches_context_update AFTER UPDATE OF venue_id,kickoff_at ON matches
+WHEN OLD.venue_id IS NOT NEW.venue_id OR OLD.kickoff_at IS NOT NEW.kickoff_at
+BEGIN
+  UPDATE public_input_revision SET revision=revision+1 WHERE id=1;
+END;
+
+CREATE TRIGGER pav_matches_update AFTER UPDATE OF season_id,home_team_id,away_team_id,home_points,away_points,status ON matches
+WHEN OLD.season_id IS NOT NEW.season_id OR OLD.home_team_id IS NOT NEW.home_team_id
+ OR OLD.away_team_id IS NOT NEW.away_team_id OR OLD.home_points IS NOT NEW.home_points
+ OR OLD.away_points IS NOT NEW.away_points OR OLD.status IS NOT NEW.status
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id,reason)
+  SELECT s.id,'statistics' FROM seasons s JOIN competitions c ON c.id=s.competition_id
+  WHERE s.id IN (OLD.season_id,NEW.season_id)
+    AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;
+
+CREATE TRIGGER pav_matches_delete AFTER DELETE ON matches
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id,reason)
+  SELECT s.id,'statistics' FROM seasons s JOIN competitions c ON c.id=s.competition_id
+  WHERE s.id=OLD.season_id
+    AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;
+
+
+CREATE TRIGGER pav_matches_insert AFTER INSERT ON matches
+WHEN NEW.status='Complete' OR NEW.status IS NULL
+BEGIN
+  INSERT INTO pav_rebuild_queue(season_id,reason)
+  SELECT s.id,'statistics' FROM seasons s JOIN competitions c ON c.id=s.competition_id
+  WHERE s.id=NEW.season_id
+    AND ((c.code='AFLM' AND s.year>=1998) OR (c.code='AFLW' AND s.year>=2017))
+  ON CONFLICT(season_id) DO NOTHING;
+END;

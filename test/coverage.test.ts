@@ -29,13 +29,22 @@ function fakeCache() {
 function observationEnv() {
   const calls: { sql: string; bindings: unknown[] }[] = [];
   const rows = [
-    { id: 77 },
+    { id: 77, year: 2026, season_key: "2026", code: "VFLW" },
     { row_count: 2, n0: 2, n1: 1 },
-    { row_count: 4 },
+    { row_count: 4, known_totals: 3, unknown_totals: 1 },
     { row_count: 5, match_count: 2 },
-    { row_count: 3 },
+    { row_count: 3, eligible_completed: 2, matches_with_statistics: 1 },
+    { provider_matches: 4, observed_at: "2026-10-04T00:00:00Z" },
+    { failures: 1, unresolved: 2, overdue: 1 },
+    { revision: 10, in_progress: 0 },
+    { revision: 10, in_progress: 0 },
   ];
   const DB = {
+    async batch(statements: { first: () => Promise<unknown> }[]) {
+      return Promise.all(
+        statements.map(async (statement) => ({ results: [await statement.first()] })),
+      );
+    },
     prepare(sql: string) {
       const call = { sql, bindings: [] as unknown[] };
       calls.push(call);
@@ -116,7 +125,7 @@ describe("coverage contract", () => {
     const schema = await getSchemaInfo();
     const serialized = JSON.stringify(schema);
     expect(serialized.length).toBeLessThan(40 * 1024);
-    expect(schema.database.coverage_contract.version).toBe(3);
+    expect(schema.database.coverage_contract.version).toBe(4);
     expect(schema.database.coverage_contract.review_date).toBe("2026-10-04");
     expect(schema.database.coverage_contract.how_to_read).toContain("exceptions");
     expect(schema.database).not.toHaveProperty("column_coverage");
@@ -134,7 +143,7 @@ describe("coverage contract", () => {
 
     expect(Object.keys(filtered.database.competitions)).toEqual(["AFLW"]);
     expect(Object.keys(filtered.database.coverage_contract.by_competition)).toEqual(["AFLW"]);
-    expect(filtered.database.coverage_contract.version).toBe(3);
+    expect(filtered.database.coverage_contract.version).toBe(4);
     // The reading key survives the filter path.
     expect(filtered.database.coverage_contract.how_to_read).toContain("exceptions");
     // Tables, notes, and join examples are competition-agnostic and stay.
@@ -208,7 +217,7 @@ describe("coverage contract", () => {
     }
   });
 
-  it("runs separate bounded aggregate statements and caches successful results for 15 minutes", async () => {
+  it("observes bounded inventories and caches one consistent result for 15 minutes", async () => {
     const { env, calls } = observationEnv();
     const { cache, entries } = fakeCache();
     const first = await observeCoverage(env, "VFLW", 2026, cache);
@@ -219,7 +228,7 @@ describe("coverage contract", () => {
       null: 0,
       ratio: 1,
     });
-    expect(first.pav).toEqual({ unit: "table_rows", rows: 4 });
+    expect(first.pav).toEqual({ unit: "table_rows", rows: 4, known_totals: 3, unknown_totals: 1 });
     expect(first.lineups).toEqual({
       unit: "match_presence",
       total_matches: 3,
@@ -227,20 +236,26 @@ describe("coverage contract", () => {
       rows: 5,
       ratio: 0.666667,
     });
-    expect(calls).toHaveLength(5);
-    expect(calls[0]?.bindings).toEqual(["VFLW", 2026]);
-    expect(
-      calls.slice(1).every((call) => call.bindings.length === 1 && call.bindings[0] === 77),
-    ).toBe(true);
-    expect(calls[1]?.sql).toContain("match_id IN (SELECT id FROM matches WHERE season_id = ?)");
-    expect(calls[2]?.sql).toContain("FROM player_season_pav WHERE season_id = ?");
-    expect(calls[3]?.sql).toContain("COUNT(DISTINCT match_id)");
-    expect(calls[4]?.sql).toContain("FROM matches WHERE season_id = ?");
+    expect(first.inventory).toEqual({
+      provider_matches: 4,
+      provider_observed_at: "2026-10-04T00:00:00Z",
+      stored_matches: 3,
+      eligible_completed_matches: 2,
+      matches_with_statistics: 1,
+      participant_rows: 2,
+      refresh_failures: 1,
+      unresolved_refreshes: 2,
+      overdue_refreshes: 1,
+      input_revision: 10,
+    });
+    expect(calls).toHaveLength(9);
+    expect(calls[0]?.bindings).toEqual(["VFLW", "2026"]);
+    expect(calls.slice(1, 7).every((call) => call.bindings[0] === 77)).toBe(true);
     expect(entries.size).toBe(1);
     expect(entries.values().next().value?.headers.get("Cache-Control")).toBe("max-age=900");
 
     await observeCoverage(env, "VFLW", 2026, cache);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(9);
   });
 
   it("does not cache query errors", async () => {

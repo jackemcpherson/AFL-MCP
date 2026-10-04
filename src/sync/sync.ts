@@ -1,13 +1,25 @@
-import type { CompetitionCode, Match } from "fitzroy";
-import { fetchLineup, fetchMatches, fetchPlayerStats } from "fitzroy";
+import type { CompetitionCode, SeasonSelector } from "fitzroy";
+import {
+  fetchLineup,
+  fetchMatches,
+  fetchSeasons,
+  resolveDefaultSeasonForCompetition,
+} from "fitzroy";
 import { refreshActiveCoaches } from "../admin/coaching";
-import { beginPublicInputWrite, finishPublicInputWrite } from "../db/public-inputs";
+import {
+  beginPublicInputWrite,
+  finishPublicInputWrite,
+  protectOperationWrites,
+  resumePublicInputWrite,
+} from "../db/public-inputs";
+import { seasonKey } from "../db/seasons";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
 import { acquireOperationLease, releaseOperationLease } from "./lease";
 import { logSync } from "./log";
-import { type PavCompetition, recalculatePav } from "./pav";
+import { correctVerifiedMatch } from "./source-corrections";
+import { queueRecentStatsRefresh, rebuildQueuedStatsPav, refreshDueStats } from "./stats-refresh";
 import {
   buildMatchAflIdMap,
   ensureCompetition,
@@ -15,15 +27,12 @@ import {
   ensureTeams,
   ensureVenues,
   quarantinePlaceholderMatches,
-  selectCompletedCount,
   selectCompletedRoundsWithoutLineups,
-  selectHasCompletedMatchWithoutStats,
   unionPlayers,
   updateSeasonCompleteness,
   upsertLineups,
   upsertMatches,
   upsertPlayers,
-  upsertStats,
 } from "./upserts";
 
 const FORWARD_DAYS = 3;
@@ -39,12 +48,11 @@ const BACKFILL_LINEUP_BACKLOG_LIMIT = 40;
 /** Fetch the upcoming round's lineups only this close to its first match — rosters publish ~Thursday before the round, so earlier fetches are guaranteed 404s. */
 const LINEUP_LOOKAHEAD_DAYS = 5;
 
-const PAV_COMPETITIONS: ReadonlySet<CompetitionCode> = new Set<CompetitionCode>(["AFLM", "AFLW"]);
-
 /** Per-(competition, year) outcome from a single sync tick. */
 export interface BackfillResult {
   readonly competition: CompetitionCode;
   readonly year: number;
+  readonly seasonKey?: string;
   readonly matches: number;
   readonly stats: number;
   readonly lineups: number;
@@ -53,14 +61,16 @@ export interface BackfillResult {
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {
+  /** Explicitly recover the identical persisted sync scope. */
+  readonly resume?: boolean;
   /** When provided alongside `toYear`, iterates seasons inclusively. */
   readonly fromYear?: number;
+  /** Explicit competition-season selector for a bounded backfill. */
+  readonly season?: SeasonSelector;
   /** Inclusive upper bound for the iteration. */
   readonly toYear?: number;
   /** Skip the cadence gate; for backfills triggered manually. */
   readonly skipShouldRunNow?: boolean;
-  /** Skip PAV recalc after stats writes; for label-only relabels. */
-  readonly skipPav?: boolean;
 }
 
 /**
@@ -92,38 +102,54 @@ export async function sync(
     return [];
   }
 
+  let consistent = false;
   try {
-    await beginPublicInputWrite(env, now);
-    const seasons: number[] =
-      options?.fromYear !== undefined && options.toYear !== undefined
-        ? rangeInclusive(options.fromYear, options.toYear)
-        : [now.getUTCFullYear()];
-
-    const isBackfill = options?.fromYear !== undefined && options.toYear !== undefined;
-    const results: BackfillResult[] = [];
+    const isBackfill =
+      options?.season !== undefined ||
+      (options?.fromYear !== undefined && options.toYear !== undefined);
+    const scopes: { competition: CompetitionCode; season: SeasonSelector }[] = [];
     for (const competition of competitions) {
+      const seasons: readonly SeasonSelector[] =
+        options?.season !== undefined
+          ? [options.season]
+          : options?.fromYear !== undefined && options.toYear !== undefined
+            ? rangeInclusive(options.fromYear, options.toYear)
+            : [await resolveDefaultSeasonForCompetition(competition)];
       for (const season of seasons) {
-        results.push(
-          await syncCompetition(env, competition, season, options?.skipPav ?? false, isBackfill),
-        );
+        seasonKey(competition, season);
+        scopes.push({ competition, season });
       }
+    }
+    const operation = `sync:${JSON.stringify(scopes)}`;
+    if (options?.resume) await resumePublicInputWrite(env, holder, operation);
+    else await beginPublicInputWrite(env, holder, now, operation);
+    const writer = protectOperationWrites(env, holder);
+    const results: BackfillResult[] = [];
+    for (const { competition, season } of scopes)
+      results.push(await syncCompetition(writer, competition, season, isBackfill));
+
+    if (!isBackfill) await queueRecentStatsRefresh(writer, now);
+    if (!isBackfill && now.getUTCMinutes() === 0) {
+      const refresh = await refreshDueStats(writer, now);
+      await logSync(
+        env,
+        "sync:stats-refresh",
+        refresh.changedRows,
+        refresh.failed ? `${refresh.failed} match fetches failed; retries persisted` : undefined,
+      );
     }
 
     // Coach profiles are expensive season-wide reads. Refresh only in the
     // hourly path, with the import module enforcing a 24-hour retry cadence.
     if (!isBackfill && now.getUTCMinutes() === 0 && competitions.includes("AFLM")) {
-      await refreshActiveCoaches(env, now).catch(async () => {
-        await logSync(env, "sync:AFLM:coaches", 0, "coaching refresh failed").catch(
-          () => undefined,
-        );
-      });
+      await refreshActiveCoaches(writer, now);
     }
 
     // Weather rides the same lease as match data but self-gates to
     // top-of-hour passes so the 5-minute cron adds no wasted Open-Meteo
-    // calls (#138). Fail-soft: the stage never throws.
+    // calls (#138). Provider failures retry; database failures retain the marker.
     if (now.getUTCMinutes() === 0) {
-      await runWeatherStage(env, fetch, now);
+      await runWeatherStage(writer, fetch, now);
     }
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
@@ -132,17 +158,16 @@ export async function sync(
       .run()
       .catch(() => undefined);
 
+    // Fixture score/status changes also invalidate PAV on five-minute ticks.
+    await rebuildQueuedStatsPav(writer, undefined, holder);
+    consistent = true;
     return results;
   } finally {
-    await finishPublicInputWrite(env).catch(async () => {
-      await logSync(
-        env,
-        "sync:input-revision",
-        0,
-        "failed to clear active input write marker",
-      ).catch(() => undefined);
-    });
-    await releaseOperationLease(env, holder);
+    try {
+      if (consistent) await finishPublicInputWrite(env, holder);
+    } finally {
+      await releaseOperationLease(env, holder);
+    }
   }
 }
 
@@ -167,41 +192,73 @@ export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
 async function syncCompetition(
   env: Env,
   competition: CompetitionCode,
-  season: number,
-  skipPav: boolean,
+  season: SeasonSelector,
   isBackfill: boolean,
 ): Promise<BackfillResult> {
   try {
+    const discovered = await fetchSeasons(competition);
+    if (!discovered.success) throw discovered.error;
+    const identity = discovered.data.find((entry) => entry.seasonKey === String(season));
+    if (!identity)
+      throw new Error(`No exact ${competition} season ${season}; use season discovery`);
     const matchResult = await fetchMatches({ source: SOURCE, season, competition });
     if (!matchResult.success) {
       const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
       await logSync(env, `sync:${competition}`, 0, error);
-      return { competition, year: season, matches: 0, stats: 0, lineups: 0, error };
+      return {
+        competition,
+        year: Number(String(season).slice(0, 4)),
+        seasonKey: String(season),
+        matches: 0,
+        stats: 0,
+        lineups: 0,
+        error,
+      };
     }
-    const allMatches = matchResult.data;
+    const providerMatches = matchResult.data;
+    const allMatches = providerMatches.map(correctVerifiedMatch);
 
     const competitionId = await ensureCompetition(env, competition);
     const seasonId = await ensureSeason(env, competitionId, season);
-
-    const apiCompletedCount = countCompleted(allMatches);
-    const [dbCompletedCount, hasStatsBacklog, lineupBacklogRounds] = await Promise.all([
-      selectCompletedCount(env, seasonId),
-      selectHasCompletedMatchWithoutStats(env, seasonId),
-      // Cron: look back a few recently-completed rounds so the lineup fetch
-      // self-heals after a missed release window, but give up on rounds
-      // older than the recency bound (a roster that never published upstream
-      // must not be retried every tick forever). Backfill: sweep the season.
-      selectCompletedRoundsWithoutLineups(
-        env,
+    await env.DB.batch([
+      env.DB.prepare("UPDATE seasons SET display_name = ?1 WHERE id = ?2").bind(
+        identity.displayName,
         seasonId,
-        isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
-        isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
       ),
+      env.DB.prepare(
+        "INSERT INTO season_provider_ids(season_id, provider, provider_season_id) VALUES (?1, 'afl-api', ?2) ON CONFLICT(season_id, provider) DO UPDATE SET provider_season_id = excluded.provider_season_id",
+      ).bind(seasonId, String(identity.providerSeasonId)),
     ]);
-    // Fetch stats when the API has more completed matches than we've recorded,
-    // OR when any previously-completed match still lacks stats (self-heals same-day
-    // multi-match completions and recovers from partial write failures).
-    const shouldFetchStats = apiCompletedCount > dbCompletedCount || hasStatsBacklog;
+
+    if (new Set(allMatches.map((match) => match.matchId)).size !== allMatches.length) {
+      throw new Error("Provider season inventory contains duplicate match IDs");
+    }
+    await env.DB.prepare(`INSERT INTO season_provider_inventory(season_id, provider, observed_at, matches_json)
+      VALUES (?1, 'afl-api', ?2, ?3) ON CONFLICT(season_id, provider) DO UPDATE SET
+      observed_at = excluded.observed_at, matches_json = excluded.matches_json`)
+      .bind(
+        seasonId,
+        new Date().toISOString(),
+        JSON.stringify(
+          providerMatches.map((match) => ({
+            matchId: match.matchId,
+            homeTeam: match.homeTeam,
+            awayTeam: match.awayTeam,
+            date: Number.isFinite(match.date.getTime()) ? match.date.toISOString() : null,
+            status: match.status,
+            homePoints: match.homePoints,
+            awayPoints: match.awayPoints,
+          })),
+        ),
+      )
+      .run();
+
+    const lineupBacklogRounds = await selectCompletedRoundsWithoutLineups(
+      env,
+      seasonId,
+      isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
+      isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
+    );
 
     const lineupRounds = new Set<number>(lineupBacklogRounds);
     const locked =
@@ -227,16 +284,20 @@ async function syncCompetition(
         lineupRounds.add(match.roundNumber);
     }
 
-    const [lineupBatches, stats] = await Promise.all([
-      Promise.all(
-        Array.from(lineupRounds).map((r) => fetchLineupsSafe(env, competition, season, r)),
-      ),
-      shouldFetchStats ? fetchPlayerStatsSafe(env, competition, season) : [],
-    ]);
+    const lineupBatches = await Promise.all(
+      Array.from(lineupRounds).map((r) => fetchLineupsSafe(env, competition, season, r)),
+    );
     const lineups = lineupBatches.flat();
 
     if (allMatches.length === 0 && lineups.length === 0) {
-      return { competition, year: season, matches: 0, stats: 0, lineups: 0 };
+      return {
+        competition,
+        year: Number(String(season).slice(0, 4)),
+        seasonKey: String(season),
+        matches: 0,
+        stats: 0,
+        lineups: 0,
+      };
     }
 
     // Unresolved finals fixtures ("1st" vs "4th") must not become team or
@@ -249,7 +310,7 @@ async function syncCompetition(
     );
     const teamMap = await ensureTeams(env, competitionId, competition, syncableMatches);
     const venueMap = await ensureVenues(env, syncableMatches);
-    const playerMap = await upsertPlayers(env, unionPlayers(stats, lineups));
+    const playerMap = await upsertPlayers(env, unionPlayers([], lineups));
 
     const matchesAffected = await upsertMatches(env, syncableMatches, {
       seasonId,
@@ -262,17 +323,18 @@ async function syncCompetition(
     const matchMap = await buildMatchAflIdMap(env, seasonId);
 
     let statsAffected = 0;
-    let lineupsAffected = 0;
-    if (stats.length > 0) {
-      statsAffected = await upsertStats(env, stats, matchMap, playerMap, teamMap);
+    if (isBackfill) {
+      await env.DB.prepare(`INSERT INTO match_stats_refresh(match_id, completed_observed_at, next_retry_at)
+        SELECT id, ?1, ?1 FROM matches WHERE season_id = ?2 AND status = 'Complete' AND external_afl_id IS NOT NULL
+        ON CONFLICT(match_id) DO NOTHING`)
+        .bind(new Date().toISOString(), seasonId)
+        .run();
+      statsAffected = (await refreshDueStats(env, new Date(), undefined, seasonId)).changedRows;
     }
+    let lineupsAffected = 0;
     if (lineups.length > 0) {
       lineupsAffected = await upsertLineups(env, lineups, matchMap, playerMap, teamMap);
     }
-    if (statsAffected > 0 && !skipPav && PAV_COMPETITIONS.has(competition)) {
-      await recalculatePav(env, competition as PavCompetition, season);
-    }
-
     const didWork = statsAffected > 0 || lineupsAffected > 0;
     if (didWork) {
       await logSync(env, `sync:${competition}`, matchesAffected + statsAffected + lineupsAffected);
@@ -280,7 +342,8 @@ async function syncCompetition(
 
     return {
       competition,
-      year: season,
+      year: Number(String(season).slice(0, 4)),
+      seasonKey: String(season),
       matches: matchesAffected,
       stats: statsAffected,
       lineups: lineupsAffected,
@@ -288,14 +351,8 @@ async function syncCompetition(
   } catch (err) {
     const error = describeError(err);
     await logSync(env, `sync:${competition}`, 0, error);
-    return { competition, year: season, matches: 0, stats: 0, lineups: 0, error };
+    throw err;
   }
-}
-
-function countCompleted(matches: readonly Match[]): number {
-  let n = 0;
-  for (const m of matches) if (m.homePoints !== null) n++;
-  return n;
 }
 
 function rangeInclusive(from: number, to: number): number[] {
@@ -309,7 +366,7 @@ function rangeInclusive(from: number, to: number): number[] {
 async function fetchLineupsSafe(
   env: Env,
   competition: CompetitionCode,
-  season: number,
+  season: SeasonSelector,
   round: number,
 ) {
   const result = await fetchLineup({ source: SOURCE, season, round, competition });
@@ -324,30 +381,6 @@ async function fetchLineupsSafe(
     return [];
   }
   return result.data;
-}
-
-async function fetchPlayerStatsSafe(env: Env, competition: CompetitionCode, season: number) {
-  const result = await fetchPlayerStats({ source: SOURCE, season, competition });
-  if (!result.success) {
-    await logSync(
-      env,
-      `sync:${competition}:stats`,
-      0,
-      `fetchPlayerStats failed: ${describeError(result.error)}`,
-    );
-    return [];
-  }
-  // fitzroy v3 returns a partial-result envelope; failed games are worth a
-  // sync_log row but must not block the games that did parse.
-  if (result.data.failedMatchIds.length > 0) {
-    await logSync(
-      env,
-      `sync:${competition}:stats`,
-      0,
-      `partial season stats: ${result.data.failedMatchIds.length} game(s) failed (${result.data.failedMatchIds.join(", ")})`,
-    );
-  }
-  return result.data.stats;
 }
 
 function describeError(err: unknown): string {

@@ -17,7 +17,17 @@ describe("migration baseline paths", () => {
   it("creates a fresh D1 with reference seeds and accepts later migrations", async () => {
     await applyD1Migrations(env.FRESH_DB, env.TEST_MIGRATIONS);
     expect(await env.FRESH_DB.prepare("SELECT COUNT(*) AS n FROM venues").first()).toEqual({
-      n: 106,
+      n: 107,
+    });
+    expect(
+      await env.FRESH_DB.prepare(
+        "SELECT latitude,longitude,timezone,roof FROM venues WHERE name='Windsor Park'",
+      ).first(),
+    ).toEqual({
+      latitude: -41.402883,
+      longitude: 147.0908651,
+      timezone: "Australia/Hobart",
+      roof: null,
     });
     expect(await env.FRESH_DB.prepare("PRAGMA foreign_key_check").all()).toMatchObject({
       results: [],
@@ -34,7 +44,7 @@ describe("migration baseline paths", () => {
       await env.FRESH_DB.prepare(
         "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
       ).first(),
-    ).toEqual({ revision: 0, in_progress: 0 });
+    ).toEqual({ revision: 2, in_progress: 0 });
     await applyD1Migrations(env.FRESH_DB, [nextMigration]);
     expect(await env.FRESH_DB.prepare("SELECT release_test FROM coaches").all()).toMatchObject({
       results: [],
@@ -70,7 +80,7 @@ describe("migration baseline paths", () => {
       await env.UPGRADE_DB.prepare("SELECT id,latitude,longitude FROM venues WHERE id=905").first(),
     ).toEqual({ id: 905, latitude: -37, longitude: 144 });
     expect(await env.UPGRADE_DB.prepare("SELECT COUNT(*) AS n FROM venues").first()).toEqual({
-      n: 107,
+      n: 108,
     });
     expect(await env.UPGRADE_DB.prepare("PRAGMA foreign_key_check").all()).toMatchObject({
       results: [],
@@ -84,7 +94,7 @@ describe("migration baseline paths", () => {
     ).run();
     expect(
       await env.UPGRADE_DB.prepare("SELECT revision FROM public_input_revision WHERE id=1").first(),
-    ).toEqual({ revision: 2 });
+    ).toEqual({ revision: 4 });
   });
 });
 

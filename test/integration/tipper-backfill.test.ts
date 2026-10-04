@@ -137,7 +137,7 @@ describe("historical prediction backfill", () => {
     )
       .bind(first.id)
       .run();
-    expect(await env.DB.prepare(sql).bind("AFLM", 2026).first()).toMatchObject({
+    expect(await env.DB.prepare(sql).bind("AFLM", "2026").first()).toMatchObject({
       completed_matches: 2,
       predictions: 1,
       missing_predictions: 1,
@@ -155,7 +155,7 @@ describe("historical prediction backfill", () => {
     )
       .bind(second.id)
       .run();
-    expect(await env.DB.prepare(sql).bind("AFLM", 2026).first()).toMatchObject({
+    expect(await env.DB.prepare(sql).bind("AFLM", "2026").first()).toMatchObject({
       completed_matches: 2,
       predictions: 2,
       missing_predictions: 0,
@@ -166,7 +166,7 @@ describe("historical prediction backfill", () => {
       margin_mae: 8,
     });
     await env.DB.prepare("UPDATE matches SET status='Live' WHERE id=?").bind(second.id).run();
-    expect(await env.DB.prepare(sql).bind("AFLM", 2026).first()).toMatchObject({
+    expect(await env.DB.prepare(sql).bind("AFLM", "2026").first()).toMatchObject({
       completed_matches: 1,
       predictions: 1,
       draws: 0,

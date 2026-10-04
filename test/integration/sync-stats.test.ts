@@ -253,3 +253,22 @@ describe("upsertStats", () => {
     expect(row).toEqual({ supercoach_score: 105, brownlow_votes: 3 });
   });
 });
+
+it("applies partial tackle corrections and retains known participation fields", async () => {
+  const { matchMap, playerMap, teamMap } = await seedMatchAndPlayers();
+  await upsertStats(
+    env,
+    [makePlayerStats({ disposals: 18, timeOnGroundPercentage: 85, tackles: 2 })],
+    matchMap,
+    playerMap,
+    teamMap,
+  );
+  const correction = makePlayerStats({ disposals: null, timeOnGroundPercentage: null, tackles: 7 });
+  expect(await upsertStats(env, [correction], matchMap, playerMap, teamMap)).toBe(1);
+  expect(
+    await env.DB.prepare(
+      "SELECT disposals,time_on_ground_pct,tackles FROM player_match_stats",
+    ).first(),
+  ).toEqual({ disposals: 18, time_on_ground_pct: 85, tackles: 7 });
+  expect(await upsertStats(env, [correction], matchMap, playerMap, teamMap)).toBe(0);
+});

@@ -38,7 +38,8 @@ design decisions.
 The installed fitzroy declarations and AFL API transform establish:
 
 - `Match.completedQuarter` is `0 | 1 | 2 | 3 | 4 | null`.
-- It is derived from the highest `matchClockPeriods[].periodNumber` whose
+- The parser derives the value from the highest
+  `matchClockPeriods[].periodNumber` whose
   `periodCompleted` is true, capped at four.
 - `0` means no quarter has completed. `4` means full time. `null` means the
   match clock is unavailable.
@@ -46,7 +47,7 @@ The installed fitzroy declarations and AFL API transform establish:
   next-start data. No current AFL-MCP query needs that full event-like shape.
 - `Match.livePeriodStatus` is raw upstream text. Fitzroy documents it as
   unreliable for 2026 break detection because it can stay `LIVE` through breaks.
-  It remains useful as raw source evidence and must not be removed.
+  It remains useful as raw source evidence and must remain.
 
 `MATCH_COLUMNS` currently persists `status` and `live_period_status`, but not
 `completedQuarter` or `matchClockPeriods`. Integration fixtures already model
@@ -156,8 +157,8 @@ Retain `live_period_status` unchanged as opaque raw source data.
 | `Upcoming`             | Normally null because no score wrapper exists. 0 is valid if upstream has created a clock before play       |
 | `Live`                 | 0-3 during regulation play. 4 can appear during the short interval before lifecycle status becomes complete |
 | `Complete`             | 4 when match-clock data exists. null remains valid for historical/non-AFL API rows                          |
-| `Postponed`            | Null unless a started match was postponed, in which case the last non-null completed quarter is retained    |
-| `Cancelled`            | Null unless a started match was cancelled, in which case the last non-null completed quarter is retained    |
+| `Postponed`            | Null unless postponement interrupts a started match. Keep its last non-null completed quarter               |
+| `Cancelled`            | Null unless cancellation interrupts a started match. Keep its last non-null completed quarter               |
 | null historical status | Null. do not synthesise lifecycle or quarter state                                                          |
 
 ### Upsert Lifecycle
@@ -189,7 +190,8 @@ silently switch to `replace` or implement `MAX(existing, excluded)`.
 - Current complete matches should become `4`. live matches become 0-3. upcoming
   matches normally remain null.
 - Historical rows from fryzigg or AFL Tables remain null until an AFL API source
-  supplies a match clock. No full-history synthetic backfill is needed.
+  supplies a match clock. The implementation needs no full-history synthetic
+  backfill.
 - Existing `status` and `live_period_status` rows remain untouched.
 
 ### Migration and Deployment

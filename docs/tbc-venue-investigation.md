@@ -12,7 +12,7 @@ currently resolve to a real venue.
 
 | Cohort                             | Count | Upstream status (afl-api, checked 2026-07-13)                                   | Disposition                                                                                                              |
 | ---------------------------------- | ----- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| VFL 2021, R9 - R16 (Jun - Jul)     | 27    | `Cancelled` - COVID-lockdown cancellations. venue permanently "To Be Confirmed" | Never played. no venue will ever exist. Backfill `status = 'Cancelled'` and exclude from weather-enrichment denominators |
+| VFL 2021, R9 - R16 (Jun - Jul)     | 27    | `Cancelled` - COVID-lockdown cancellations. venue permanently `To Be Confirmed` | Never played. no venue will ever exist. Backfill `status = 'Cancelled'` and exclude from weather-enrichment denominators |
 | VFL 2026 R21 + VFLW 2026 R14 - R16 | 28    | `Upcoming` - fixture block not yet detailed (placeholder Mon 12:00 dates)       | Will self-heal via the existing cron once the AFL announces venues. no action needed                                     |
 
 The sync upsert is not at fault. Its `COALESCE` semantics allow a later non-NULL
@@ -113,7 +113,7 @@ heuristics wherever cancellation matters.
 
 ---
 
-## 2. Would New Venue Rows Be Needed? (Q2)
+## 2. Does the Repair Need New Venue Rows? (Q2)
 
 No new venue rows are necessary because no match resolves to a real venue.
 `venues` contains one placeholder row, id 17748 with `To Be Confirmed`, and
@@ -144,14 +144,15 @@ Venue updates on re-sync work.
 
 The actual causes, per cohort:
 
-1. **2021 (27 matches): upstream is permanently TBC.** The AFL API reports "To
-   Be Confirmed" for COVID-cancelled matches and always will. No amount of
+1. **2021 (27 matches): upstream is permanently TBC.** The captured AFL API
+   reports `To Be Confirmed` for these COVID-cancelled matches. No amount of
    re-syncing fixes the venue, and no alternative fitzroy source carries
-   VFL/VFLW. The rows also have `status = NULL` because the
-   `status`/`live_period_status` columns were added after 2021 last synced, and
-   historical seasons are only re-synced via the manual
-   `POST /mcp/admin/backfill` endpoint (the cron syncs the current calendar year
-   only - `src/sync/sync.ts`). So D1 currently cannot distinguish these
+   VFL/VFLW. The captured rows have `status = NULL`.
+   The `status` and `live_period_status` columns postdate the last 2021 sync.
+   The implementation examined here refreshed historical seasons through `POST
+   /mcp/admin/backfill`.
+   Its cron selected the current calendar year in `src/sync/sync.ts`. So D1
+   currently cannot distinguish these
    cancelled matches from played ones without score heuristics.
 
 2. **2026 (28 matches): not stuck at all.** The venue genuinely is TBC upstream.
@@ -183,7 +184,8 @@ Run one admin backfill for 2021, leave the sync logic unchanged, and verify the
    }
    ```
 
-   The request runs the standard pipeline. The `status` coalesce column then fills
+   The request runs the standard pipeline. The `status` coalesce column then
+   fills
    `NULL  to  'Cancelled'` on the 27 matches (and correct statuses on the rest
    of the season). Consider including VFLW 2021 (all 91 rows also have
    `status = NULL`) in the same run for hygiene. `skipPav: true` because no
@@ -196,11 +198,14 @@ Run one admin backfill for 2021, leave the sync logic unchanged, and verify the
    `venue-geodata.csv` already flags. This removes the 27 permanent rows from
    coverage denominators instead of leaving them as false gaps.
 
-3. Take no action for the 2026 cohort. Once the AFL publishes the VFL R21 / VFLW
-   R14 - R16 details (expected well before the 2026-08-10 block), confirm
-   `SELECT COUNT(*) FROM matches WHERE venue_id = 17748 AND date >= '2026-01-01'`
-   trends to 0, and spot-check that any newly announced venue landed on an
-   existing `venues` row (not a fresh `ensureVenues` insert needing geodata).
+3. Take no action for the 2026 cohort. Once the AFL publishes VFL R21 and VFLW
+   R14 - R16 details, check the placeholder count.
+   The original investigation expected details before the 2026-08-10 block.
+   Confirm this query trends to zero:
+   `SELECT COUNT(*) FROM matches WHERE venue_id = 17748 AND date >=
+   '2026-01-01'`.
+   Check newly announced venues against existing `venues` rows. New
+   `ensureVenues` inserts need geodata.
 
 4. Leave the venue sync logic unchanged. The coalesce upsert already does the
    right thing. The only structural gap this investigation surfaced is that

@@ -13,6 +13,8 @@ interface WorkerLoader {
 
 export interface Env {
   DB: D1Database;
+  /** GitOps rollout gate: pause scheduled writes while compatible readers deploy. */
+  SYNC_PAUSED?: string;
   LOADER: WorkerLoader;
   /** Bearer token for /mcp/admin/* (wrangler secret). Admin routes are disabled when unset. */
   ADMIN_TOKEN?: string;

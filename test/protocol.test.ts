@@ -45,20 +45,30 @@ const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
 function observedSchemaEnv(): import("../src/types").Env {
   const rows = [
-    { id: 77 },
+    { id: 77, year: 2025, season_key: "2025", code: "AFLW" },
     { row_count: 2, n0: 2 },
     { row_count: 4 },
     { row_count: 5, match_count: 2 },
     { row_count: 3 },
+    null,
+    { failures: 0, unresolved: 0, overdue: 0 },
+    { revision: 0, in_progress: 0 },
+    { revision: 0, in_progress: 0 },
   ];
   let callIndex = 0;
   return {
     DB: {
-      prepare: () => ({
-        bind: () => ({
-          first: async () => rows[callIndex++] ?? null,
-        }),
-      }),
+      prepare: () => {
+        const row = rows[callIndex++];
+        return {
+          bind() {
+            return this;
+          },
+          first: async () => row,
+        };
+      },
+      batch: async (statements: { first: () => Promise<unknown> }[]) =>
+        Promise.all(statements.map(async (statement) => ({ results: [await statement.first()] }))),
     } as unknown as D1Database,
   } as import("../src/types").Env;
 }
@@ -194,7 +204,7 @@ describe("handleMcpRequest", () => {
     const schema = JSON.parse(json.result?.content?.[0]?.text ?? "");
     expect(schema.database.tables).toHaveProperty("matches");
     expect(schema.database.tables).toHaveProperty("player_match_stats");
-    expect(schema.database.coverage_contract.version).toBe(3);
+    expect(schema.database.coverage_contract.version).toBe(4);
   });
 
   it("rejects invalid observed schema arguments before querying D1", async () => {
