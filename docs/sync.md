@@ -80,7 +80,7 @@ continues to the next `(competition, year)` pair.
 Match refresh stores `matches.kickoff_at` directly from the source match
 instant as a canonical UTC timestamp. Unknown kickoff times remain `NULL`.
 Never construct a deadline by joining the UTC `date` with Melbourne
-`local_time`. Migration `0021` leaves legacy deadlines unavailable until a
+`local_time`. Migration [0021](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0021_tipper_publication.sql) leaves legacy deadlines unavailable until a
 source fixture refresh supplies them.
 
 For AFLM and AFLW, a lineup replacement requires both complete team selections.

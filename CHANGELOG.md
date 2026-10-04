@@ -5,6 +5,19 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.2] - 2026-10-04
+
+Version 3.8.2 replaces the active migration history with a verified baseline.
+
+### Changed in 3.8.2
+
+- Fresh databases execute `0027_baseline.sql`, including competitions, venue
+  geodata, canonical aliases, integrity views and operational singleton seeds.
+- Adopted databases skip the baseline and retain their existing rows and IDs.
+  Migration 0026 registered this name through the reviewed GitOps pipeline.
+- Historical migration references point to the `migrations-pre-baseline` tag.
+  Immutable test fixtures preserve data-repair and upgrade regression coverage.
+
 ## [3.8.1] - 2026-10-04
 
 Version 3.8.1 prepares existing databases for the verified migration baseline.

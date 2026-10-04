@@ -81,19 +81,30 @@ the failing step. Rerun the same pinned release. A Worker rollback requires a
 reviewed GitOps promotion and compatibility verification against the expanded
 schema. Do not reverse successful migrations or discard committed facts.
 
-## Migration Baseline Follow-Up
+## Migration Baseline Adoption
 
-Complete the initial release before squashing. Verify no pending migrations and
-compare a production schema-only export with local replay. Reserve a quiet
-schema-change window and record a recovery checkpoint.
+The active history now contains `0027_baseline.sql`. It includes the verified
+schema, competitions, venue geodata, canonical aliases and operational seeds.
+Historical incident repairs remain in the
+[`migrations-pre-baseline` tag](https://github.com/jackemcpherson/AFL-MCP/tree/migrations-pre-baseline/src/db/migrations).
 
-Ship a reviewed adoption migration that registers the future baseline name in
-`d1_migrations` through the existing GitOps pipeline. Verify its application,
-then tag the pre-baseline commit. A second release replaces the active history
-with the verified baseline schema and reference seeds. Fresh databases execute
-the baseline. Adopted databases skip it. Keep historical incident repairs in
-Git history, and link their documentation to the pre-baseline tag.
+The preceding release applied migration 0026 through GitOps. Its guard required
+all 25 prerequisites before registering the future baseline in `d1_migrations`.
+Existing databases retain those ledger rows and skip the baseline. Fresh
+databases execute the baseline. Never manually alter a ledger to skip migrations.
 
-Test both paths on real local D1 and require schema parity and valid foreign
-keys before either promotion. Retain the current history if adoption gates fail.
-Never manually edit the production migration ledger to bypass the pipeline.
+Production adoption requires a verified schema-only export, no unexpected
+pending migrations, a quiet schema-change window and a recorded recovery
+checkpoint. Confirm adoption before promoting the squashed release. Stop and
+retain the previous history if any gate fails.
+
+`bun run check:schema` checks schema objects, constraints and reference seeds.
+Real local D1 tests cover fresh creation, adoption rollback, existing data and
+ID preservation, and a later additive migration on both paths.
+
+One-off incident repairs can use reviewed migrations. Recurring operations
+belong on the admin surface. Reference data required for recovery must use
+fresh database seeds. See Cloudflare's
+[Time Travel documentation](https://developers.cloudflare.com/d1/reference/time-travel/)
+for recovery bookmarks. Restoring a bookmark remains an exceptional operator
+action with separate write approval.

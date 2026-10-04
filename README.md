@@ -213,3 +213,12 @@ Historical Bears repair and coaching backfill use authenticated operator
 endpoints. Read the [coaching release operations](docs/coaching-release-operations.md)
 before previewing or authorising historical writes. FootyWire season-wide
 coaching remains unsupported.
+
+## Database Baseline
+
+Fresh databases apply `src/db/migrations/0027_baseline.sql`, including required
+reference seeds. Existing databases skip it after the preceding GitOps adoption
+migration. Keep the existing migration ledger during upgrades.
+
+[Coaching Release Operations](docs/coaching-release-operations.md) records the
+adoption gates, historical migration tag and recovery procedure.
