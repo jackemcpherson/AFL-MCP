@@ -128,14 +128,36 @@ export function protectOperationWrites(env: Env, holder: string): Env {
     ]);
     return results.slice(1);
   };
-  const protect = (statement: D1PreparedStatement): D1PreparedStatement => {
+  // These batches contain only an idempotent fence plus a SELECT. D1 cannot
+  // automatically retry them as reads because the fence is an UPDATE.
+  const read = async (statement: D1PreparedStatement, readOnly: boolean) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return (await batch([statement]))[0];
+      } catch (error) {
+        if (
+          !readOnly ||
+          attempt >= 2 ||
+          !String(error).includes("D1_ERROR: Network connection lost.")
+        )
+          throw error;
+        // Every retry executes the fence again; lease loss fails immediately.
+        await new Promise((resolve) =>
+          setTimeout(resolve, 250 * 2 ** attempt * (1 + Math.random())),
+        );
+      }
+    }
+  };
+  const protect = (statement: D1PreparedStatement, readOnly: boolean): D1PreparedStatement => {
     const wrapped = new Proxy(statement, {
       get(target, property) {
-        if (property === "bind") return (...values: unknown[]) => protect(target.bind(...values));
-        if (property === "run" || property === "all") return async () => (await batch([target]))[0];
+        if (property === "bind")
+          return (...values: unknown[]) => protect(target.bind(...values), readOnly);
+        if (property === "run") return async () => (await batch([target]))[0];
+        if (property === "all") return async () => read(target, readOnly);
         if (property === "first")
           return async (column?: string) => {
-            const row = (await batch([target]))[0]?.results[0] as
+            const row = (await read(target, readOnly))?.results[0] as
               | Record<string, unknown>
               | undefined;
             return column === undefined ? (row ?? null) : (row?.[column] ?? null);
@@ -149,7 +171,8 @@ export function protectOperationWrites(env: Env, holder: string): Env {
   };
   const DB = new Proxy(env.DB, {
     get(target, property) {
-      if (property === "prepare") return (sql: string) => protect(target.prepare(sql));
+      if (property === "prepare")
+        return (sql: string) => protect(target.prepare(sql), /^SELECT\b/i.test(sql.trimStart()));
       if (property === "batch") return batch;
       if (property === "exec" || property === "withSession")
         throw new Error("Use prepared batches inside a protected write operation");
