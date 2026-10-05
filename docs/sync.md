@@ -364,3 +364,11 @@ from first observed completion, including day 30 and failure retries.
 Historical checkpoints default to operator work and remain available to
 exact-season and approved requests. They cannot consume the hourly refresh
 budget or trigger a historical import when scheduled writes resume.
+
+## Fenced Read Retries
+
+Protected SELECT reads retry twice after a D1 connection loss. Their batches
+contain an idempotent ownership fence and the read query. Every retry validates
+the lease again, with bounded delays and jitter. Mutation calls and shared
+batches do not retry. Exhausted reads and lost leases retain the public marker
+for explicit operator recovery.

@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.9] - 2026-10-05
+
+This patch retries safe fenced reads after transient connection loss.
+
+### Fixed
+
+- Retry fenced SELECT reads twice after transient D1 connection loss, with
+  bounded delays and jitter. Every attempt rechecks operation ownership.
+- Keep mutation calls and shared batches to one attempt. Exhausted reads and lost
+  leases retain the public write marker for explicit operator recovery.
+
 ## [4.0.8] - 2026-10-04
 
 Preserve distinct weather samples when local clocks repeat.

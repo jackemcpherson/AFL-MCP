@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -98,4 +98,79 @@ it("fences bound statements and batches after a successor resumes", async () => 
     await env.DB.prepare("SELECT write_holder FROM public_input_revision").first("write_holder"),
   ).toBe("successor");
   await finishPublicInputWrite(env, "successor");
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+async function retryWriter() {
+  await acquireOperationLease(env, "read-retry");
+  await beginPublicInputWrite(env, "read-retry", new Date(), "test:read-retry");
+  return protectOperationWrites(env, "read-retry");
+}
+
+it("retries a bound SELECT after a lost response to a committed fence", async () => {
+  const writer = await retryWriter();
+  const original = env.DB.batch.bind(env.DB);
+  const batch = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (statements) => {
+    await original(statements);
+    throw new Error("D1_ERROR: Network connection lost.");
+  });
+  expect(await writer.DB.prepare("SELECT ?1 AS answer").bind(42).first("answer")).toBe(42);
+  expect(batch).toHaveBeenCalledTimes(2);
+  expect(
+    await env.DB.prepare("SELECT write_holder FROM public_input_revision").first("write_holder"),
+  ).toBe("read-retry");
+});
+
+it("bounds exhausted read retries and retains the recovery marker", async () => {
+  const writer = await retryWriter();
+  const batch = vi
+    .spyOn(env.DB, "batch")
+    .mockRejectedValue(new Error("D1_ERROR: Network connection lost."));
+  await expect(writer.DB.prepare("SELECT 1 AS answer").all()).rejects.toThrow(
+    "Network connection lost",
+  );
+  expect(batch).toHaveBeenCalledTimes(3);
+  expect(
+    await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+  ).toBe(1);
+});
+
+it("rechecks ownership after a transient read failure", async () => {
+  const writer = await retryWriter();
+  const batch = vi.spyOn(env.DB, "batch").mockImplementationOnce(async () => {
+    await env.DB.prepare("UPDATE sync_lease SET acquired_at=datetime('now','-11 minutes')").run();
+    throw new Error("D1_ERROR: Network connection lost.");
+  });
+  await expect(writer.DB.prepare("SELECT 1 AS answer").first()).rejects.toThrow(
+    "CHECK constraint failed",
+  );
+  expect(batch).toHaveBeenCalledTimes(2);
+  expect(
+    await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+  ).toBe(1);
+});
+
+it("does not retry non-network failures or mutation-returning reads", async () => {
+  const writer = await retryWriter();
+  const batch = vi
+    .spyOn(env.DB, "batch")
+    .mockRejectedValueOnce(new Error("D1_ERROR: syntax error"));
+  await expect(writer.DB.prepare("SELECT 1").all()).rejects.toThrow("syntax error");
+  expect(batch).toHaveBeenCalledTimes(1);
+  batch.mockRejectedValue(new Error("D1_ERROR: Network connection lost."));
+  await expect(
+    writer.DB.prepare("INSERT INTO players(surname) VALUES('Do not replay') RETURNING id").first(),
+  ).rejects.toThrow("Network connection lost");
+  await expect(
+    writer.DB.prepare("INSERT INTO players(surname) VALUES('Do not replay') RETURNING id").all(),
+  ).rejects.toThrow("Network connection lost");
+  await expect(
+    writer.DB.prepare("INSERT INTO players(surname) VALUES('Do not replay')").run(),
+  ).rejects.toThrow("Network connection lost");
+  await expect(writer.DB.batch([writer.DB.prepare("SELECT 1")])).rejects.toThrow(
+    "Network connection lost",
+  );
+  expect(batch).toHaveBeenCalledTimes(5);
+  expect(await env.DB.prepare("SELECT count(*) AS n FROM players").first("n")).toBe(0);
 });
