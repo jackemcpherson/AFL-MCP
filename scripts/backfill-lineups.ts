@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Lineup } from "fitzroy";
 import { fetchLineup } from "fitzroy";
+import { runFitzroy } from "../src/lib/fitzroy";
 
 const SQL_DIR = join(__dirname, "..", "data", "sql-lineups");
 mkdirSync(SQL_DIR, { recursive: true });
@@ -131,12 +132,14 @@ async function main() {
     process.stdout.write(`  ${year}: ${seasonRounds.length} rounds `);
 
     for (const { round_number } of seasonRounds) {
-      const result = await fetchLineup({
-        source: "afl-api",
-        season: year,
-        round: round_number,
-        competition: COMPETITION,
-      });
+      const result = await runFitzroy(
+        fetchLineup({
+          source: "afl-api",
+          season: year,
+          round: round_number,
+          competition: COMPETITION,
+        }),
+      );
 
       if (!result.success) {
         process.stdout.write("x");

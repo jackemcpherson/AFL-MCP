@@ -6,6 +6,7 @@ import {
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { runFitzroy } from "../lib/fitzroy";
 import { normaliseTeam } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
@@ -225,11 +226,13 @@ export async function backfillBrownlow(
   try {
     const resolved: ResolvedSeason[] = [];
     for (let year = fromYear; year <= toYear; year++) {
-      const result = await fetchPlayerStats({
-        source: "afl-tables",
-        season: year,
-        competition: "AFLM",
-      });
+      const result = await runFitzroy(
+        fetchPlayerStats({
+          source: "afl-tables",
+          season: year,
+          competition: "AFLM",
+        }),
+      );
       if (!result.success) {
         await logSync(env, "admin:brownlow-backfill", 0, "failed:upstream");
         throw new Error("Brownlow upstream fetch failed");

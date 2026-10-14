@@ -66,6 +66,10 @@ Cloudflare D1
 DbProxy <- sandbox isolate <- code tool <- MCP client
 ```
 
+Sync and admin code calls fitzroy through `src/lib/fitzroy.ts`. That module runs
+fitzroy's Effects on one runtime per isolate, which keeps the AFL API token
+cached across requests. It returns each call as a success or failure value.
+
 Sync and authenticated admin operations can write. MCP client code receives only
 read access through `DbProxy`.
 

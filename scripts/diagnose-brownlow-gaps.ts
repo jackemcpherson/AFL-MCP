@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
-import type { PlayerStats } from "fitzroy";
 import { fetchPlayerStats } from "fitzroy";
+import { runFitzroy } from "../src/lib/fitzroy";
 import { normaliseTeam } from "../src/lib/normalise";
 
 const COMPETITION = "AFLM" as const;
@@ -80,17 +80,19 @@ async function main() {
       teamRosterByMatch.set(k, list);
     }
 
-    const stats = await fetchPlayerStats({
-      source: "afl-tables",
-      season: year,
-      competition: COMPETITION,
-    });
+    const stats = await runFitzroy(
+      fetchPlayerStats({
+        source: "afl-tables",
+        season: year,
+        competition: COMPETITION,
+      }),
+    );
     if (!stats.success) {
       console.log(`  fitzroy fetch failed: ${stats.error.message}`);
       continue;
     }
 
-    for (const s of stats.data as readonly PlayerStats[]) {
+    for (const s of stats.data.stats) {
       if (s.brownlowVotes === null || s.brownlowVotes === 0) continue;
       const date = extractStatsDate(s.matchId);
       if (!date) continue;

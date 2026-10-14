@@ -7,6 +7,7 @@ import {
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { runFitzroy } from "../lib/fitzroy";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
@@ -515,12 +516,14 @@ async function runCoachBatch(
   )
     .bind(source, season)
     .first<{ cursor: string | null; assignments_json: string }>();
-  const fetched = await fetchMatchCoaches({
-    season,
-    competition: "AFLM",
-    source,
-    batch: { limit: 5, ...(progress?.cursor && { cursor: progress.cursor }) },
-  });
+  const fetched = await runFitzroy(
+    fetchMatchCoaches({
+      season,
+      competition: "AFLM",
+      source,
+      batch: { limit: 5, ...(progress?.cursor && { cursor: progress.cursor }) },
+    }),
+  );
   if (!fetched.success) {
     if (!dryRun) await recordSourceFailure(env, season, source, now);
     throw new CoachingSourceError("coaching source fetch failed");

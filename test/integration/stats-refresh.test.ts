@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
-import type { fetchPlayerStats, PlayerStats } from "fitzroy";
+import { Effect } from "effect";
+import { type fetchPlayerStats, type PlayerStats, ScrapeError } from "fitzroy";
 import { expect, it } from "vitest";
 import { queueRecentStatsRefresh, refreshDueStats } from "../../src/sync/stats-refresh";
 import {
@@ -32,9 +33,8 @@ it("enriches all 46 existing participants without another completed match and re
   const now = new Date("2026-09-02T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
   let pressure: number | null = null;
-  const fetchStats: typeof fetchPlayerStats = async (query) => ({
-    success: true,
-    data: {
+  const fetchStats: typeof fetchPlayerStats = (query) =>
+    Effect.succeed({
       stats: Array.from({ length: 46 }, (_, i) =>
         makePlayerStats({
           matchId: query.matchId ?? "missing",
@@ -46,8 +46,7 @@ it("enriches all 46 existing participants without another completed match and re
         }),
       ),
       failedMatchIds: [],
-    },
-  });
+    });
   expect((await refreshDueStats(env, now, fetchStats)).changedRows).toBe(46);
   pressure = 12;
   expect(
@@ -72,16 +71,13 @@ it("bounds a pass to 20 matches and isolates provider failures with persisted re
   await seed(22);
   const now = new Date("2026-09-23T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
-  const fetchStats: typeof fetchPlayerStats = async (query) =>
+  const fetchStats: typeof fetchPlayerStats = (query) =>
     query.matchId === "M-0"
-      ? { success: false, error: new Error("captured provider failure") }
-      : {
-          success: true,
-          data: {
-            stats: [makePlayerStats({ matchId: query.matchId ?? "missing", disposals: 10 })],
-            failedMatchIds: [],
-          },
-        };
+      ? Effect.fail(new ScrapeError({ message: "captured provider failure", source: "afl-api" }))
+      : Effect.succeed({
+          stats: [makePlayerStats({ matchId: query.matchId ?? "missing", disposals: 10 })],
+          failedMatchIds: [],
+        });
   const first = await refreshDueStats(env, now, fetchStats);
   expect(first).toMatchObject({ attempted: 20, succeeded: 19, failed: 1 });
   const retry = await env.DB.prepare(
@@ -95,13 +91,11 @@ it("queues PAV only for input changes and preserves rebuild work after failure",
   await seed();
   const now = new Date("2026-09-02T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
-  const fetchStats: typeof fetchPlayerStats = async (query) => ({
-    success: true,
-    data: {
+  const fetchStats: typeof fetchPlayerStats = (query) =>
+    Effect.succeed({
       stats: [makePlayerStats({ matchId: query.matchId ?? "missing", kicks: 8, disposals: 8 })],
       failedMatchIds: [],
-    },
-  });
+    });
   await refreshDueStats(env, now, fetchStats);
   await env.DB.prepare("UPDATE player_match_stats SET pressure_acts=20").run();
   expect(await env.DB.prepare("SELECT count(*) AS n FROM pav_rebuild_queue").first("n")).toBe(0);
@@ -147,15 +141,13 @@ it("recovers the captured 2026 Grand Final's 46 enriched appearances", async () 
   const now = new Date("2026-09-27T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
   let enriched = false;
-  const fetchStats: typeof fetchPlayerStats = async () => ({
-    success: true,
-    data: {
+  const fetchStats: typeof fetchPlayerStats = () =>
+    Effect.succeed({
       stats: (grandFinal as PlayerStats[]).map((row) =>
         enriched ? row : { ...row, pressureActs: null, spoils: null, ratingPoints: null },
       ),
       failedMatchIds: [],
-    },
-  });
+    });
   expect((await refreshDueStats(env, now, fetchStats)).changedRows).toBe(46);
   enriched = true;
   expect(
@@ -203,9 +195,8 @@ it.each(["time_on_ground_pct", "disposals"])(
   async (field) => {
     await seed();
     await env.DB.prepare("DELETE FROM pav_rebuild_queue").run();
-    const fetchStats: typeof fetchPlayerStats = async (query) => ({
-      success: true,
-      data: {
+    const fetchStats: typeof fetchPlayerStats = (query) =>
+      Effect.succeed({
         stats: [
           makePlayerStats({
             matchId: query.matchId ?? "missing",
@@ -214,8 +205,7 @@ it.each(["time_on_ground_pct", "disposals"])(
           }),
         ],
         failedMatchIds: [],
-      },
-    });
+      });
     const now = new Date("2026-09-02T00:00:00Z");
     await queueRecentStatsRefresh(env, now);
     await refreshDueStats(env, now, fetchStats);
@@ -231,22 +221,19 @@ it("keeps historical queued work outside cron while allowing an exact-season ope
   await env.DB.prepare("UPDATE match_stats_refresh SET origin='operator'").run();
   await env.DB.prepare("UPDATE matches SET date='2015-09-01' WHERE external_afl_id='M-0'").run();
   let calls = 0;
-  const fetchStats: typeof fetchPlayerStats = async (query) => {
+  const fetchStats: typeof fetchPlayerStats = (query) => {
     calls++;
-    return {
-      success: true,
-      data: {
-        stats: [
-          makePlayerStats({
-            matchId: query.matchId ?? "missing",
-            playerId: "historical-person",
-            disposals: 10,
-            timeOnGroundPercentage: 75,
-          }),
-        ],
-        failedMatchIds: [],
-      },
-    };
+    return Effect.succeed({
+      stats: [
+        makePlayerStats({
+          matchId: query.matchId ?? "missing",
+          playerId: "historical-person",
+          disposals: 10,
+          timeOnGroundPercentage: 75,
+        }),
+      ],
+      failedMatchIds: [],
+    });
   };
   expect((await refreshDueStats(env, now, fetchStats)).attempted).toBe(0);
   expect(calls).toBe(0);
@@ -267,9 +254,8 @@ it("retains a scheduled day-30 refresh after delayed completion observation", as
   await env.DB.prepare("UPDATE match_stats_refresh SET next_retry_at=?1")
     .bind(due.toISOString())
     .run();
-  const fetchStats: typeof fetchPlayerStats = async (query) => ({
-    success: true,
-    data: {
+  const fetchStats: typeof fetchPlayerStats = (query) =>
+    Effect.succeed({
       stats: [
         makePlayerStats({
           matchId: query.matchId ?? "missing",
@@ -279,8 +265,7 @@ it("retains a scheduled day-30 refresh after delayed completion observation", as
         }),
       ],
       failedMatchIds: [],
-    },
-  });
+    });
   expect((await refreshDueStats(env, due, fetchStats)).succeeded).toBe(1);
   expect(
     await env.DB.prepare("SELECT next_retry_at FROM match_stats_refresh").first("next_retry_at"),

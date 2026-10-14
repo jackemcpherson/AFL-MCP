@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fetchLineup } from "fitzroy";
+import { runFitzroy } from "../src/lib/fitzroy";
 import { normaliseTeam } from "../src/lib/normalise";
 
 const SQL_DIR = join(__dirname, "..", "data", "sql-lineups");
@@ -101,12 +102,14 @@ async function runSeason(year: number, maxRound: number, dryRun: boolean): Promi
 
   for (let round = 1; round <= maxRound; round++) {
     process.stdout.write(`  R${round}: `);
-    const r = await fetchLineup({
-      source: "afl-api",
-      season: year,
-      round,
-      competition: COMPETITION,
-    });
+    const r = await runFitzroy(
+      fetchLineup({
+        source: "afl-api",
+        season: year,
+        round,
+        competition: COMPETITION,
+      }),
+    );
     if (!r.success) {
       console.log(`FAILED (${r.error.message})`);
       stats.rounds_failed++;

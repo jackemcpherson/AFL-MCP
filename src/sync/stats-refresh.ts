@@ -4,6 +4,7 @@ import {
   type PlayerStats,
   type SeasonSelector,
 } from "fitzroy";
+import { runFitzroy } from "../lib/fitzroy";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import type { Env } from "../types";
 import { calculatePav } from "./pav";
@@ -124,12 +125,14 @@ export async function refreshDueStats(
       .run();
     let stats: readonly PlayerStats[];
     try {
-      const result = await fetchStats({
-        source: "afl-api",
-        competition: match.code,
-        season: match.season_key as SeasonSelector,
-        matchId: match.external_afl_id,
-      });
+      const result = await runFitzroy(
+        fetchStats({
+          source: "afl-api",
+          competition: match.code,
+          season: match.season_key as SeasonSelector,
+          matchId: match.external_afl_id,
+        }),
+      );
       if (!result.success) throw result.error;
       if (result.data.failedMatchIds.length)
         throw new Error("Provider reported failed match statistics");
