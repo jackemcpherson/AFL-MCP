@@ -1,0 +1,14 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32602,
+      "message": "Missing tool name"
+    }
+  }
+}

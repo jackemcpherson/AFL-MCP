@@ -1,0 +1,20 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {
+        "tools": {}
+      },
+      "serverInfo": {
+        "name": "afl-mcp",
+        "version": "<package.json version>"
+      }
+    }
+  }
+}

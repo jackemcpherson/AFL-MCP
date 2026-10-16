@@ -447,5 +447,5 @@ function validateYearRange(body: BackfillRequest): string | null {
   return null;
 }
 
-export { DbProxy } from "./sandbox/executor";
+export { DbProxy } from "./sandbox/db-proxy";
 export type { Env };

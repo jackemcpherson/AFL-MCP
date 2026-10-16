@@ -1,0 +1,338 @@
+/**
+ * Golden tests pinning the public MCP contract (#214).
+ *
+ * Every response a Claude client can observe from `/mcp` is serialised to a
+ * golden file under `test/fixtures/golden/mcp/`. A diff in one of those files
+ * is a deliberate contract change. Collaborators are injected through the
+ * `deps` argument of `handleMcpRequest`, so this file uses no module mocks.
+ * Only the sandbox executor is faked: the schema goldens run the real
+ * `getSchemaInfo`, because faking it would pin nothing.
+ */
+import { describe, expect, it } from "vitest";
+import pkg from "../package.json";
+import { defaultDeps, handleMcpRequest, type McpDeps } from "../src/mcp/protocol";
+import type { ExecuteResult } from "../src/sandbox/executor";
+import { assertReadOnlySql } from "../src/sandbox/sql-guard";
+import type { Env } from "../src/types";
+
+const GOLDEN_DIR = "fixtures/golden/mcp";
+
+/** Placeholder for `serverInfo.version`, which changes every release. */
+const VERSION_PLACEHOLDER = "<package.json version>";
+
+const stubEnv = {} as unknown as Env;
+const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+
+/** Headers a client can act on. The rest of the header bag is not contract. */
+const PINNED_HEADERS = [
+  "content-type",
+  "retry-after",
+  "allow",
+  "access-control-allow-origin",
+] as const;
+
+interface GoldenResponse {
+  readonly status: number;
+  readonly headers: Record<string, string>;
+  readonly body: unknown;
+}
+
+function rpc(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("https://afl.test/mcp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
+
+function toolCall(name: string, args?: Record<string, unknown>): Request {
+  return rpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: args === undefined ? { name } : { name, arguments: args },
+  });
+}
+
+function withExecutor(result: ExecuteResult): McpDeps {
+  return { ...defaultDeps, executeCode: async () => result };
+}
+
+async function capture(res: Response): Promise<GoldenResponse> {
+  const headers: Record<string, string> = {};
+  for (const name of PINNED_HEADERS) {
+    const value = res.headers.get(name);
+    if (value !== null) headers[name] = value;
+  }
+  const text = await res.text();
+  return { status: res.status, headers, body: text === "" ? null : (JSON.parse(text) as unknown) };
+}
+
+async function expectGolden(name: string, value: unknown): Promise<void> {
+  await expect(`${JSON.stringify(value, null, 2)}\n`).toMatchFileSnapshot(
+    `${GOLDEN_DIR}/${name}.json`,
+  );
+}
+
+async function serve(
+  request: Request,
+  options: { env?: Env; deps?: McpDeps } = {},
+): Promise<GoldenResponse> {
+  return capture(await handleMcpRequest(request, options.env ?? stubEnv, stubCtx, options.deps));
+}
+
+describe("MCP contract: lifecycle", () => {
+  it("initialize returns the pinned server capabilities and protocol version", async () => {
+    const golden = await serve(rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    const body = golden.body as { result: { serverInfo: { version: string } } };
+    expect(body.result.serverInfo.version).toBe(pkg.version);
+    body.result.serverInfo.version = VERSION_PLACEHOLDER;
+    await expectGolden("initialize", golden);
+  });
+
+  it("tools/list returns the pinned tool definitions", async () => {
+    await expectGolden(
+      "tools-list",
+      await serve(rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })),
+    );
+  });
+
+  it("ping returns an empty result", async () => {
+    await expectGolden("ping", await serve(rpc({ jsonrpc: "2.0", id: 3, method: "ping" })));
+  });
+});
+
+describe("MCP contract: schema tool", () => {
+  it("returns the full schema when called with no arguments", async () => {
+    await expectGolden("schema-full", await serve(toolCall("schema")));
+  });
+
+  it("returns the competition-filtered schema for competition alone", async () => {
+    await expectGolden(
+      "schema-competition-aflw",
+      await serve(toolCall("schema", { competition: "AFLW" })),
+    );
+  });
+
+  const argumentErrors: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ["unknown-key", { table: "matches" }],
+    ["bad-competition", { competition: "NRL" }],
+    ["bad-include-observed-type", { includeObserved: "yes" }],
+    ["season-without-include-observed", { competition: "AFLM", season: 2025 }],
+    ["include-observed-without-season", { competition: "AFLM", includeObserved: true }],
+    ["include-observed-without-competition", { season: 2025, includeObserved: true }],
+    ["aflw-2022-ambiguous", { competition: "AFLW", season: 2022, includeObserved: true }],
+    [
+      "split-season-outside-aflw",
+      { competition: "AFLM", season: "2022-S6", includeObserved: true },
+    ],
+    ["season-before-coverage", { competition: "AFLM", season: 1900, includeObserved: true }],
+  ];
+
+  it.each(argumentErrors)("returns pinned error text for %s", async (name, args) => {
+    await expectGolden(`schema-error-${name}`, await serve(toolCall("schema", args)));
+  });
+});
+
+describe("MCP contract: code tool", () => {
+  it("pretty-prints a structured result", async () => {
+    const deps = withExecutor({
+      result: { results: [{ team: "Carlton", wins: 12 }], success: true },
+      execution_time_ms: 5,
+    });
+    await expectGolden(
+      "code-object-result",
+      await serve(toolCall("code", { code: "return 1" }), { deps }),
+    );
+  });
+
+  it("passes a string result through as raw text", async () => {
+    const deps = withExecutor({ result: "plain text result", execution_time_ms: 5 });
+    await expectGolden(
+      "code-string-result",
+      await serve(toolCall("code", { code: "return 'x'" }), { deps }),
+    );
+  });
+
+  it("reports executor errors with the execution time", async () => {
+    const deps = withExecutor({
+      result: null,
+      error: "Execution timed out after 30s",
+      execution_time_ms: 30_000,
+    });
+    await expectGolden(
+      "code-execution-error",
+      await serve(toolCall("code", { code: "while(true){}" }), { deps }),
+    );
+  });
+
+  it("surfaces the read-only SQL guard message as an execution error", async () => {
+    let guardMessage = "";
+    try {
+      assertReadOnlySql("DELETE FROM matches");
+    } catch (err) {
+      guardMessage = err instanceof Error ? err.message : String(err);
+    }
+    const deps = withExecutor({ result: null, error: guardMessage, execution_time_ms: 2 });
+    await expectGolden(
+      "code-sql-guard-error",
+      await serve(toolCall("code", { code: "return db.prepare('DELETE FROM matches').all()" }), {
+        deps,
+      }),
+    );
+  });
+
+  it("rejects an empty code argument", async () => {
+    await expectGolden("code-empty", await serve(toolCall("code", { code: "  " })));
+  });
+
+  it("rejects a missing code argument", async () => {
+    await expectGolden("code-missing", await serve(toolCall("code", {})));
+  });
+
+  it("ignores an unrecognised competition hint", async () => {
+    const deps = withExecutor({ result: 1, execution_time_ms: 1 });
+    await expectGolden(
+      "code-invalid-competition",
+      await serve(toolCall("code", { code: "return 1", competition: "NRL" }), { deps }),
+    );
+  });
+
+  it("reports the operator kill switch", async () => {
+    const env = { CODE_TOOL_DISABLED: "true" } as unknown as Env;
+    await expectGolden(
+      "code-disabled",
+      await serve(toolCall("code", { code: "return 1" }), { env }),
+    );
+  });
+});
+
+describe("MCP contract: read-only SQL guard", () => {
+  const statements: ReadonlyArray<readonly [string, string]> = [
+    ["leading-keyword", "DELETE FROM matches"],
+    ["forbidden-keyword-behind-cte", "WITH x AS (SELECT 1) DELETE FROM matches"],
+    ["pragma", "SELECT 1; PRAGMA table_info(matches)"],
+  ];
+
+  it("pins each ReadOnlySqlError message", async () => {
+    const messages: Record<string, string> = {};
+    for (const [name, sql] of statements) {
+      try {
+        assertReadOnlySql(sql);
+        messages[name] = "<accepted>";
+      } catch (err) {
+        messages[name] = `${err instanceof Error ? err.name : "unknown"}: ${String(
+          err instanceof Error ? err.message : err,
+        )}`;
+      }
+    }
+    await expectGolden("sql-guard-errors", messages);
+  });
+});
+
+describe("MCP contract: transport", () => {
+  it("answers OPTIONS with 204 and no body", async () => {
+    await expectGolden(
+      "transport-options-204",
+      await serve(new Request("https://afl.test/mcp", { method: "OPTIONS" })),
+    );
+  });
+
+  it("rejects GET with 405", async () => {
+    await expectGolden(
+      "transport-get-405",
+      await serve(new Request("https://afl.test/mcp", { method: "GET" })),
+    );
+  });
+
+  it("rejects rate-limited callers with 429 and Retry-After", async () => {
+    const env = {
+      MCP_RATE_LIMIT: { limit: async () => ({ success: false }) },
+    } as unknown as Env;
+    await expectGolden(
+      "transport-rate-limited-429",
+      await serve(rpc({ jsonrpc: "2.0", id: 1, method: "ping" }), { env }),
+    );
+  });
+
+  it("rejects a non-JSON media type with 415", async () => {
+    await expectGolden(
+      "transport-media-type-415",
+      await serve(rpc({ jsonrpc: "2.0", id: 1, method: "ping" }, { "Content-Type": "text/plain" })),
+    );
+  });
+
+  it("rejects a media type that only mentions application/json with 415", async () => {
+    await expectGolden(
+      "transport-media-type-parameter-415",
+      await serve(
+        rpc(
+          { jsonrpc: "2.0", id: 1, method: "ping" },
+          { "Content-Type": "text/plain;x=application/json" },
+        ),
+      ),
+    );
+  });
+
+  it("accepts application/json with a charset parameter", async () => {
+    await expectGolden(
+      "transport-media-type-charset-200",
+      await serve(
+        rpc(
+          { jsonrpc: "2.0", id: 1, method: "ping" },
+          { "Content-Type": "application/json; charset=utf-8" },
+        ),
+      ),
+    );
+  });
+
+  it("rejects malformed JSON with 400", async () => {
+    await expectGolden("transport-parse-error-400", await serve(rpc("{not json")));
+  });
+
+  it("rejects an invalid JSON-RPC envelope with 400, echoing its id", async () => {
+    await expectGolden(
+      "transport-invalid-envelope-400",
+      await serve(rpc({ jsonrpc: "1.0", id: 7, method: "ping" })),
+    );
+  });
+
+  it("rejects an invalid JSON-RPC envelope without an id with 400", async () => {
+    await expectGolden("transport-invalid-envelope-no-id-400", await serve(rpc([1, 2, 3])));
+  });
+
+  it("acknowledges notifications with 202 and no body", async () => {
+    await expectGolden(
+      "transport-notification-202",
+      await serve(rpc({ jsonrpc: "2.0", method: "notifications/initialized" })),
+    );
+  });
+
+  it("answers unknown methods with -32601", async () => {
+    await expectGolden(
+      "transport-method-not-found",
+      await serve(rpc({ jsonrpc: "2.0", id: 4, method: "resources/list" })),
+    );
+  });
+
+  it("answers tools/call without a name with -32602", async () => {
+    await expectGolden(
+      "transport-missing-tool-name",
+      await serve(rpc({ jsonrpc: "2.0", id: 5, method: "tools/call", params: {} })),
+    );
+  });
+
+  it("answers an unknown tool with an isError result", async () => {
+    await expectGolden("transport-unknown-tool", await serve(toolCall("tools")));
+  });
+
+  it("answers -32603 at HTTP 200 when an injected dependency throws", async () => {
+    const deps: McpDeps = {
+      ...defaultDeps,
+      getSchemaInfo: async () => {
+        throw new Error("boom");
+      },
+    };
+    await expectGolden("transport-internal-error", await serve(toolCall("schema"), { deps }));
+  });
+});

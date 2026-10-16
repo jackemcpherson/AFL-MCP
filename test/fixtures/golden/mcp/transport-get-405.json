@@ -1,0 +1,14 @@
+{
+  "status": 405,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "error": {
+      "code": -32600,
+      "message": "Only POST requests are accepted"
+    }
+  }
+}

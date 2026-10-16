@@ -1,0 +1,14 @@
+{
+  "status": 400,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "error": {
+      "code": -32600,
+      "message": "Invalid JSON-RPC 2.0 request"
+    }
+  }
+}

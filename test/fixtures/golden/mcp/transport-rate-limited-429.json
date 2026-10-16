@@ -1,0 +1,15 @@
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "60"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "error": {
+      "code": -32000,
+      "message": "Rate limit exceeded — retry later"
+    }
+  }
+}

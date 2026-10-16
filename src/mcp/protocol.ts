@@ -1,9 +1,31 @@
 import pkg from "../../package.json";
-import { executeCode } from "../sandbox/executor";
+import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
-import { type JsonRpcRequest, JsonRpcRequestSchema, SchemaToolRequestSchema } from "./validation";
+import {
+  type JsonRpcRequest,
+  JsonRpcRequestSchema,
+  type SchemaToolRequest,
+  SchemaToolRequestSchema,
+} from "./validation";
+
+/**
+ * Collaborators the MCP handler calls out to, injectable for tests.
+ *
+ * Production passes nothing and gets {@link defaultDeps}. Tests pass fakes
+ * here instead of mocking modules, so a test can drive every tool result and
+ * failure path through the public {@link handleMcpRequest} interface.
+ */
+export interface McpDeps {
+  /** Run `code` tool source in a sandbox isolate. */
+  readonly executeCode: (code: string, env: Env, ctx: ExecutionContext) => Promise<ExecuteResult>;
+  /** Build the `schema` tool response from validated arguments. */
+  readonly getSchemaInfo: (options: SchemaToolRequest, env: Env) => Promise<unknown>;
+}
+
+/** Real collaborators used by the Worker. */
+export const defaultDeps: McpDeps = { executeCode, getSchemaInfo };
 
 const SERVER_INFO = {
   name: "afl-mcp",
@@ -108,13 +130,14 @@ async function handleToolCall(
   args: Record<string, unknown>,
   env: Env,
   ctx: ExecutionContext,
+  deps: McpDeps,
 ) {
   switch (name) {
     case "schema": {
       const parsed = SchemaToolRequestSchema.safeParse(args);
       if (!parsed.success)
         return mcpError(parsed.error.issues[0]?.message ?? "invalid schema arguments");
-      return mcpContent(await getSchemaInfo(parsed.data, env));
+      return mcpContent(await deps.getSchemaInfo(parsed.data, env));
     }
 
     case "code": {
@@ -134,7 +157,7 @@ async function handleToolCall(
           ? rawCompetition
           : null;
       console.log(JSON.stringify({ event: "tool:code", competition }));
-      const result = await executeCode(code, env, ctx);
+      const result = await deps.executeCode(code, env, ctx);
       if (result.error) {
         return mcpError(`Execution error (${result.execution_time_ms}ms): ${result.error}`);
       }
@@ -150,6 +173,7 @@ async function handleJsonRpc(
   request: JsonRpcRequest,
   env: Env,
   ctx: ExecutionContext,
+  deps: McpDeps,
 ): Promise<JsonRpcResponse> {
   const { id, method, params } = request;
 
@@ -170,7 +194,7 @@ async function handleJsonRpc(
       if (!name) {
         return jsonRpcError(id, -32602, "Missing tool name");
       }
-      const result = await handleToolCall(name, args, env, ctx);
+      const result = await handleToolCall(name, args, env, ctx, deps);
       return jsonRpcResponse(id, result);
     }
 
@@ -209,10 +233,22 @@ function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
   );
 }
 
+/**
+ * Serve one MCP streamable-HTTP request.
+ *
+ * @param request - Incoming `/mcp` request.
+ * @param env - Worker environment.
+ * @param ctx - Worker execution context, passed to the sandbox executor.
+ * @param deps - Collaborators. Omit in production to use {@link defaultDeps}.
+ * @returns The HTTP response, a JSON-RPC body or an empty status reply.
+ * @example
+ * const res = await handleMcpRequest(request, env, ctx);
+ */
 export async function handleMcpRequest(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
+  deps: McpDeps = defaultDeps,
 ): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204 });
@@ -271,7 +307,7 @@ export async function handleMcpRequest(
 
   let response: JsonRpcResponse;
   try {
-    response = await handleJsonRpc(rpcRequest.data, env, ctx);
+    response = await handleJsonRpc(rpcRequest.data, env, ctx, deps);
   } catch (err) {
     console.error("mcp handler error:", err);
     response = jsonRpcError(rpcRequest.data.id, -32603, "Internal error");

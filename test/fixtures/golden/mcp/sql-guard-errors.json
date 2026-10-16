@@ -1,0 +1,5 @@
+{
+  "leading-keyword": "ReadOnlySqlError: Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
+  "forbidden-keyword-behind-cte": "ReadOnlySqlError: Read-only access: DELETE statements are not permitted.",
+  "pragma": "ReadOnlySqlError: Read-only access: PRAGMA statements are not permitted."
+}

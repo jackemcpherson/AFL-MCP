@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/.wrangler", "!!**/dist"]
+    "includes": ["**", "!!**/.wrangler", "!!**/dist", "!!test/fixtures/golden"]
   },
   "linter": {
     "enabled": true,
