@@ -5,6 +5,17 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.11] - 2026-10-17
+
+This patch tightens MCP request media-type validation.
+
+### Changed in 4.0.11
+
+- `/mcp` accepts a POST body only when its media type is exactly
+  `application/json`. Parameters such as `charset` are still accepted.
+- `/mcp` logs each request's `Origin` and protocol version as a structured
+  `mcp:client` event.
+
 ## [4.0.10] - 2026-10-14
 
 This patch moves the sync pipeline to fitzroy 7. Synced data does not change.

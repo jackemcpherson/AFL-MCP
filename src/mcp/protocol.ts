@@ -182,6 +182,33 @@ async function handleJsonRpc(
   }
 }
 
+/** Longest header value recorded in client logs. */
+const MAX_LOGGED_HEADER_LENGTH = 200;
+
+/**
+ * Log the client's Origin and protocol version so later releases can tighten
+ * request checks against observed traffic.
+ * @param request - Incoming MCP POST request.
+ * @param rpcRequest - Validated JSON-RPC request.
+ */
+function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
+  const header = (name: string) =>
+    request.headers.get(name)?.slice(0, MAX_LOGGED_HEADER_LENGTH) ?? null;
+  const requested = rpcRequest.params?.protocolVersion;
+  console.log(
+    JSON.stringify({
+      event: "mcp:client",
+      method: rpcRequest.method,
+      origin: header("origin"),
+      protocolVersionHeader: header("mcp-protocol-version"),
+      initializeProtocolVersion:
+        rpcRequest.method === "initialize" && typeof requested === "string"
+          ? requested.slice(0, MAX_LOGGED_HEADER_LENGTH)
+          : null,
+    }),
+  );
+}
+
 export async function handleMcpRequest(
   request: Request,
   env: Env,
@@ -209,7 +236,8 @@ export async function handleMcpRequest(
   }
 
   const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
+  const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
     return Response.json(jsonRpcError(0, -32700, "Content-Type must be application/json"), {
       status: 415,
     });
@@ -232,6 +260,8 @@ export async function handleMcpRequest(
       status: 400,
     });
   }
+
+  logClientHeaders(request, rpcRequest.data);
 
   // JSON-RPC notifications (method "notifications/*") take no response.
   // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
