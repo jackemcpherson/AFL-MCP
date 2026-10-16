@@ -5,6 +5,24 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.10] - 2026-10-14
+
+This patch moves the sync pipeline to fitzroy 7. Synced data does not change.
+
+### Changed in 4.0.10
+
+- Upgrade fitzroy from 6.0.0 to 7.0.0 and add its `effect` peer dependency.
+  fitzroy 7 returns Effects. `src/lib/fitzroy.ts` runs them on one runtime per
+  isolate, so the AFL API token stays cached across requests as before.
+- Port the backfill scripts to fitzroy 7. `backfill-dob.mts` uses the
+  `Fryzigg` and `AflTables` services in place of the removed client classes.
+
+### Fixed in 4.0.10
+
+- `backfill-brownlow.ts` and `diagnose-brownlow-gaps.ts` read
+  `fetchPlayerStats` results as the `{ stats, failedMatchIds }` envelope
+  instead of iterating the envelope itself.
+
 ## [4.0.9] - 2026-10-05
 
 This patch retries safe fenced reads after transient connection loss.

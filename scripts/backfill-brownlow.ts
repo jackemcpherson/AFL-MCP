@@ -1,8 +1,8 @@
 import { execSync } from "node:child_process";
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PlayerStats } from "fitzroy";
 import { fetchPlayerStats } from "fitzroy";
+import { runFitzroy } from "../src/lib/fitzroy";
 import { normaliseTeam } from "../src/lib/normalise";
 
 const SQL_DIR = join(__dirname, "..", "data", "sql-brownlow");
@@ -199,11 +199,13 @@ async function runSeason(year: number): Promise<SeasonResult | null> {
     seasonFallback.set(fallbackKey, list2);
   }
 
-  const statsResult = await fetchPlayerStats({
-    source: "afl-tables",
-    season: year,
-    competition: COMPETITION,
-  });
+  const statsResult = await runFitzroy(
+    fetchPlayerStats({
+      source: "afl-tables",
+      season: year,
+      competition: COMPETITION,
+    }),
+  );
   if (!statsResult.success) {
     console.log(`fetchPlayerStats failed (${statsResult.error.message}), skipping`);
     return null;
@@ -213,7 +215,7 @@ async function runSeason(year: number): Promise<SeasonResult | null> {
   let unresolvedMatch = 0;
   let unresolvedPlayer = 0;
 
-  for (const s of statsResult.data as readonly PlayerStats[]) {
+  for (const s of statsResult.data.stats) {
     if (s.brownlowVotes === null) continue;
 
     const date = extractStatsDate(s.matchId);

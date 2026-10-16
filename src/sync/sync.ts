@@ -13,6 +13,7 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { seasonKey } from "../db/seasons";
+import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
@@ -116,7 +117,7 @@ export async function sync(
           ? [options.season]
           : options?.fromYear !== undefined && options.toYear !== undefined
             ? rangeInclusive(options.fromYear, options.toYear)
-            : [await resolveDefaultSeasonForCompetition(competition)];
+            : [await runFitzroyOrThrow(resolveDefaultSeasonForCompetition(competition))];
       for (const season of seasons) {
         seasonKey(competition, season);
         scopes.push({ competition, season });
@@ -201,12 +202,12 @@ async function syncCompetition(
   fixturesOnly = false,
 ): Promise<BackfillResult> {
   try {
-    const discovered = await fetchSeasons(competition);
+    const discovered = await runFitzroy(fetchSeasons(competition));
     if (!discovered.success) throw discovered.error;
     const identity = discovered.data.find((entry) => entry.seasonKey === String(season));
     if (!identity)
       throw new Error(`No exact ${competition} season ${season}; use season discovery`);
-    const matchResult = await fetchMatches({ source: SOURCE, season, competition });
+    const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
     if (!matchResult.success) {
       const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
       await logSync(env, `sync:${competition}`, 0, error);
@@ -377,7 +378,7 @@ async function fetchLineupsSafe(
   season: SeasonSelector,
   round: number,
 ) {
-  const result = await fetchLineup({ source: SOURCE, season, round, competition });
+  const result = await runFitzroy(fetchLineup({ source: SOURCE, season, round, competition }));
   if (!result.success) {
     const message = describeError(result.error);
     // A 404 means the roster is not published yet (or never will be for

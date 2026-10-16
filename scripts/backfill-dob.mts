@@ -3,7 +3,8 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DataFrame } from "@jackemcpherson/rds-js";
-import { AflTablesClient, FryziggClient, normaliseTeamName } from "fitzroy";
+import { AflTables, Fryzigg, normaliseTeamName } from "fitzroy";
+import { runFitzroy } from "../src/lib/fitzroy";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SQL_DIR = join(__dirname, "..", "data", "sql-dob");
@@ -119,8 +120,7 @@ interface DbPlayerStint {
 
 async function fetchFryziggFrame(): Promise<DataFrame> {
   console.log("Fetching fryzigg AFLM dataset (large download)...");
-  const client = new FryziggClient();
-  const result = await client.fetchPlayerStats("AFLM");
+  const result = await runFitzroy(Fryzigg.use((fryzigg) => fryzigg.fetchPlayerStats("AFLM")));
   if (!result.success) {
     console.error(`Failed to fetch fryzigg data: ${result.error}`);
     process.exit(1);
@@ -243,14 +243,15 @@ async function stageAflTables(startYear: number, endYear: number): Promise<strin
   const playerIds = new Set(stints.map((s) => s.id));
   console.log(`  ${playerIds.size} players missing DOB across ${byTeam.size} teams`);
 
-  const client = new AflTablesClient();
   const dobByPlayerId = new Map<number, string>();
   const ambiguous: string[] = [];
   const unmatched: string[] = [];
 
   for (const [team, teamStints] of [...byTeam.entries()].sort()) {
     const canonical = normaliseTeamName(team);
-    const listResult = await client.fetchPlayerList(canonical);
+    const listResult = await runFitzroy(
+      AflTables.use((aflTables) => aflTables.fetchPlayerList(canonical)),
+    );
     if (!listResult.success) {
       console.log(
         `  ${team} (-> ${canonical}): fetchPlayerList FAILED: ${listResult.error.message}`,
