@@ -74,12 +74,25 @@ full pipeline.
 
 ## Style-Guide Exception
 
-This Worker takes the style guide's **minimal-Worker exception**: no
-Hono (hand-rolled routing in `src/index.ts`) and no Drizzle (raw
-parameterised SQL, with the repeated upsert fragments generated from
-column manifests in `src/sync/columns.ts`). Zod still validates all
-HTTP boundaries (`src/mcp/validation.ts`). Revisit if routing outgrows
-the current if/else chain or schema churn makes the manifests painful.
+This Worker deliberately deviates from TypeScript standard v4. Do not
+"fix" these without a superseding ADR.
+
+- [ADR 0001](./docs/adr/0001-keep-minimal-worker-shape.md): keep the
+  minimal-Worker shape. Hand-rolled routing in `src/index.ts`, raw
+  parameterised SQL with upsert fragments generated from column manifests
+  in `src/sync/columns.ts`, Wrangler config deployed by the
+  cloudflare-infra GitOps pipeline (no Alchemy), no Effect Layer
+  composition, and tagged errors thrown and caught at the Worker entry.
+  `effect/Schema` and the v4 toolchain still apply. Revisit routing at
+  about 20 routes or when admin needs typed clients.
+- [ADR 0002](./docs/adr/0002-keep-hand-rolled-mcp-protocol.md): keep the
+  hand-rolled MCP protocol in `src/mcp/protocol.ts`. Adopt
+  `@modelcontextprotocol/server` when logs show clients requesting
+  protocol 2026-07-28, or when a second transport feature (streaming,
+  resources) is needed.
+
+Boundary validation is moving from Zod to `effect/Schema` during v5.
+Validate new boundaries with whichever library the module already uses.
 
 ## Key Constraints
 
