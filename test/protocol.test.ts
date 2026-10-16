@@ -100,6 +100,58 @@ describe("handleMcpRequest", () => {
     expect(res.status).toBe(415);
   });
 
+  it("rejects a media type that only mentions application/json with 415", async () => {
+    const req = new Request("https://afl.test/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;x=application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+    });
+    const res = await handleMcpRequest(req, stubEnv, stubCtx);
+
+    expect(res.status).toBe(415);
+  });
+
+  it("accepts application/json with parameters", async () => {
+    const req = new Request("https://afl.test/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "Application/JSON; charset=utf-8" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+    });
+    const res = await handleMcpRequest(req, stubEnv, stubCtx);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("logs client origin and protocol versions", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const req = new Request("https://afl.test/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://client.test",
+        "MCP-Protocol-Version": "2025-03-26",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      }),
+    });
+    await handleMcpRequest(req, stubEnv, stubCtx);
+
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "mcp:client",
+        method: "initialize",
+        origin: "https://client.test",
+        protocolVersionHeader: "2025-03-26",
+        initializeProtocolVersion: "2025-06-18",
+      }),
+    );
+    log.mockRestore();
+  });
+
   it("returns parse error for malformed JSON", async () => {
     const req = new Request("https://afl.test/mcp", {
       method: "POST",
