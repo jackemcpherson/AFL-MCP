@@ -167,3 +167,58 @@ describe("lineup_round_comparison example", () => {
     expect(changes(rows, "OUT")).toEqual(["Brianna Davey", "Mikala Cann", "Sarah Sansonetti"]);
   });
 });
+
+describe("player_career_arc example", () => {
+  it("labels AFLW 2022 Season 6 and Season 7 as separate rows", async () => {
+    const aflw = await competitionId("AFLW");
+    const team = await insert(
+      "INSERT INTO teams (name, competition_id) VALUES ('Collingwood', ?)",
+      aflw,
+    );
+    const opponent = await insert(
+      "INSERT INTO teams (name, competition_id) VALUES ('Carlton', ?)",
+      aflw,
+    );
+    const player = await insert(
+      "INSERT INTO players (first_name, surname) VALUES ('Lauren', 'Brazzale')",
+    );
+    const seasons = [
+      { key: "2022-S6", date: "2022-01-08", games: [10, 12] },
+      { key: "2022-S7", date: "2022-08-27", games: [8, 9, 11] },
+      { key: "2023", date: "2023-09-02", games: [7] },
+    ];
+    for (const season of seasons) {
+      const seasonId = await insert(
+        "INSERT INTO seasons (competition_id, year, season_key) VALUES (?, ?, ?)",
+        aflw,
+        Number(season.key.slice(0, 4)),
+        season.key,
+      );
+      for (const [i, disposals] of season.games.entries()) {
+        const matchId = await insert(
+          "INSERT INTO matches (season_id, round, round_number, date, home_team_id, away_team_id, status) VALUES (?, ?, ?, date(?, ?), ?, ?, 'Complete')",
+          seasonId,
+          `Round ${i + 1}`,
+          i + 1,
+          season.date,
+          `+${7 * i} days`,
+          team,
+          opponent,
+        );
+        await env.DB.prepare(
+          "INSERT INTO player_match_stats (match_id, player_id, team_id, disposals, goals) VALUES (?, ?, ?, ?, 0)",
+        )
+          .bind(matchId, player, team, disposals)
+          .run();
+      }
+    }
+
+    const rows = await runExample("player_career_arc", "AFLW", player);
+
+    expect(rows.map((row) => [row["season_key"], row["games"], row["total_disposals"]])).toEqual([
+      ["2022-S6", 2, 22],
+      ["2022-S7", 3, 28],
+      ["2023", 1, 7],
+    ]);
+  });
+});

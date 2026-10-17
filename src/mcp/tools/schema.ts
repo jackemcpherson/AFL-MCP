@@ -344,8 +344,9 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "ORDER BY psp.total_pav DESC",
         ].join("\n"),
         player_career_arc: [
+          "-- One row per season. season_key keeps AFLW 2022-S6 and 2022-S7 apart.",
           "-- Bind: competition, player_id",
-          "SELECT s.year, SUM(pms.disposals) as total_disposals, SUM(pms.goals) as total_goals,",
+          "SELECT s.year, s.season_key, SUM(pms.disposals) as total_disposals, SUM(pms.goals) as total_goals,",
           "  COUNT(*) as games, psp.total_pav, psp.off_pav, psp.mid_pav, psp.def_pav",
           "FROM player_match_stats pms",
           "JOIN matches m ON pms.match_id = m.id",
@@ -353,8 +354,8 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "JOIN competitions c ON s.competition_id = c.id",
           "LEFT JOIN player_season_pav psp ON psp.player_id = pms.player_id AND psp.season_id = s.id",
           "WHERE c.code = ? AND pms.player_id = ?",
-          "GROUP BY s.year, psp.total_pav, psp.off_pav, psp.mid_pav, psp.def_pav",
-          "ORDER BY s.year",
+          "GROUP BY s.id, psp.total_pav, psp.off_pav, psp.mid_pav, psp.def_pav",
+          "ORDER BY s.year, s.season_key",
         ].join("\n"),
         match_coaches_lookup: [
           "-- Bind: competition, canonical season key",
