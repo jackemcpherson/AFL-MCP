@@ -35,9 +35,9 @@ describe("sandbox security (end-to-end through the MCP endpoint)", () => {
   it("rejects DELETE through the sandbox", async () => {
     const body = await callCodeTool('return db.prepare("DELETE FROM matches").all()');
     expect(body.result?.isError).toBe(true);
-    // The guard's tagged error crosses the DbProxy RPC boundary by message.
-    expect(body.result?.content[0]?.text).toContain(
-      "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
+    // The DbProxy RPC boundary prefixes the guard message with the error's class name.
+    expect(body.result?.content[0]?.text).toMatch(
+      /^Execution error \(\d+ms\): ReadOnlySqlError: Read-only access: statements must begin with SELECT, WITH, or EXPLAIN\.$/,
     );
   });
 

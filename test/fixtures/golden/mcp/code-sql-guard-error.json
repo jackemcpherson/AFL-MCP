@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Execution error (2ms): Read-only access: statements must begin with SELECT, WITH, or EXPLAIN."
+          "text": "Execution error (2ms): ReadOnlySqlError: Read-only access: statements must begin with SELECT, WITH, or EXPLAIN."
         }
       ],
       "isError": true

@@ -211,11 +211,13 @@ describe("MCP contract: code tool", () => {
   });
 
   it("surfaces the read-only SQL guard message as an execution error", async () => {
+    // The sandbox RPC boundary prefixes the message with the error's class name,
+    // as `test/sandbox/security.worker.test.ts` verifies against the real executor.
     let guardMessage = "";
     try {
       assertReadOnlySql("DELETE FROM matches");
     } catch (err) {
-      guardMessage = err instanceof Error ? err.message : String(err);
+      guardMessage = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     }
     const deps = withExecutor({
       result: null,

@@ -26,8 +26,9 @@ const ReadOnlySqlErrorBase: TaggedErrorBase<ReadOnlySqlError, "ReadOnlySqlError"
 /**
  * Thrown when a statement fails read-only validation.
  *
- * The message is part of the public `code` tool contract and reaches the
- * caller word for word through the sandbox RPC boundary.
+ * The message is part of the public `code` tool contract. The sandbox RPC
+ * boundary prefixes it with the class name, so the caller sees
+ * `ReadOnlySqlError: Read-only access: ...`.
  *
  * @example
  * throw new ReadOnlySqlError({ message: "Read-only access: ..." });
