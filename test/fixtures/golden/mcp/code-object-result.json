@@ -12,7 +12,16 @@
           "type": "text",
           "text": "{\n  \"results\": [\n    {\n      \"team\": \"Carlton\",\n      \"wins\": 12\n    }\n  ],\n  \"success\": true\n}"
         }
-      ]
+      ],
+      "structuredContent": {
+        "results": [
+          {
+            "team": "Carlton",
+            "wins": 12
+          }
+        ],
+        "success": true
+      }
     }
   }
 }

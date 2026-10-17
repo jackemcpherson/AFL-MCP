@@ -165,7 +165,7 @@ describe("MCP contract: schema tool", () => {
 });
 
 describe("MCP contract: code tool", () => {
-  it("pretty-prints a structured result", async () => {
+  it("pretty-prints an object result and adds it as structured content", async () => {
     const deps = withExecutor({
       result: { results: [{ team: "Carlton", wins: 12 }], success: true },
       execution_time_ms: 5,
@@ -184,6 +184,17 @@ describe("MCP contract: code tool", () => {
     await expectGolden(
       "code-string-result",
       await serve(toolCall("code", { code: "return 'x'" }), { deps }),
+    );
+  });
+
+  it("returns an array result as text only, with no structured content", async () => {
+    const deps = withExecutor({
+      result: [{ team: "Carlton", wins: 12 }],
+      execution_time_ms: 5,
+    });
+    await expectGolden(
+      "code-array-result",
+      await serve(toolCall("code", { code: "return []" }), { deps }),
     );
   });
 
@@ -487,7 +498,7 @@ describe("MCP contract: transport", () => {
     );
   });
 
-  it("answers an unknown tool with an isError result", async () => {
+  it("answers an unknown tool with -32602", async () => {
     await expectGolden("transport-unknown-tool", await serve(toolCall("tools")));
   });
 

@@ -28,6 +28,14 @@ This release has breaking changes to the MCP tool contract.
   received.
 - 405 responses carry an `Allow` header. Errors for a request whose id is
   unknown carry `id: null` instead of `0`.
+- Both tools carry a `title` and annotations that mark them read-only,
+  non-destructive, idempotent and closed-world. `initialize` returns
+  server instructions to call `schema` first and always filter by
+  competition.
+- `schema` results and object `code` results add `structuredContent`
+  next to the unchanged text block. Other `code` results stay text only.
+- Breaking: `tools/call` naming an unknown tool returns JSON-RPC error
+  `-32602` instead of an `isError` result.
 
 ## [4.0.11] - 2026-10-17
 

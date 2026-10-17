@@ -7,7 +7,7 @@ import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { McpRequestError } from "./errors";
 import { getSchemaInfo } from "./tools/schema";
-import type { JsonRpcResponse, ToolDefinition } from "./types";
+import type { JsonRpcResponse, ToolAnnotations, ToolDefinition } from "./types";
 import {
   decodeCodeToolRequest,
   decodeJsonRpcId,
@@ -60,6 +60,26 @@ function negotiateProtocolVersion(requested: unknown): string {
     : LATEST_PROTOCOL_VERSION;
 }
 
+/** Server-level guidance returned from `initialize`. */
+const INSTRUCTIONS =
+  "Call the schema tool first to learn the tables, per-competition coverage and query API before writing code. The database holds four competitions (AFLM, AFLW, VFL, VFLW), so always filter SQL by competition (JOIN competitions c WHERE c.code = ?).";
+
+/**
+ * Both tools only read the database and touch no outside system.
+ * @param title - Display name for the tool.
+ * @returns Annotations marking the tool read-only, non-destructive,
+ * idempotent and closed-world.
+ */
+function readOnlyAnnotations(title: string): ToolAnnotations {
+  return {
+    title,
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+}
+
 // No CORS headers are sent: MCP clients are server-side, and withholding
 // Access-Control-Allow-Origin stops arbitrary web pages from driving the
 // code-execution endpoint with visitors' browsers (SEC-03).
@@ -67,6 +87,7 @@ function negotiateProtocolVersion(requested: unknown): string {
 const TOOLS: ToolDefinition[] = [
   {
     name: "schema",
+    title: "Database schema",
     description:
       "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code. Valid calls: no params (full schema); competition alone (schema filtered to that competition); competition + season + includeObserved:true (measured coverage for that competition-season). Any other combination is an error.",
     inputSchema: {
@@ -92,9 +113,11 @@ const TOOLS: ToolDefinition[] = [
       },
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotations("Database schema"),
   },
   {
     name: "code",
+    title: "Run query code",
     description:
       "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
     inputSchema: {
@@ -115,6 +138,7 @@ const TOOLS: ToolDefinition[] = [
       required: ["code"],
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotations("Run query code"),
   },
 ];
 
@@ -131,15 +155,22 @@ function jsonRpcError(
   return { jsonrpc: "2.0", id, error: { code, message, data } };
 }
 
+/**
+ * Build a successful tool result. The text block is always present, for
+ * clients that ignore structured content. A JSON object is also returned as
+ * `structuredContent`. Strings, arrays and other values are text only,
+ * because the spec requires `structuredContent` to be an object.
+ * @param data - Tool output.
+ * @returns The `tools/call` result.
+ */
 function mcpContent(data: unknown) {
-  return {
-    content: [
-      {
-        type: "text",
-        text: Predicate.isString(data) ? data : JSON.stringify(data, null, 2),
-      },
-    ],
-  };
+  const content = [
+    {
+      type: "text",
+      text: Predicate.isString(data) ? data : JSON.stringify(data, null, 2),
+    },
+  ];
+  return Predicate.isObject(data) ? { content, structuredContent: data } : { content };
 }
 
 function mcpError(message: string) {
@@ -188,7 +219,7 @@ async function handleToolCall(
     }
 
     default:
-      return mcpError(`Unknown tool: ${name}`);
+      throw new McpRequestError({ code: -32602, message: `Unknown tool: ${name}` });
   }
 }
 
@@ -206,6 +237,7 @@ async function handleJsonRpc(
         protocolVersion: negotiateProtocolVersion(params?.["protocolVersion"]),
         capabilities: { tools: {} },
         serverInfo: SERVER_INFO,
+        instructions: INSTRUCTIONS,
       });
 
     case "tools/list":

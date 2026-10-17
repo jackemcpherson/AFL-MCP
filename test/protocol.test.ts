@@ -348,7 +348,7 @@ describe("handleMcpRequest", () => {
     expect(json.error?.code).toBe(-32602);
   });
 
-  it("returns error for unknown tool", async () => {
+  it("returns -32602 for an unknown tool", async () => {
     const res = await handleMcpRequest(
       makeRequest({
         jsonrpc: "2.0",
@@ -361,8 +361,8 @@ describe("handleMcpRequest", () => {
     );
 
     const json = await parseJson(res);
-    expect(json.result?.isError).toBe(true);
-    expect(json.result?.content?.[0]?.text).toContain("Unknown tool");
+    expect(json.error?.code).toBe(-32602);
+    expect(json.error?.message).toBe("Unknown tool: nonexistent");
   });
 
   it("rejects code execution when the kill switch is set", async () => {
