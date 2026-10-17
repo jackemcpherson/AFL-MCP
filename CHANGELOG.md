@@ -5,6 +5,46 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1] - 2026-10-17
+
+This patch corrects `schema` tool examples and notes from an external v5
+test report and repairs AFLM clearance totals. The `code` sandbox does not
+change.
+
+### Added in 5.0.1
+
+- `v_integrity_clearances` lists `player_match_stats` rows whose
+  `clearances` differs from `centre_clearances + stoppage_clearances`.
+
+### Fixed in 5.0.1
+
+- Migration `0045` repairs 1,793 AFLM `player_match_stats` rows (2012 to
+  2020) whose `clearances` did not equal `centre_clearances +
+  stoppage_clearances`. The historical import mixed AFL Tables and
+  Footywire totals with Champion Data components. Champion Data (AFL API)
+  wins, matching the source for 2021 onwards. The AFL API confirmed each row
+  for its match and player. Components stay as stored and each total becomes
+  their sum.
+  `data/repairs/0045_clearance_totals.csv` holds the old and new values.
+  PAV for AFLM 2012 to 2020 rebuilds on the next sync, so `mid_pav` can shift
+  for affected players.
+- `lineup_round_comparison` compares two matches by id instead of two
+  round numbers. It binds competition, team name, current match id and
+  previous match id. Each row gives the player id and the match id and date
+  it came from. Double-game weeks and the 2010 Grand Final replay no longer
+  repeat players or hide changes inside a round.
+- `player_career_arc` selects `season_key` and groups by season, so AFLW
+  2022-S6 and 2022-S7 come back as separate, labelled rows.
+- The `ladder` example says it derives standings from played results only
+  and applies no administrative adjustments. AFLM 2015 Adelaide and Geelong
+  and AFLM 2013 Essendon are the examples given.
+- The integrity note says `v_integrity_quarter_scores` also lists matches
+  decided in extra time, such as match 409, because extra-time periods are
+  not stored.
+- The 5.0.0 entry and the docs now say a `code` syntax error carries a line
+  and column only when the runtime reports a position. Production errors
+  give the message and hint without one.
+
 ## [5.0.0] - 2026-10-17
 
 This release has breaking changes to the MCP tool contract. It also moves
@@ -96,8 +136,10 @@ the repository to TypeScript standard v4.
   the timeout. The sandbox stops waiting on the code just inside the
   30-second budget, and the Worker keeps its own timeout as a backstop.
 - A `code` syntax error names the line and column in the submitted code,
-  such as `SyntaxError: Unexpected token ':' (line 1, column 13)`. The
-  position is left out when it falls outside the submitted code.
+  such as `SyntaxError: Unexpected token ':' (line 1, column 13)`, only when
+  the runtime reports a position. Local `workerd` reports one, but production
+  has not, so production errors give the message without a position. The
+  position is also left out when it falls outside the submitted code.
 
 ### Fixed in 5.0.0
 

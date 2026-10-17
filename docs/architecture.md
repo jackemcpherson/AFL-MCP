@@ -133,6 +133,11 @@ invokes a single `async () => { ... }` function. Code that returns nothing
 gets an `isError` result that asks for a `return`. A syntax error in code
 that holds TypeScript syntax gets a hint to remove type annotations.
 
+`src/sandbox/executor.ts` appends the line and column in the submitted code
+only when the runtime reports a position for the parse failure. Local
+`workerd` reports one. Production has not, so a production syntax error gives
+the message and hint without a position.
+
 Each run logs one `tool:code` event with `competition`, `outcome` (`ok` or
 `error`) and, on failure, `errorClass`, such as `SyntaxError` or
 `ReadOnlySqlError`. The event never records the code or the error message.

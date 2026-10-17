@@ -101,6 +101,16 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   `Cancelled`. `VERIFIED_MATCH_CORRECTIONS` in `src/sync/source-corrections.ts`
   also cancels one AFLM 2015 fixture that the provider reports as a 0-0 draw.
   Count played matches with `status = 'Complete'`, not by non-null scores.
+- Matches hold played results only. No table records administrative ladder
+  decisions, so a ladder derived from results, like the `schema` tool's
+  `ladder` example, can differ from the official one. In AFLM 2015 Adelaide
+  and Geelong each received 2 premiership points for their cancelled match.
+  In AFLM 2013 Essendon kept its points but was officially ranked 9th.
+- Quarter columns hold the four regulation quarters. Extra-time periods are
+  not stored, so an extra-time match has quarters that sum short of its final
+  score. Match 409 (AFLM 2017 Port Adelaide v West Coast) is one.
+  `v_integrity_quarter_scores` lists such matches. They are correct data, not
+  scoring errors.
 - Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy `weather_temp_c` / `weather_type` columns.
   These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
   Use `match_weather` for all weather analysis.
@@ -117,6 +127,12 @@ the `schema` MCP response rather than inferring completeness from omitted notes.
 In particular, VFLW has sparse measured values for `goal_assists`,
 `marks_inside_fifty`, and `one_percenters`. These are `best-effort`, not
 universally absent. `brownlow_votes` is AFLM-only.
+
+`clearances` equals `centre_clearances + stoppage_clearances` on every row
+that has all three. Migration `0045` repaired 1,793 AFLM 2012 - 2020 rows
+whose totals came from a different clearance definition, using Champion Data
+(AFL API) values. `data/repairs/0045_clearance_totals.csv` records the old and
+new values. `v_integrity_clearances` lists any row that breaks the rule.
 
 ### `match_lineups`
 
@@ -360,7 +376,7 @@ coaching diagnostics, conflicts or success timestamps.
 ## Schema Parity and Reference Seeds
 
 `bun run check:schema` compares migration replay with `schema.sql`, including
-constraints, indexes, all five integrity views, triggers, and reference seeds.
+constraints, indexes, all six integrity views, triggers, and reference seeds.
 Column order and SQL formatting do not change the comparison.
 
 The active `0027_baseline.sql` supplies 106 reviewed venue names, geodata and

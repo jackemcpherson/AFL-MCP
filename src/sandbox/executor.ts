@@ -202,10 +202,11 @@ const START_FAILURE_LOCATION =
 const OTHER_LINE_BREAK = /[\r\u2028\u2029]/;
 
 /**
- * Locate a parse failure in the submitted code. The loader reports a
- * 1-based line and a 0-based column in the wrapped module, and the span
- * maps that back to the submission. A module with other line breaks gets
- * no position rather than a wrong one.
+ * Locate a parse failure in the submitted code. When the runtime reports
+ * a position (local workerd does, production has not), it gives a 1-based
+ * line and a 0-based column in the wrapped module, and the span maps that
+ * back to the submission. A module with other line breaks gets no position
+ * rather than a wrong one.
  *
  * @param cause - The thrown value.
  * @param span - Where the submitted text sits.
