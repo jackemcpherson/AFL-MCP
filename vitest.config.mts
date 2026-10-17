@@ -12,8 +12,15 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
     path.resolve(import.meta.dirname, "test/fixtures/legacy-migrations"),
   );
 
+  // CI must fail on a missing golden instead of writing it. This covers
+  // `toMatchFileSnapshot`. Vitest already does this when it detects CI.
+  // The explicit setting keeps it from depending on that detection.
+  const ci = process.env["CI"];
+  const update: "none" | false = ci !== undefined && ci !== "" && ci !== "false" ? "none" : false;
+
   return {
     test: {
+      update,
       projects: [
         {
           test: {
