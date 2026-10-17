@@ -17,6 +17,17 @@ This release has breaking changes to the MCP tool contract.
 - The Worker logs each failure as a JSON event with the error's tag and
   source frames, and never the raw error message. A failed `sync_log` purge
   now logs a `sync_log_purge_failed` event instead of failing silently.
+- `initialize` negotiates protocol revisions 2025-11-25, 2025-06-18 and
+  2025-03-26. It echoes a supported requested revision and otherwise
+  answers 2025-11-25.
+- `/mcp` answers 400 with error `-32600` when a request other than
+  `initialize` carries an unsupported `MCP-Protocol-Version` header or
+  2026-07-28 request metadata. Clients that speak both eras fall back to
+  `initialize`.
+- `/mcp` rejects request bodies over 4 MiB with 413, counted on the bytes
+  received.
+- 405 responses carry an `Allow` header. Errors for a request whose id is
+  unknown carry `id: null` instead of `0`.
 
 ## [4.0.11] - 2026-10-17
 

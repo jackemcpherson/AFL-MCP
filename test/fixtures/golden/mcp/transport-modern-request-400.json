@@ -1,0 +1,14 @@
+{
+  "status": 400,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32600,
+      "message": "This server speaks MCP 2025-11-25, 2025-06-18, 2025-03-26 over an initialize handshake."
+    }
+  }
+}

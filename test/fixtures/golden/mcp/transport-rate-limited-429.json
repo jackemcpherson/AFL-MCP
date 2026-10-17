@@ -6,7 +6,7 @@
   },
   "body": {
     "jsonrpc": "2.0",
-    "id": 0,
+    "id": null,
     "error": {
       "code": -32000,
       "message": "Rate limit exceeded — retry later"

@@ -98,6 +98,28 @@ describe("MCP contract: lifecycle", () => {
     await expectGolden("initialize", golden);
   });
 
+  it.each([
+    ["2025-11-25", "2025-11-25"],
+    ["2025-06-18", "2025-06-18"],
+    ["2025-03-26", "2025-03-26"],
+    ["2024-11-05", "2025-11-25"],
+    ["2026-07-28", "2025-11-25"],
+  ])("initialize requesting %s negotiates %s", async (requested, negotiated) => {
+    const res = await handleMcpRequest(
+      rpc({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: requested },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    const body = await res.json<{ result: { protocolVersion: string } }>();
+    expect(res.status).toBe(200);
+    expect(body.result.protocolVersion).toBe(negotiated);
+  });
+
   it("tools/list returns the pinned tool definitions", async () => {
     await expectGolden(
       "tools-list",
@@ -155,7 +177,10 @@ describe("MCP contract: code tool", () => {
   });
 
   it("passes a string result through as raw text", async () => {
-    const deps = withExecutor({ result: "plain text result", execution_time_ms: 5 });
+    const deps = withExecutor({
+      result: "plain text result",
+      execution_time_ms: 5,
+    });
     await expectGolden(
       "code-string-result",
       await serve(toolCall("code", { code: "return 'x'" }), { deps }),
@@ -181,12 +206,21 @@ describe("MCP contract: code tool", () => {
     } catch (err) {
       guardMessage = err instanceof Error ? err.message : String(err);
     }
-    const deps = withExecutor({ result: null, error: guardMessage, execution_time_ms: 2 });
+    const deps = withExecutor({
+      result: null,
+      error: guardMessage,
+      execution_time_ms: 2,
+    });
     await expectGolden(
       "code-sql-guard-error",
-      await serve(toolCall("code", { code: "return db.prepare('DELETE FROM matches').all()" }), {
-        deps,
-      }),
+      await serve(
+        toolCall("code", {
+          code: "return db.prepare('DELETE FROM matches').all()",
+        }),
+        {
+          deps,
+        },
+      ),
     );
   });
 
@@ -202,7 +236,9 @@ describe("MCP contract: code tool", () => {
     const deps = withExecutor({ result: 1, execution_time_ms: 1 });
     await expectGolden(
       "code-invalid-competition",
-      await serve(toolCall("code", { code: "return 1", competition: "NRL" }), { deps }),
+      await serve(toolCall("code", { code: "return 1", competition: "NRL" }), {
+        deps,
+      }),
     );
   });
 
@@ -309,6 +345,127 @@ describe("MCP contract: transport", () => {
     await expectGolden("transport-invalid-envelope-no-id-400", await serve(rpc([1, 2, 3])));
   });
 
+  it("serves a request carrying a supported MCP-Protocol-Version header", async () => {
+    await expectGolden(
+      "transport-protocol-header-200",
+      await serve(
+        rpc({ jsonrpc: "2.0", id: 1, method: "ping" }, { "MCP-Protocol-Version": "2025-06-18" }),
+      ),
+    );
+  });
+
+  it("rejects an unsupported MCP-Protocol-Version header with 400", async () => {
+    await expectGolden(
+      "transport-protocol-header-unsupported-400",
+      await serve(
+        rpc({ jsonrpc: "2.0", id: 1, method: "ping" }, { "MCP-Protocol-Version": "2024-11-05" }),
+      ),
+    );
+  });
+
+  it("rejects a 2026-07-28 request with 400 and plain -32600", async () => {
+    await expectGolden(
+      "transport-modern-request-400",
+      await serve(
+        rpc(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/list",
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: "probe",
+                  version: "1.0.0",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+              },
+            },
+          },
+          { "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" },
+        ),
+      ),
+    );
+  });
+
+  it("rejects modern per-request _meta even without the version header", async () => {
+    const res = await handleMcpRequest(
+      rpc({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+        },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json<{ error: { code: number } }>()).error.code).toBe(-32600);
+  });
+
+  it("negotiates initialize even when a 2026-07-28 header is still attached", async () => {
+    const res = await handleMcpRequest(
+      rpc(
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-11-25" },
+        },
+        { "MCP-Protocol-Version": "2026-07-28" },
+      ),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<{ result: { protocolVersion: string } }>();
+    expect(body.result.protocolVersion).toBe("2025-11-25");
+  });
+  it("answers an invalid envelope whose id is not a string or number with id null", async () => {
+    await expectGolden(
+      "transport-invalid-envelope-object-id-400",
+      await serve(rpc({ jsonrpc: "2.0", id: { nested: 1 }, method: "ping" })),
+    );
+  });
+  it("rejects a body over 4 MiB with 413, without relying on Content-Length", async () => {
+    const request = rpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "code", arguments: { code: "x".repeat(4 * 1024 * 1024) } },
+    });
+    expect(request.headers.get("content-length")).toBeNull();
+    await expectGolden("transport-body-too-large-413", await serve(request));
+  });
+
+  it("counts the body cap in bytes, not characters", async () => {
+    // 2.1 million two-byte characters: under 4 MiB of characters, over in bytes.
+    const res = await handleMcpRequest(
+      rpc({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ping",
+        params: { pad: "é".repeat(2_100_000) },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(413);
+  });
+  it("rejects a notification with an unsupported header using id null", async () => {
+    await expectGolden(
+      "transport-notification-unsupported-400",
+      await serve(
+        rpc(
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { "MCP-Protocol-Version": "2024-11-05" },
+        ),
+      ),
+    );
+  });
   it("acknowledges notifications with 202 and no body", async () => {
     await expectGolden(
       "transport-notification-202",

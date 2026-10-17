@@ -40,7 +40,25 @@ const SERVER_INFO = {
   version: pkg.version,
 };
 
-const PROTOCOL_VERSION = "2025-03-26";
+/**
+ * Legacy-era (initialize handshake) protocol revisions this server speaks,
+ * newest first. The first entry answers any request for another revision.
+ */
+const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18", "2025-03-26"];
+
+const LATEST_PROTOCOL_VERSION = "2025-11-25";
+
+/**
+ * Pick the revision to answer an `initialize` with: the requested one when
+ * supported, else the newest this server speaks.
+ * @param requested - `params.protocolVersion` from the client, unvalidated.
+ * @returns The negotiated protocol revision.
+ */
+function negotiateProtocolVersion(requested: unknown): string {
+  return Predicate.isString(requested) && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+    ? requested
+    : LATEST_PROTOCOL_VERSION;
+}
 
 // No CORS headers are sent: MCP clients are server-side, and withholding
 // Access-Control-Allow-Origin stops arbitrary web pages from driving the
@@ -105,7 +123,7 @@ function jsonRpcResponse(id: string | number, result: unknown): JsonRpcResponse 
 }
 
 function jsonRpcError(
-  id: string | number,
+  id: string | number | null,
   code: number,
   message: string,
   data?: unknown,
@@ -185,7 +203,7 @@ async function handleJsonRpc(
   switch (method) {
     case "initialize":
       return jsonRpcResponse(id, {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: negotiateProtocolVersion(params?.["protocolVersion"]),
         capabilities: { tools: {} },
         serverInfo: SERVER_INFO,
       });
@@ -241,6 +259,75 @@ function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
 }
 
 /**
+ * The id a client sent, for echoing in an error reply.
+ * @param body - Parsed request body.
+ * @returns The string or number id, or `null` when there is none.
+ */
+function knownId(body: unknown): string | number | null {
+  return Result.match(decodeJsonRpcId(body), {
+    onSuccess: (envelope) => envelope.id,
+    onFailure: () => null,
+  });
+}
+
+/** Largest request body accepted, in bytes. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Read a request body as UTF-8 text, counting the bytes actually received so
+ * a chunked body without `Content-Length` cannot exceed the cap.
+ * @param request - Incoming MCP POST request.
+ * @returns The body text, or `null` once it passes {@link MAX_BODY_BYTES}.
+ */
+async function readBoundedText(request: Request): Promise<string | null> {
+  if (request.body === null) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** `_meta` key that marks a request in the 2026-07-28 per-request format. */
+const MODERN_PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion";
+
+/**
+ * Check a request's protocol version against the revisions this server
+ * speaks. `initialize` is exempt because its body negotiates the version.
+ *
+ * The caller answers a non-null result with HTTP 400 and plain `-32600`.
+ * Never `-32020` or `-32022`: a dual-era client reads those as a 2026-07-28
+ * server and would not fall back to `initialize`.
+ * @param request - Incoming MCP POST request.
+ * @param rpcRequest - Validated JSON-RPC request.
+ * @returns The error message, or `null` when the request may proceed.
+ */
+function unsupportedProtocolMessage(request: Request, rpcRequest: JsonRpcRequest): string | null {
+  if (rpcRequest.method === "initialize") return null;
+  const meta = rpcRequest.params?.["_meta"];
+  const header = request.headers.get("mcp-protocol-version");
+  const modern =
+    Predicate.isObject(meta) && Predicate.hasProperty(meta, MODERN_PROTOCOL_VERSION_META);
+  if (!modern && (header === null || SUPPORTED_PROTOCOL_VERSIONS.includes(header))) return null;
+  return `This server speaks MCP ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")} over an initialize handshake.`;
+}
+
+/**
  * Serve one MCP streamable-HTTP request.
  *
  * @param request - Incoming `/mcp` request.
@@ -262,8 +349,9 @@ export async function handleMcpRequest(
   }
 
   if (request.method !== "POST") {
-    return Response.json(jsonRpcError(0, -32600, "Only POST requests are accepted"), {
+    return Response.json(jsonRpcError(null, -32600, "Only POST requests are accepted"), {
       status: 405,
+      headers: { Allow: "POST, OPTIONS" },
     });
   }
 
@@ -271,7 +359,7 @@ export async function handleMcpRequest(
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     const { success } = await env.MCP_RATE_LIMIT.limit({ key: ip });
     if (!success) {
-      return Response.json(jsonRpcError(0, -32000, "Rate limit exceeded — retry later"), {
+      return Response.json(jsonRpcError(null, -32000, "Rate limit exceeded — retry later"), {
         status: 429,
         headers: { "Retry-After": "60" },
       });
@@ -281,31 +369,38 @@ export async function handleMcpRequest(
   const contentType = request.headers.get("content-type") ?? "";
   const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") {
-    return Response.json(jsonRpcError(0, -32700, "Content-Type must be application/json"), {
+    return Response.json(jsonRpcError(null, -32700, "Content-Type must be application/json"), {
       status: 415,
     });
   }
 
+  const text = await readBoundedText(request);
+  if (text === null) {
+    return Response.json(jsonRpcError(null, -32600, "Request body exceeds 4 MiB"), { status: 413 });
+  }
+
   let body: unknown;
   try {
-    body = await request.json();
+    // SAFETY: widens JSON.parse's `any` to `unknown`; the envelope decoder narrows it.
+    body = JSON.parse(text) as unknown;
   } catch {
-    return Response.json(jsonRpcError(0, -32700, "Parse error: invalid JSON"), { status: 400 });
+    return Response.json(jsonRpcError(null, -32700, "Parse error: invalid JSON"), { status: 400 });
   }
 
   const decoded = decodeJsonRpcRequest(body);
   if (Result.isFailure(decoded)) {
-    const fallbackId = Result.match(decodeJsonRpcId(body), {
-      onSuccess: (envelope) => envelope.id,
-      onFailure: () => 0,
-    });
-    return Response.json(jsonRpcError(fallbackId, -32600, "Invalid JSON-RPC 2.0 request"), {
+    return Response.json(jsonRpcError(knownId(body), -32600, "Invalid JSON-RPC 2.0 request"), {
       status: 400,
     });
   }
   const rpcRequest = decoded.success;
 
   logClientHeaders(request, rpcRequest);
+
+  const unsupported = unsupportedProtocolMessage(request, rpcRequest);
+  if (unsupported !== null) {
+    return Response.json(jsonRpcError(knownId(body), -32600, unsupported), { status: 400 });
+  }
 
   // JSON-RPC notifications (method "notifications/*") take no response.
   // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
