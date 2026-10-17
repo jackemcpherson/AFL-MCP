@@ -28,7 +28,7 @@ does not supply the required inputs for VFL or VFLW.
 - MCP transport: Streamable HTTP
 - Data source: [fitzroy](https://www.npmjs.com/package/fitzroy) npm package (AFL
   API)
-- Sandbox: User-submitted TypeScript executes in isolated Dynamic Worker
+- Sandbox: User-submitted JavaScript executes in isolated Dynamic Worker
   isolates with read-only DB access
 
 ## MCP Tools
@@ -39,7 +39,7 @@ The server exposes 2 tools via the
 | Tool     | Title             | Purpose                                                                                          |
 | -------- | ----------------- | ------------------------------------------------------------------------------------------------ |
 | `schema` | Database schema   | Database structure, per-competition coverage, column details, join patterns, query API reference |
-| `code`   | Run query code    | Execute TypeScript against D1 in an isolated sandbox                                             |
+| `code`   | Run query code    | Execute JavaScript against D1 in an isolated sandbox                                             |
 
 Annotations mark both tools read-only, non-destructive, idempotent and
 closed-world. The optional `code` argument `competition` must be `AFLM`,

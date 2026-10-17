@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Execution error (1ms): SyntaxError: Unexpected token ':'. The sandbox runs JavaScript. Remove type annotations."
+        }
+      ],
+      "isError": true
+    }
+  }
+}

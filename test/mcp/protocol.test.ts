@@ -489,7 +489,7 @@ describe("handleMcpRequest", () => {
   });
 
   describe("code tool competition telemetry", () => {
-    it("logs { event: 'tool:code', competition: 'AFLW' } when a valid competition hint is supplied", async () => {
+    it("logs { event: 'tool:code', competition: 'AFLW', outcome: 'ok' } when a valid competition hint is supplied", async () => {
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       try {
         const res = await handleMcpRequest(
@@ -515,6 +515,7 @@ describe("handleMcpRequest", () => {
         expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: "AFLW",
+          outcome: "ok",
         });
       } finally {
         logSpy.mockRestore();
@@ -544,6 +545,7 @@ describe("handleMcpRequest", () => {
         expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: null,
+          outcome: "ok",
         });
       } finally {
         logSpy.mockRestore();
@@ -577,6 +579,7 @@ describe("handleMcpRequest", () => {
         expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: null,
+          outcome: "ok",
         });
       } finally {
         logSpy.mockRestore();

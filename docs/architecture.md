@@ -122,6 +122,21 @@ The `code` tool launches a fresh
 through the `LOADER` binding. `globalOutbound: null` prevents submitted code
 from reaching the network.
 
+The sandbox runs JavaScript only. The Worker Loader has no build step, so
+TypeScript syntax fails to parse. The tool description asks for JavaScript
+and declares the `db` API in TypeScript, which describes the API but never
+runs.
+
+Submitted code is the body of an async function.
+`src/sandbox/normalize.ts` also strips a surrounding Markdown fence and
+invokes a single `async () => { ... }` function. Code that returns nothing
+gets an `isError` result that asks for a `return`. A syntax error in code
+that holds TypeScript syntax gets a hint to remove type annotations.
+
+Each run logs one `tool:code` event with `competition`, `outcome` (`ok` or
+`error`) and, on failure, `errorClass`, such as `SyntaxError` or
+`ReadOnlySqlError`. The event never records the code or the error message.
+
 The parent Worker exports `DbProxy` as a `WorkerEntrypoint`. The sandbox
 receives only a small, read-only database interface that supports prepared
 queries. Every call returns through `DbProxy.query` or `DbProxy.queryFirst` to

@@ -4,6 +4,7 @@ import { COMPETITION_CODES } from "../lib/competitions";
 import { describeIssue, firstIssue } from "../lib/decode";
 import { logError } from "../lib/errors";
 import { type ExecuteResult, executeCode } from "../sandbox/executor";
+import { looksLikeTypeScript } from "../sandbox/normalize";
 import type { Env } from "../types";
 import { McpRequestError } from "./errors";
 import { getSchemaInfo } from "./tools/schema";
@@ -93,6 +94,36 @@ function readOnlyAnnotations(title: string): ToolAnnotations {
 // Access-Control-Allow-Origin stops arbitrary web pages from driving the
 // code-execution endpoint with visitors' browsers (SEC-03).
 
+/**
+ * The `db` surface the sandbox exposes, as a TypeScript declaration. It must
+ * match the wrapper in `src/sandbox/executor.ts` and the rows `DbProxy`
+ * returns: `bind` replaces earlier values, `all` returns D1's whole result,
+ * and `first` returns one row.
+ */
+const DB_DECLARATION = [
+  "type Row = Record<string, unknown>;",
+  "interface D1Result { results: Row[]; success: boolean; meta: Record<string, unknown> }",
+  "interface Statement {",
+  "  /** Bind positional values to ? placeholders. */",
+  "  bind(...values: unknown[]): Statement;",
+  "  /** Run the read-only statement and return every row. */",
+  "  all(): Promise<D1Result>;",
+  "  /** Run the read-only statement and return the first row, or null. */",
+  "  first(): Promise<Row | null>;",
+  "}",
+  "declare const db: { prepare(sql: string): Statement };",
+].join("\n");
+
+/** What the `code` tool runs, and the one syntax rule models most often break. */
+const CODE_TOOL_DESCRIPTION = [
+  "Run JavaScript in an isolated sandbox with read-only access to the Australian football D1 database through `db`.",
+  "Write the body of an async function in plain JavaScript: use await, and end with return and a JSON-serialisable value, such as `const r = await db.prepare(sql).bind('AFLM').all(); return r.results;`. A single `async () => { ... }` function also works.",
+  "Do NOT use TypeScript syntax: no type annotations, interfaces, `as` casts or generics. The sandbox does not compile TypeScript, so that code fails to parse.",
+  `The \`db\` API, declared in TypeScript for reference:\n${DB_DECLARATION}`,
+  "Filter every SQL query by competition with JOIN competitions c ... WHERE c.code = ?, as the schema notes show.",
+  "Sandbox constraints: no network access, no npm imports, 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
+].join("\n\n");
+
 const TOOLS: ToolDefinition[] = [
   {
     name: "schema",
@@ -128,14 +159,14 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "code",
     title: "Run query code",
-    description:
-      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database via the `db` variable. The code must return a JSON-serialisable value. Filter every SQL query by competition with JOIN competitions c ... WHERE c.code = ?, as the schema notes show. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
+    description: CODE_TOOL_DESCRIPTION,
     inputSchema: {
       type: "object",
       properties: {
         code: {
           type: "string",
-          description: "TypeScript code to execute, with `db` (D1Database) in scope.",
+          description:
+            "JavaScript async function body to run, ending in return. `db` is in scope, with the API in the tool description. TypeScript syntax is not supported.",
         },
         competition: {
           type: "string",
@@ -189,6 +220,41 @@ function mcpError(message: string) {
   };
 }
 
+/** Appended to a syntax error in code that carries TypeScript syntax. */
+const TYPESCRIPT_HINT = "The sandbox runs JavaScript. Remove type annotations.";
+
+/**
+ * The executor's error message, with the TypeScript hint when the failure
+ * is a syntax error and the code looks like TypeScript.
+ * @param result - A failed sandbox run.
+ * @param code - The submitted code.
+ * @returns The message to show the model.
+ */
+function withTypeScriptHint(result: ExecuteResult, code: string): string {
+  const message = result.error ?? "";
+  if (result.errorClass !== "SyntaxError" || !looksLikeTypeScript(code)) return message;
+  return `${message.replace(/\.?$/, ".")} ${TYPESCRIPT_HINT}`;
+}
+
+/**
+ * Log one `tool:code` event per run. It records the outcome and the error
+ * class only, never the error message or the code, which carry user text.
+ * @param competition - The competition hint, or `null`.
+ * @param result - The sandbox run.
+ */
+function logCodeOutcome(competition: string | null, result: ExecuteResult): void {
+  const event =
+    result.error === undefined
+      ? { event: "tool:code", competition, outcome: "ok" }
+      : {
+          event: "tool:code",
+          competition,
+          outcome: "error",
+          errorClass: result.errorClass ?? "Error",
+        };
+  console.log(JSON.stringify(event));
+}
+
 async function handleToolCall(
   name: string,
   args: unknown,
@@ -229,10 +295,11 @@ async function handleToolCall(
       }
       const { code } = parsed.success;
       const competition = parsed.success.competition ?? null;
-      console.log(JSON.stringify({ event: "tool:code", competition }));
       const result = await deps.executeCode(code, env, ctx);
-      if (result.error) {
-        return mcpError(`Execution error (${result.execution_time_ms}ms): ${result.error}`);
+      logCodeOutcome(competition, result);
+      if (result.error !== undefined) {
+        const message = withTypeScriptHint(result, code);
+        return mcpError(`Execution error (${result.execution_time_ms}ms): ${message}`);
       }
       return mcpContent(result.result);
     }

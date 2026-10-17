@@ -231,6 +231,19 @@ describe("MCP contract: code tool", () => {
     );
   });
 
+  it("adds the JavaScript hint to a syntax error in TypeScript code", async () => {
+    const deps = withExecutor({
+      result: null,
+      error: "SyntaxError: Unexpected token ':'",
+      errorClass: "SyntaxError",
+      execution_time_ms: 1,
+    });
+    await expectGolden(
+      "code-typescript-syntax-error",
+      await serve(toolCall("code", { code: "const f = (x: number) => x\nreturn f(1)" }), { deps }),
+    );
+  });
+
   it("surfaces the read-only SQL guard message as an execution error", async () => {
     // The sandbox RPC boundary prefixes the message with the error's class name,
     // as `test/sandbox/security.worker.test.ts` verifies against the real executor.

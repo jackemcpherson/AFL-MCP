@@ -387,9 +387,9 @@ types. Options C, D and E cost too much for this Worker.
 
 ## Open Questions
 
-- How often do `code` calls fail on TypeScript syntax today? The
-  `tool:code` log event records only `competition`, not the outcome or the
-  error class. Adding an outcome field would answer this and decide option B.
+- How often do `code` calls fail on TypeScript syntax? Since v5.0.0 the
+  `tool:code` log event records `outcome` and `errorClass`, so the share of
+  `SyntaxError` failures is now measurable. That share decides option B.
 - How large is a full `schema` response in tokens? Cloudflare keeps discovery
   output small or moves it into the sandbox. A measurement would show whether
   the `schema` tool needs the same treatment.

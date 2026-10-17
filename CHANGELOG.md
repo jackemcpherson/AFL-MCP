@@ -72,6 +72,16 @@ the repository to TypeScript standard v4.
 - `schema` no longer documents the internal coach import tables
   `coach_backfill_progress`, `coach_import_pages` and
   `coach_import_diagnostics`.
+- Breaking: the `code` tool asks for JavaScript instead of TypeScript,
+  because the sandbox runs JavaScript only. Its description states that
+  TypeScript syntax is not supported and declares the `db` API it exposes:
+  `prepare`, `bind`, `all` and `first`.
+- The `code` tool accepts code in a Markdown fence and a single
+  `async () => { ... }` function. Code that returns nothing gets a clear
+  error instead of `Unexpected end of JSON input`. Syntax errors show the
+  parser message, plus a JavaScript hint when the code holds TypeScript
+  syntax. The `tool:code` log event adds `outcome` and, on failure,
+  `errorClass`.
 
 ### Fixed in 5.0.0
 
