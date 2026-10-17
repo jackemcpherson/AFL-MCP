@@ -424,6 +424,15 @@ WHERE m.round_type = 'Regular'
   AND x.total > 0
   AND x.total != 6;
 
+CREATE VIEW v_integrity_clearances AS
+SELECT pms.id AS row_id, pms.match_id, pms.player_id,
+       pms.centre_clearances, pms.stoppage_clearances, pms.clearances
+FROM player_match_stats pms
+WHERE pms.centre_clearances IS NOT NULL
+  AND pms.stoppage_clearances IS NOT NULL
+  AND pms.clearances IS NOT NULL
+  AND pms.clearances != pms.centre_clearances + pms.stoppage_clearances;
+
 CREATE VIEW v_integrity_disposals AS
 SELECT pms.id AS row_id, pms.match_id, pms.player_id, pms.kicks, pms.handballs, pms.disposals
 FROM player_match_stats pms

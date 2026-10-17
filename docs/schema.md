@@ -128,6 +128,12 @@ In particular, VFLW has sparse measured values for `goal_assists`,
 `marks_inside_fifty`, and `one_percenters`. These are `best-effort`, not
 universally absent. `brownlow_votes` is AFLM-only.
 
+`clearances` equals `centre_clearances + stoppage_clearances` on every row
+that has all three. Migration `0045` repaired 1,793 AFLM 2012 - 2020 rows
+whose totals came from a different clearance definition, using Champion Data
+(AFL API) values. `data/repairs/0045_clearance_totals.csv` records the old and
+new values. `v_integrity_clearances` lists any row that breaks the rule.
+
 ### `match_lineups`
 
 Current selected squads, observed before player statistics exist and refreshed
@@ -370,7 +376,7 @@ coaching diagnostics, conflicts or success timestamps.
 ## Schema Parity and Reference Seeds
 
 `bun run check:schema` compares migration replay with `schema.sql`, including
-constraints, indexes, all five integrity views, triggers, and reference seeds.
+constraints, indexes, all six integrity views, triggers, and reference seeds.
 Column order and SQL formatting do not change the comparison.
 
 The active `0027_baseline.sql` supplies 106 reviewed venue names, geodata and
