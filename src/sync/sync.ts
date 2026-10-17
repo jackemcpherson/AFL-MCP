@@ -9,6 +9,7 @@ import {
 import { refreshActiveCoaches } from "../admin/coaching";
 import {
   beginPublicInputWrite,
+  findStrandedWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
@@ -141,8 +142,22 @@ export async function sync(
       }
     }
     const operation = `sync:${options?.fixturesOnly ? "fixtures:" : ""}${JSON.stringify(scopes)}`;
-    if (options?.resume) await resumePublicInputWrite(env, holder, operation);
-    else await beginPublicInputWrite(env, holder, now, operation);
+    // A run that dies mid-write (e.g. a D1 connection drop) keeps the marker so
+    // readers never see partial inputs. The scheduled path re-runs the same
+    // idempotent scope, so it resumes its own stranded write instead of
+    // failing every tick until an operator resumes it. Markers from any other
+    // operation still require explicit recovery.
+    const stranded = options?.resume || isBackfill ? null : await findStrandedWrite(env, operation);
+    if (options?.resume || stranded !== null) {
+      await resumePublicInputWrite(env, holder, operation);
+      if (stranded !== null)
+        await logSync(
+          env,
+          "sync:recovered",
+          0,
+          `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
+        );
+    } else await beginPublicInputWrite(env, holder, now, operation);
     const writer = protectOperationWrites(env, holder);
     const results: BackfillResult[] = [];
     for (const { competition, season } of scopes)

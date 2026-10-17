@@ -72,8 +72,10 @@ AFLW.
 
 Provider statistics failures retain successful match results and persist
 retries.
-Database failures retain the public write marker and require recovery with the
-identical operation scope.
+Database failures retain the public write marker. The next scheduled sync
+resumes a marker left by its own identical operation scope and logs
+`sync:recovered`. Backfills and every other operation still require explicit
+recovery with the identical operation scope.
 
 ## Publication Inputs
 

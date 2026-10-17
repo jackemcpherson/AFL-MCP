@@ -49,6 +49,13 @@ the repository to TypeScript standard v4.
 - The `mcp:client` log event adds `metaProtocolVersion`, the 2026-07-28
   `_meta` protocol version marker, or `null` when a request has none.
 
+### Fixed in 5.0.0
+
+- The scheduled sync now resumes a public write marker left by its own
+  interrupted run, such as after a D1 connection drop, and logs
+  `sync:recovered`. Before, every later tick failed until an operator resumed
+  it. Backfills and other operations still require explicit recovery.
+
 ### Internal Changes in 5.0.0
 
 - `effect/Schema` replaces Zod for every boundary decode: MCP and admin

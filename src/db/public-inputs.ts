@@ -1,4 +1,6 @@
+import { Schema } from "effect";
 import { OperationConflictError } from "../admin/errors";
+import { decodeRow } from "../lib/decode";
 import type { Env } from "../types";
 
 /**
@@ -88,6 +90,43 @@ export async function resumePublicInputWrite(
     throw new OperationConflictError({
       message: "Recovery requires the matching operation marker and active lease",
     });
+}
+
+const StrandedWriteSchema = Schema.Struct({
+  write_holder: Schema.NullOr(Schema.String),
+  write_started_at: Schema.NullOr(Schema.String),
+});
+
+/** Owner and start time of an unfinished public input write. */
+export interface StrandedWrite {
+  readonly holder: string | null;
+  readonly startedAt: string | null;
+}
+
+/**
+ * Find an unfinished write left by an earlier run of exactly this operation.
+ * Callers hold the operation lease, so the marker's owner can no longer write.
+ * @param env - Worker bindings.
+ * @param operation - Persisted operation identity of the caller.
+ * @returns The stranded owner and start time, or null when the marker is clear
+ * or names another operation.
+ * @example
+ * const stranded = await findStrandedWrite(env, "sync:[...]");
+ */
+export async function findStrandedWrite(
+  env: Env,
+  operation: string,
+): Promise<StrandedWrite | null> {
+  const row = decodeRow(
+    await env.DB.prepare(
+      `SELECT write_holder, write_started_at FROM public_input_revision
+       WHERE id=1 AND in_progress=1 AND write_operation=?1`,
+    )
+      .bind(operation)
+      .first(),
+    StrandedWriteSchema,
+  );
+  return row === null ? null : { holder: row.write_holder, startedAt: row.write_started_at };
 }
 
 /**
