@@ -1,6 +1,6 @@
 # AFL-MCP
 
-[![CI](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/ci.yml)
+[![Publish](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/jackemcpherson/AFL-MCP/actions/workflows/deploy.yml)
 
 MCP server for Australian football statistics covering AFL Men's, AFL Women's,
 VFL, and VFLW. Powered by Cloudflare Workers and D1, with cron-triggered sync
