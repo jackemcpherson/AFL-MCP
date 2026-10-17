@@ -42,9 +42,10 @@ export default defineConfig({
     },
     overrides: [
       {
-        // The Worker entry and MCP protocol module decode raw external input, and
-        // tests build deliberately invalid request bodies.
-        files: ["src/index.ts", "src/mcp/protocol.ts", "test/**"],
+        // The Worker entry and MCP protocol module decode raw external input,
+        // the error logger accepts any thrown value, and tests build
+        // deliberately invalid request bodies.
+        files: ["src/index.ts", "src/mcp/protocol.ts", "src/lib/errors.ts", "test/**"],
         rules: {
           "anti-slop/no-unknown-parameters": "off",
         },

@@ -16,6 +16,7 @@
  * Provider failures are isolated per match and persisted for daily retries.
  * After three failed retries, missing values retain an explicit diagnostic.
  */
+import { logError } from "../lib/errors";
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
@@ -128,9 +129,9 @@ export async function runWeatherStage(
   } catch (err) {
     // Provider failures are handled per match. A database failure can leave
     // partial state and must retain the caller's public write marker.
-    await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) =>
-      console.error("weather stage: failed to record sync_log row", logErr),
-    );
+    await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) => {
+      logError("weather_sync_log_failed", logErr);
+    });
     throw err;
   }
 }

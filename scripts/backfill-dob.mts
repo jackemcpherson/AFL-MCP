@@ -128,7 +128,7 @@ async function fetchFryziggFrame(): Promise<DataFrame> {
   console.log("Fetching fryzigg AFLM dataset (large download)...");
   const result = await runFitzroy(Fryzigg.use((fryzigg) => fryzigg.fetchPlayerStats("AFLM")));
   if (!result.success) {
-    console.error(`Failed to fetch fryzigg data: ${result.error}`);
+    console.error(`Failed to fetch fryzigg data: ${result.error.message}`);
     process.exit(1);
   }
   const nRows = result.data.columns[0]?.length ?? 0;

@@ -10,7 +10,7 @@
  * client did. The layer is built lazily on the first call, inside a request.
  */
 
-import { Cause, type Effect, Exit, Layer, ManagedRuntime } from "effect";
+import { Cause, type Effect, Exit, Layer, ManagedRuntime, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { FitzroyLive } from "fitzroy";
 
@@ -29,17 +29,32 @@ const runtime = ManagedRuntime.make(
   FitzroyLive.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, currentFetch))),
 );
 
+/**
+ * A fitzroy call ended in a defect rather than one of its tagged failures.
+ *
+ * The message is the defect's own message, or its string form, so
+ * `sync_log` rows read as they did before the wrapper existed.
+ *
+ * @example
+ * new FitzroyDefectError({ message: "cannot read rounds" });
+ */
+export class FitzroyDefectError extends Schema.TaggedError<FitzroyDefectError>()(
+  "FitzroyDefectError",
+  { message: Schema.String },
+) {}
+
 /** The settled outcome of one fitzroy call. */
-export type FitzroyOutcome<A> =
+export type FitzroyOutcome<A, E = Error> =
   | { readonly success: true; readonly data: A }
-  | { readonly success: false; readonly error: Error };
+  | { readonly success: false; readonly error: E | FitzroyDefectError };
 
 /**
  * Run a fitzroy Effect and settle it into a success or failure value.
  *
  * Expected failures arrive as fitzroy's tagged errors, which are `Error`
  * instances with the fitzroy 6 names and messages. An unexpected defect is
- * reported the same way rather than thrown.
+ * reported as a {@link FitzroyDefectError} rather than thrown, so Effect's
+ * error channel never leaves this module.
  *
  * @param effect - A fitzroy data call, such as `fetchMatches(query)`.
  * @returns The data, or the error that ended the call.
@@ -50,18 +65,22 @@ export type FitzroyOutcome<A> =
  * if (!result.success) throw result.error;
  * ```
  */
-export async function runFitzroy<A, E>(
+export async function runFitzroy<A, E extends Error>(
   effect: Effect.Effect<A, E, FitzroyServices>,
-): Promise<FitzroyOutcome<A>> {
+): Promise<FitzroyOutcome<A, E>> {
   const exit = await runtime.runPromiseExit(effect);
 
   if (Exit.isSuccess(exit)) return { success: true, data: exit.value };
 
-  const failure = Cause.squash(exit.cause);
+  const failure = Cause.findError(exit.cause);
+  if (Result.isSuccess(failure)) return { success: false, error: failure.success };
 
+  const defect = Cause.squash(exit.cause);
   return {
     success: false,
-    error: failure instanceof Error ? failure : new Error(String(failure)),
+    error: new FitzroyDefectError({
+      message: defect instanceof Error ? defect.message : String(defect),
+    }),
   };
 }
 
@@ -70,9 +89,9 @@ export async function runFitzroy<A, E>(
  *
  * @param effect - A fitzroy call whose failure should propagate as a throw.
  * @returns The data the call succeeded with.
- * @throws The fitzroy error that ended the call.
+ * @throws The fitzroy error that ended the call, or a {@link FitzroyDefectError}.
  */
-export async function runFitzroyOrThrow<A, E>(
+export async function runFitzroyOrThrow<A, E extends Error>(
   effect: Effect.Effect<A, E, FitzroyServices>,
 ): Promise<A> {
   const result = await runFitzroy(effect);

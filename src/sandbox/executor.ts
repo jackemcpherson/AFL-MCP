@@ -1,4 +1,20 @@
+import { Schema } from "effect";
 import type { Env } from "../types";
+
+/**
+ * Sandbox code ran past its wall-clock budget.
+ *
+ * @example
+ * new SandboxTimeoutError({ timeoutMs: 30_000 }).message; // "Execution timed out after 30s"
+ */
+export class SandboxTimeoutError extends Schema.TaggedError<SandboxTimeoutError>()(
+  "SandboxTimeoutError",
+  { timeoutMs: Schema.Number },
+) {
+  override get message(): string {
+    return `Execution timed out after ${this.timeoutMs / 1000}s`;
+  }
+}
 
 export interface ExecuteResult {
   result: unknown;
@@ -75,10 +91,7 @@ export async function executeCode(
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`Execution timed out after ${timeoutMs / 1000}s`)),
-        timeoutMs,
-      );
+      timeoutHandle = setTimeout(() => reject(new SandboxTimeoutError({ timeoutMs })), timeoutMs);
     });
 
     try {

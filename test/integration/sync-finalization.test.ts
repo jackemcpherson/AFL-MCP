@@ -1,5 +1,5 @@
-import { Predicate } from "effect";
 import { env } from "cloudflare:test";
+import { Predicate } from "effect";
 import { expect, it, vi } from "vitest";
 import { sync } from "../../src/sync/sync";
 
@@ -59,5 +59,41 @@ it("drains fixture PAV changes on a nonhour tick before clearing the marker", as
     ).toBe(0);
   } finally {
     vi.useRealTimers();
+  }
+});
+
+it("logs a failed sync_log purge without its message and still finishes", async () => {
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const DB = new Proxy(env.DB, {
+    get(target, property) {
+      if (property === "prepare")
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.startsWith("DELETE FROM sync_log")) return statement;
+          return new Proxy(statement, {
+            get(inner, key) {
+              if (key === "run")
+                return async () => {
+                  throw new Error("raw-d1-purge-secret");
+                };
+              const value = Reflect.get(inner, key);
+              return Predicate.isFunction(value) ? value.bind(inner) : value;
+            },
+          });
+        };
+      const value = Reflect.get(target, property);
+      return Predicate.isFunction(value) ? value.bind(target) : value;
+    },
+  });
+  try {
+    await expect(sync({ ...env, DB }, [], { skipShouldRunNow: true })).resolves.toEqual([]);
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(logged).toContain("sync_log_purge_failed");
+    expect(logged).not.toContain("raw-d1-purge-secret");
+    expect(
+      await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+    ).toBe(0);
+  } finally {
+    errorSpy.mockRestore();
   }
 });

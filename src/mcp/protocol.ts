@@ -2,8 +2,10 @@ import { Predicate, Result } from "effect";
 import pkg from "../../package.json";
 import { COMPETITION_CODES } from "../lib/competitions";
 import { describeIssue, firstIssue } from "../lib/decode";
+import { logError } from "../lib/errors";
 import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
+import { McpRequestError } from "./errors";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
 import {
@@ -194,7 +196,7 @@ async function handleJsonRpc(
     case "tools/call": {
       const call = decodeToolCallParams(params ?? {});
       if (Result.isFailure(call)) {
-        return jsonRpcError(id, -32602, "Missing tool name");
+        throw new McpRequestError({ code: -32602, message: "Missing tool name" });
       }
       const { name } = call.success;
       const args = call.success.arguments ?? {};
@@ -206,7 +208,7 @@ async function handleJsonRpc(
       return jsonRpcResponse(id, {});
 
     default:
-      return jsonRpcError(id, -32601, `Method not found: ${method}`);
+      throw new McpRequestError({ code: -32601, message: `Method not found: ${method}` });
   }
 }
 
@@ -315,8 +317,12 @@ export async function handleMcpRequest(
   try {
     response = await handleJsonRpc(rpcRequest, env, ctx, deps);
   } catch (err) {
-    console.error("mcp handler error:", err);
-    response = jsonRpcError(rpcRequest.id, -32603, "Internal error");
+    if (err instanceof McpRequestError) {
+      response = jsonRpcError(rpcRequest.id, err.code, err.message);
+    } else {
+      logError("mcp_handler_error", err);
+      response = jsonRpcError(rpcRequest.id, -32603, "Internal error");
+    }
   }
 
   return Response.json(response, {

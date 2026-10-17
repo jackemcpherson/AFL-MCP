@@ -48,7 +48,9 @@ export async function repairPav(env: Env, request: PavRepairRequest) {
   try {
     const season = await resolveStoredSeason(env, request.competition, request.season);
     if (season.year < MIN_PAV_YEAR_BY_COMPETITION[request.competition])
-      throw new OperationConflictError("PAV is unsupported for this competition-season");
+      throw new OperationConflictError({
+        message: "PAV is unsupported for this competition-season",
+      });
     const revision = await env.DB.prepare(
       "SELECT revision,in_progress,write_operation FROM public_input_revision WHERE id=1",
     ).first<{ revision: number; in_progress: number; write_operation: string | null }>();
@@ -62,16 +64,20 @@ export async function repairPav(env: Env, request: PavRepairRequest) {
     ).join("");
     if (request.dryRun) {
       if (revision.in_progress)
-        throw new OperationConflictError("Recover the active public write before previewing PAV");
+        throw new OperationConflictError({
+          message: "Recover the active public write before previewing PAV",
+        });
       return { busy: false, dryRun: true, ...preview, manifestDigest: digest };
     }
     if (request.resume) {
       if (!request.manifestDigest)
-        throw new OperationConflictError("Recovery requires the approved preview digest");
+        throw new OperationConflictError({
+          message: "Recovery requires the approved preview digest",
+        });
       await resumePublicInputWrite(env, holder, `pav:${season.id}:${request.manifestDigest}`);
     } else {
       if (request.manifestDigest !== digest)
-        throw new OperationConflictError("PAV preview missing or stale");
+        throw new OperationConflictError({ message: "PAV preview missing or stale" });
       await beginPublicInputWrite(env, holder, new Date(), `pav:${season.id}:${digest}`);
     }
     marked = true;

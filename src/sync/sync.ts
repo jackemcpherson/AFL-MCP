@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import type { CompetitionCode, SeasonSelector } from "fitzroy";
 import {
   fetchLineup,
@@ -13,6 +14,7 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { seasonKey } from "../db/seasons";
+import { logError } from "../lib/errors";
 import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
@@ -59,6 +61,18 @@ export interface BackfillResult {
   readonly lineups: number;
   readonly error?: string;
 }
+
+/**
+ * The provider's season data cannot be imported as delivered.
+ *
+ * The message is application-written and lands in `sync_log`.
+ *
+ * @example
+ * throw new SyncSourceError({ message: "Provider season inventory contains duplicate match IDs" });
+ */
+export class SyncSourceError extends Schema.TaggedError<SyncSourceError>()("SyncSourceError", {
+  message: Schema.String,
+}) {}
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {
@@ -159,9 +173,12 @@ export async function sync(
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
     // debugging horizon while keeping the table tiny.
+    // The purge is best-effort, but a failure must stay visible.
     await env.DB.prepare("DELETE FROM sync_log WHERE timestamp < datetime('now', '-90 days')")
       .run()
-      .catch(() => undefined);
+      .catch((error) => {
+        logError("sync_log_purge_failed", error);
+      });
 
     // Fixture score/status changes also invalidate PAV on five-minute ticks.
     await rebuildQueuedStatsPav(writer, undefined, holder);
@@ -206,7 +223,9 @@ async function syncCompetition(
     if (!discovered.success) throw discovered.error;
     const identity = discovered.data.find((entry) => entry.seasonKey === String(season));
     if (!identity)
-      throw new Error(`No exact ${competition} season ${season}; use season discovery`);
+      throw new SyncSourceError({
+        message: `No exact ${competition} season ${season}; use season discovery`,
+      });
     const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
     if (!matchResult.success) {
       const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
@@ -237,7 +256,9 @@ async function syncCompetition(
     ]);
 
     if (new Set(allMatches.map((match) => match.matchId)).size !== allMatches.length) {
-      throw new Error("Provider season inventory contains duplicate match IDs");
+      throw new SyncSourceError({
+        message: "Provider season inventory contains duplicate match IDs",
+      });
     }
     await env.DB.prepare(`INSERT INTO season_provider_inventory(season_id, provider, observed_at, matches_json)
       VALUES (?1, 'afl-api', ?2, ?3) ON CONFLICT(season_id, provider) DO UPDATE SET

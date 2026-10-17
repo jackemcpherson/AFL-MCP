@@ -508,7 +508,10 @@ export async function refreshActiveCoaches(env: Env, now = new Date()): Promise<
   }
 }
 
-class CoachingSourceError extends Error {}
+/** A coaching provider fetch failed before any database mutation. */
+class CoachingSourceError extends Schema.TaggedError<CoachingSourceError>()("CoachingSourceError", {
+  message: Schema.String,
+}) {}
 
 async function runCoachBatch(
   env: Env,
@@ -532,7 +535,7 @@ async function runCoachBatch(
   );
   if (!fetched.success) {
     if (!dryRun) await recordSourceFailure(env, season, source, now);
-    throw new CoachingSourceError("coaching source fetch failed");
+    throw new CoachingSourceError({ message: "coaching source fetch failed" });
   }
   const previous = progress?.cursor ? decodeStoredCoachAssignments(progress.assignments_json) : [];
   const completed = new Set([

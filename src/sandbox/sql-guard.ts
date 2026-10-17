@@ -10,18 +10,25 @@
  * the statement once comments and string literals are stripped.
  */
 
+import { Schema } from "effect";
+
 const ALLOWED_LEADING_KEYWORDS = new Set(["SELECT", "WITH", "EXPLAIN"]);
 
 const FORBIDDEN_KEYWORDS =
   /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
 
-/** Error thrown when a statement fails read-only validation. */
-export class ReadOnlySqlError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReadOnlySqlError";
-  }
-}
+/**
+ * Thrown when a statement fails read-only validation.
+ *
+ * The message is part of the public `code` tool contract and reaches the
+ * caller word for word through the sandbox RPC boundary.
+ *
+ * @example
+ * throw new ReadOnlySqlError({ message: "Read-only access: ..." });
+ */
+export class ReadOnlySqlError extends Schema.TaggedError<ReadOnlySqlError>()("ReadOnlySqlError", {
+  message: Schema.String,
+}) {}
 
 /**
  * Removes SQL comments (line and block) and string literals
@@ -91,14 +98,14 @@ export function assertReadOnlySql(sql: string): void {
   const cleaned = stripCommentsAndStrings(sql).trim();
   const leading = cleaned.match(/^[A-Za-z_]+/)?.[0]?.toUpperCase() ?? "";
   if (!ALLOWED_LEADING_KEYWORDS.has(leading)) {
-    throw new ReadOnlySqlError(
-      "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
-    );
+    throw new ReadOnlySqlError({
+      message: "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
+    });
   }
   const forbidden = cleaned.match(FORBIDDEN_KEYWORDS);
   if (forbidden) {
-    throw new ReadOnlySqlError(
-      `Read-only access: ${forbidden[0].toUpperCase()} statements are not permitted.`,
-    );
+    throw new ReadOnlySqlError({
+      message: `Read-only access: ${forbidden[0].toUpperCase()} statements are not permitted.`,
+    });
   }
 }

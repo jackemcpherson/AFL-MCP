@@ -65,7 +65,8 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
       WHERE m.id=?1 AND m.season_id=?2`)
         .bind(request.matchId, season.id)
         .first();
-    if (!context) throw new OperationConflictError("No fixture in this exact season scope");
+    if (!context)
+      throw new OperationConflictError({ message: "No fixture in this exact season scope" });
     const prior =
       !request.dryRun && request.manifestDigest
         ? await env.DB.prepare(
@@ -80,9 +81,9 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
         JSON.stringify(recorded.context) !== JSON.stringify(context) ||
         JSON.stringify(recorded.evidence) !== JSON.stringify(request.evidence)
       )
-        throw new OperationConflictError(
-          "Weather recovery differs from the reviewed fixture context or evidence",
-        );
+        throw new OperationConflictError({
+          message: "Weather recovery differs from the reviewed fixture context or evidence",
+        });
       if (prior.status === "complete") {
         const operation = `weather:${request.manifestDigest}`;
         const marker = await env.DB.prepare(
@@ -90,7 +91,9 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
         ).first<{ in_progress: number; write_operation: string | null }>();
         if (marker?.in_progress === 1 && marker.write_operation === operation) {
           if (!request.resume)
-            throw new OperationConflictError("Weather finalisation requires explicit resume");
+            throw new OperationConflictError({
+              message: "Weather finalisation requires explicit resume",
+            });
           await resumePublicInputWrite(env, holder, operation);
           await finishPublicInputWrite(env, holder);
         }
@@ -102,7 +105,9 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
         };
       }
       if (!request.resume)
-        throw new OperationConflictError("Interrupted weather refresh requires explicit resume");
+        throw new OperationConflictError({
+          message: "Interrupted weather refresh requires explicit resume",
+        });
     }
     const snapshots = await env.DB.batch([
       env.DB.prepare("SELECT * FROM match_weather WHERE match_id=?1 ORDER BY kind").bind(
@@ -131,7 +136,7 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
         ).join("");
     if (request.dryRun) return { busy: false, dryRun: true, manifestDigest: digest, manifest };
     if (!digest || digest !== request.manifestDigest)
-      throw new OperationConflictError("Weather refresh preview missing or stale");
+      throw new OperationConflictError({ message: "Weather refresh preview missing or stale" });
     if (
       context["status"] !== "Cancelled" &&
       (!context["kickoff_at"] ||
@@ -139,9 +144,9 @@ export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
         context["latitude"] == null ||
         context["longitude"] == null)
     )
-      throw new OperationConflictError(
-        "Verified kickoff and canonical venue coordinates are required",
-      );
+      throw new OperationConflictError({
+        message: "Verified kickoff and canonical venue coordinates are required",
+      });
     const operation = `weather:${digest}`;
     if (prior || request.resume) await resumePublicInputWrite(env, holder, operation);
     else await beginPublicInputWrite(env, holder, new Date(), operation);

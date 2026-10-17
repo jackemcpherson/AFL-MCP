@@ -11,6 +11,7 @@ import { decodeWeatherRefreshRequest, refreshWeather } from "./admin/weather-ref
 import { decodeWeatherRetryRequest, retryWeather } from "./admin/weather-retry";
 import { SeasonSelectionError, seasonKey } from "./db/seasons";
 import { COMPETITION_CODES } from "./lib/competitions";
+import { logError } from "./lib/errors";
 import { toSeasonSelector } from "./lib/schemas";
 import { handleMcpRequest } from "./mcp/protocol";
 import {
@@ -124,34 +125,7 @@ export default {
       try {
         return await handleAdmin(path, request, env);
       } catch (error) {
-        if (error instanceof SeasonSelectionError)
-          return Response.json(
-            {
-              error: error.message,
-              code: error.code,
-              validSelectors: error.validSelectors,
-            },
-            { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
-          );
-        if (error instanceof OperationConflictError)
-          return Response.json({ error: error.message, code: error.code }, { status: 409 });
-        // Never log upstream error messages, request bodies or credential-bearing URLs.
-        const frames =
-          error instanceof Error
-            ? error.stack
-                ?.split("\n")
-                .slice(1)
-                .flatMap((line) => line.match(/src\/[a-zA-Z0-9_./-]+:\d+:\d+/g) ?? [])
-            : [];
-        console.error(
-          JSON.stringify({
-            event: "admin_route_error",
-            path,
-            errorType: error instanceof TypeError ? "TypeError" : "Error",
-            frames,
-          }),
-        );
-        return Response.json({ error: "internal error" }, { status: 500 });
+        return adminErrorResponse(path, error);
       }
     }
 
@@ -181,7 +155,7 @@ export default {
           if (now.getUTCMinutes() === 0) await auditNextSeason(env, now);
         })
         .catch(async (err) => {
-          console.error("sync fatal:", err);
+          logError("sync_fatal", err);
           try {
             await env.DB.prepare(
               "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:fatal', 0, ?)",
@@ -189,12 +163,35 @@ export default {
               .bind(new Date().toISOString(), err instanceof Error ? err.message : String(err))
               .run();
           } catch (logErr) {
-            console.error("sync fatal logging failed:", logErr);
+            logError("sync_fatal_log_failed", logErr);
           }
         }),
     );
   },
 };
+
+/**
+ * Map a failure thrown by an admin route to its HTTP response.
+ *
+ * Tagged selection and conflict errors carry application-written messages
+ * and become 4xx bodies. Anything else is logged without its message and
+ * becomes a generic 500.
+ *
+ * @param path - Admin route path, recorded in the failure log.
+ * @param error - The thrown value.
+ * @returns The error response.
+ */
+function adminErrorResponse(path: string, error: unknown): Response {
+  if (error instanceof SeasonSelectionError)
+    return Response.json(
+      { error: error.message, code: error.code, validSelectors: error.validSelectors },
+      { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
+    );
+  if (error instanceof OperationConflictError)
+    return Response.json({ error: error.message, code: error.code }, { status: 409 });
+  logError("admin_route_error", error, { path });
+  return Response.json({ error: "internal error" }, { status: 500 });
+}
 
 /**
  * Authorises an admin request via `Authorization: Bearer <ADMIN_TOKEN>`.

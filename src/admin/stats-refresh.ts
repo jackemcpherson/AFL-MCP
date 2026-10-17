@@ -58,7 +58,9 @@ export async function operateStatsRefresh(env: Env, request: StatsRefreshRequest
         .bind(season.id, request.matchId ?? null)
         .all();
     if (!matches.results.length)
-      throw new OperationConflictError("No eligible completed matches in requested scope");
+      throw new OperationConflictError({
+        message: "No eligible completed matches in requested scope",
+      });
     const payload = JSON.stringify({ season, matches: matches.results });
     const digest = Array.from(
       new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))),
@@ -81,15 +83,19 @@ export async function operateStatsRefresh(env: Env, request: StatsRefreshRequest
       operation &&
       (operation.season_id !== season.id || operation.match_id !== (request.matchId ?? null))
     ) {
-      throw new OperationConflictError("Operation ID already belongs to a different scope");
+      throw new OperationConflictError({
+        message: "Operation ID already belongs to a different scope",
+      });
     }
     if (!operation && request.manifestDigest !== digest)
-      throw new OperationConflictError("Preview digest missing or stale; preview again");
+      throw new OperationConflictError({
+        message: "Preview digest missing or stale; preview again",
+      });
     if (request.resume) {
       if ((operation?.manifest_digest ?? digest) !== request.manifestDigest)
-        throw new OperationConflictError(
-          "Recovery requires the existing operation and its approved digest",
-        );
+        throw new OperationConflictError({
+          message: "Recovery requires the existing operation and its approved digest",
+        });
       await resumePublicInputWrite(env, holder, `stats:${request.operationId}`);
     } else await beginPublicInputWrite(env, holder, new Date(), `stats:${request.operationId}`);
     marked = true;

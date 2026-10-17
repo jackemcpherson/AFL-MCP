@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import { assertReadOnlySql, ReadOnlySqlError } from "../src/sandbox/sql-guard";
 
@@ -68,5 +69,20 @@ describe("assertReadOnlySql", () => {
   it("rejects empty and non-SQL input", () => {
     expect(() => assertReadOnlySql("")).toThrow(ReadOnlySqlError);
     expect(() => assertReadOnlySql("-- only a comment")).toThrow(ReadOnlySqlError);
+  });
+
+  it("throws a tagged Error carrying the guard message", () => {
+    let caught: unknown;
+    try {
+      assertReadOnlySql("DROP TABLE matches");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(Predicate.isTagged(caught, "ReadOnlySqlError")).toBe(true);
+    expect(caught).toHaveProperty(
+      "message",
+      "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
+    );
   });
 });
