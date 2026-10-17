@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Execution error (1ms): SyntaxError: Unexpected token ':'. The sandbox runs JavaScript. Remove type annotations."
+          "text": "Execution error (1ms): SyntaxError: Unexpected token ':' (line 1, column 13). The sandbox runs JavaScript. Remove type annotations."
         }
       ],
       "isError": true

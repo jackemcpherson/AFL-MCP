@@ -95,6 +95,9 @@ the repository to TypeScript standard v4.
 - A `code` call that times out returns the console lines written before
   the timeout. The sandbox stops waiting on the code just inside the
   30-second budget, and the Worker keeps its own timeout as a backstop.
+- A `code` syntax error names the line and column in the submitted code,
+  such as `SyntaxError: Unexpected token ':' (line 1, column 13)`. The
+  position is left out when it falls outside the submitted code.
 
 ### Fixed in 5.0.0
 

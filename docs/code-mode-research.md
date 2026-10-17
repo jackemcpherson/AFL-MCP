@@ -327,6 +327,14 @@ official server adds a language hint. AFL-MCP can add one cheaply: when a
 `SyntaxError` mentions `:`, `interface` or `<`, append "The sandbox runs
 JavaScript. Remove type annotations."
 
+Status: closed in v5.0.0. The loader reports a parse failure with its line
+and column in the wrapped module, such as `at agent.js:3:16`. AFL-MCP maps
+that position back to the submitted code and appends it, such as
+`(line 1, column 13)`. It leaves the position out when it falls in the
+wrapper, or when the code uses line breaks other than a line feed. The rest
+of the message keeps the first-line, 500-character rule. A syntax error in
+code that looks like TypeScript also carries the JavaScript hint.
+
 ### 7. Smaller Structural Differences
 
 These differences carry little user-facing impact:

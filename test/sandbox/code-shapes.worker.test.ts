@@ -109,3 +109,38 @@ describe("code tool TypeScript errors", () => {
     expect(text(body)).not.toContain(HINT);
   });
 });
+
+describe("code tool syntax error position", () => {
+  /** The error text after the elapsed-time prefix. */
+  function errorText(body: McpToolResponse): string {
+    return text(body).replace(/^Execution error \(\d+ms\): /, "");
+  }
+
+  it.each([
+    ["the first line", "const f = (x: number) => x\nreturn f(1)", 1, 13],
+    ["a later line", "const a = 1\nconst f = (x: number) => x\nreturn f(a)", 2, 13],
+    [
+      "a fenced submission",
+      "```ts\nconst a = 1\nconst f = (x: number) => x\nreturn f(a)\n```",
+      3,
+      13,
+    ],
+    ["a lone async arrow", "async () => {\n  const f = (x: number) => x\n  return f(1)\n}", 2, 15],
+  ])("gives the line and column in the submission for %s", async (_shape, code, line, column) => {
+    const body = await callCodeTool(code);
+    expect(errorText(body)).toBe(
+      `SyntaxError: Unexpected token ':' (line ${line}, column ${column}). ${HINT}`,
+    );
+  });
+
+  it("omits the position when the submission uses other line breaks", async () => {
+    const body = await callCodeTool("const a = 1\r\nconst f = (x: number) => x\r\nreturn f(a)");
+    expect(errorText(body)).toBe(`SyntaxError: Unexpected token ':'. ${HINT}`);
+  });
+
+  it("omits a position that falls outside the submission", async () => {
+    const body = await callCodeTool("return (1");
+    expect(errorText(body)).toMatch(/^SyntaxError: /);
+    expect(errorText(body)).not.toContain("line");
+  });
+});

@@ -2,7 +2,7 @@ import { Predicate, Schema } from "effect";
 import type { Env } from "../types";
 import type { TaggedErrorBase } from "../lib/errors";
 import { boundConsoleLines, CONSOLE_CAPTURE_SOURCE } from "./console";
-import { normalizeCode } from "./normalize";
+import { normalizeSubmission } from "./normalize";
 import { isJsonObject, type JsonValue, truncateResult } from "./truncate";
 
 const SandboxTimeoutErrorBase: TaggedErrorBase<
@@ -90,14 +90,8 @@ export async function executeCode(
   timeoutMs: number = EXECUTION_TIMEOUT_MS,
 ): Promise<ExecuteResult> {
   const start = Date.now();
-
-  try {
-    // SAFETY: Dynamic Worker `ctx.exports` has no public type definitions. `DbProxy` is
-    // exported from `src/index.ts`, so the runtime always provides it here.
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
-
-    const wrappedCode = `
+  const submission = normalizeSubmission(code);
+  const head = `
       export default {
         async fetch(request, env) {
           const db = {
@@ -118,7 +112,8 @@ ${CONSOLE_CAPTURE_SOURCE}
             __timer = setTimeout(() => resolve(__timeoutMark), ${sandboxBudgetMs(timeoutMs)})
           })
           try {
-            const __result = await Promise.race([(async () => { ${normalizeCode(code)} })(), __timeout])
+            const __result = await Promise.race([(async () => { `;
+  const tail = ` })(), __timeout])
             if (__result === __timeoutMark) {
               return new Response(JSON.stringify({ timedOut: true, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
             }
@@ -135,6 +130,20 @@ ${CONSOLE_CAPTURE_SOURCE}
         }
       }
     `;
+  const wrappedCode = `${head}${submission.body}${tail}`;
+  const span: SubmissionSpan = {
+    module: wrappedCode,
+    moduleStart: head.length + submission.bodyStart,
+    code,
+    codeStart: submission.sourceStart,
+    length: submission.length,
+  };
+
+  try {
+    // SAFETY: Dynamic Worker `ctx.exports` has no public type definitions. `DbProxy` is
+    // exported from `src/index.ts`, so the runtime always provides it here.
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
 
     const worker = env.LOADER.load({
       compatibilityDate: "2026-04-01",
@@ -169,8 +178,73 @@ ${CONSOLE_CAPTURE_SOURCE}
       }
     }
   } catch (err) {
-    return { ...failure(err, []), execution_time_ms: Date.now() - start };
+    return {
+      ...failure(err, [], positionInSubmission(err, span)),
+      execution_time_ms: Date.now() - start,
+    };
   }
+}
+
+/** Where the submitted text sits in the loaded module and in the submission. */
+interface SubmissionSpan {
+  readonly module: string;
+  readonly moduleStart: number;
+  readonly code: string;
+  readonly codeStart: number;
+  readonly length: number;
+}
+
+/** The location line of a module that failed to parse, such as `at agent.js:3:16`. */
+const START_FAILURE_LOCATION =
+  /^Failed to start Worker:\s*\n\s*Uncaught [^\n]*\n\s*at agent\.js:(\d+):(\d+)/;
+
+/** Line breaks other than `\n`, which the parser counts but this mapping does not. */
+const OTHER_LINE_BREAK = /[\r\u2028\u2029]/;
+
+/**
+ * Locate a parse failure in the submitted code. The loader reports a
+ * 1-based line and a 0-based column in the wrapped module, and the span
+ * maps that back to the submission. A module with other line breaks gets
+ * no position rather than a wrong one.
+ *
+ * @param cause - The thrown value.
+ * @param span - Where the submitted text sits.
+ * @returns `line L, column C` in the submission, or `undefined` when the
+ *   error carries no location or points outside the submitted text.
+ */
+function positionInSubmission(cause: unknown, span: SubmissionSpan): string | undefined {
+  if (!(cause instanceof Error)) return undefined;
+  const match = START_FAILURE_LOCATION.exec(cause.message);
+  if (match === null || OTHER_LINE_BREAK.test(span.module)) return undefined;
+  const offset = offsetAt(span.module, Number(match[1]), Number(match[2]));
+  if (offset === undefined) return undefined;
+  const relative = offset - span.moduleStart;
+  if (relative < 0 || relative >= span.length) return undefined;
+  const before = span.code.slice(0, span.codeStart + relative);
+  const line = before.split("\n").length;
+  const column = before.length - before.lastIndexOf("\n");
+  return `line ${line}, column ${column}`;
+}
+
+/**
+ * The character offset of a 1-based line and a 0-based column, as the
+ * loader reports them.
+ *
+ * @param text - The text the position refers to.
+ * @param line - 1-based line number.
+ * @param column - 0-based column number.
+ * @returns The offset, or `undefined` when the position is not in `text`.
+ */
+function offsetAt(text: string, line: number, column: number): number | undefined {
+  let lineStart = 0;
+  for (let current = 1; current < line; current++) {
+    const newline = text.indexOf("\n", lineStart);
+    if (newline === -1) return undefined;
+    lineStart = newline + 1;
+  }
+  const lineEnd = text.indexOf("\n", lineStart);
+  const lineLength = (lineEnd === -1 ? text.length : lineEnd) - lineStart;
+  return column < lineLength ? lineStart + column : undefined;
 }
 
 /**
@@ -223,13 +297,13 @@ function parseJson(text: string): JsonValue {
  *
  * @param cause - The thrown value.
  * @param logs - Console lines written before the failure.
+ * @param position - Where in the submission a syntax error sits, when known.
  * @returns The sanitised message, the error class and the lines.
  */
-function failure(cause: unknown, logs: readonly string[]): RunOutcome {
-  return withLogs(
-    { result: null, error: sanitizeErrorMessage(cause), errorClass: errorClassOf(cause) },
-    logs,
-  );
+function failure(cause: unknown, logs: readonly string[], position?: string): RunOutcome {
+  const message = sanitizeErrorMessage(cause);
+  const error = position === undefined ? message : `${message} (${position})`;
+  return withLogs({ result: null, error, errorClass: errorClassOf(cause) }, logs);
 }
 
 function withLogs(outcome: RunOutcome, logs: readonly string[]): RunOutcome {

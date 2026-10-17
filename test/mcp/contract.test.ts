@@ -273,7 +273,7 @@ describe("MCP contract: code tool", () => {
   it("adds the JavaScript hint to a syntax error in TypeScript code", async () => {
     const deps = withExecutor({
       result: null,
-      error: "SyntaxError: Unexpected token ':'",
+      error: "SyntaxError: Unexpected token ':' (line 1, column 13)",
       errorClass: "SyntaxError",
       execution_time_ms: 1,
     });

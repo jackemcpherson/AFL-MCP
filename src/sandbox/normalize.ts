@@ -1,5 +1,5 @@
 /** A whole submission wrapped in one Markdown code fence, with an optional language label. */
-const FENCE = /^\s*```[\w-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/;
+const FENCE = /^\s*```[\w-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/d;
 
 /**
  * The start of a lone async function expression: an arrow with no
@@ -8,6 +8,22 @@ const FENCE = /^\s*```[\w-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/;
  * submission that is one function to call.
  */
 const ASYNC_FUNCTION_EXPRESSION = /^async\s*(?:\(\s*\)\s*=>|function\s*\(\s*\))/;
+
+/**
+ * A submission turned into the function body the sandbox runs, and where
+ * the submission's own text sits in that body. The text is copied
+ * verbatim, so a position inside it maps back to the submission.
+ */
+export interface NormalizedCode {
+  /** Function body for the sandbox wrapper. */
+  readonly body: string;
+  /** Offset in `body` where the submission's text starts. */
+  readonly bodyStart: number;
+  /** Offset in the submission where that text starts. */
+  readonly sourceStart: number;
+  /** Length of that text. */
+  readonly length: number;
+}
 
 /**
  * Turn common code shapes into the function body the sandbox runs.
@@ -23,13 +39,38 @@ const ASYNC_FUNCTION_EXPRESSION = /^async\s*(?:\(\s*\)\s*=>|function\s*\(\s*\))/
  * normalizeCode("```js\nreturn 1\n```"); // "return 1"
  */
 export function normalizeCode(code: string): string {
+  return normalizeSubmission(code).body;
+}
+
+/**
+ * {@link normalizeCode}, plus where the submission's text sits in the body.
+ *
+ * @param code - Code as submitted to the `code` tool.
+ * @returns The function body and the span of submitted text inside it.
+ * @example
+ * normalizeSubmission("```js\nreturn 1\n```");
+ * // { body: "return 1", bodyStart: 0, sourceStart: 6, length: 8 }
+ */
+export function normalizeSubmission(code: string): NormalizedCode {
   const fenced = FENCE.exec(code);
-  const body = (fenced?.[1] ?? code).trim();
+  const inner = fenced?.[1] ?? code;
+  const innerStart = fenced?.indices?.[1]?.[0] ?? 0;
+  const body = inner.trim();
+  const sourceStart = innerStart + inner.length - inner.trimStart().length;
   if (!ASYNC_FUNCTION_EXPRESSION.test(body)) {
-    return fenced === null ? code : body;
+    return fenced === null
+      ? { body: code, bodyStart: 0, sourceStart: 0, length: code.length }
+      : { body, bodyStart: 0, sourceStart, length: body.length };
   }
   // Newlines keep a trailing line comment from swallowing the call.
-  return `return await (\n${body.replace(/;\s*$/, "")}\n)();`;
+  const prefix = "return await (\n";
+  const call = body.replace(/;\s*$/, "");
+  return {
+    body: `${prefix}${call}\n)();`,
+    bodyStart: prefix.length,
+    sourceStart,
+    length: call.length,
+  };
 }
 
 /**
