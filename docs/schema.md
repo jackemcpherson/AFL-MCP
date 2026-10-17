@@ -106,6 +106,11 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   `ladder` example, can differ from the official one. In AFLM 2015 Adelaide
   and Geelong each received 2 premiership points for their cancelled match.
   In AFLM 2013 Essendon kept its points but was officially ranked 9th.
+- Quarter columns hold the four regulation quarters. Extra-time periods are
+  not stored, so an extra-time match has quarters that sum short of its final
+  score. Match 409 (AFLM 2017 Port Adelaide v West Coast) is one.
+  `v_integrity_quarter_scores` lists such matches. They are correct data, not
+  scoring errors.
 - Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy `weather_temp_c` / `weather_type` columns.
   These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
   Use `match_weather` for all weather analysis.
