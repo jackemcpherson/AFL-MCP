@@ -11,6 +11,7 @@ interface WorkerLoader {
   };
 }
 
+/** Bindings, vars and secrets the Worker receives. */
 export interface Env {
   DB: D1Database;
   /** GitOps rollout gate: pause scheduled writes while compatible readers deploy. */

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { resolveStoredSeason } from "../../db/seasons";
 import { COMPETITION_CODES, type CompetitionCode } from "../../lib/competitions";
 import { batchRow } from "../../lib/decode";
-import { statFieldCapabilities } from "../../sync/stat-capabilities";
+import { type StatFieldCapabilities, statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
 /** Describes the product's expected availability for a field and season range. */
@@ -22,9 +22,31 @@ export const COVERAGE_COMPETITIONS: readonly CompetitionCode[] = COMPETITION_COD
 /** Supported competition code for a coverage request. */
 export type CoverageCompetition = CompetitionCode;
 
-type TableName = keyof typeof ANALYTICS_COLUMNS;
+/** An analytics table whose columns the coverage contract describes. */
+export type TableName =
+  | "competitions"
+  | "player_provider_ids"
+  | "player_id_redirects"
+  | "seasons"
+  | "season_provider_ids"
+  | "teams"
+  | "venues"
+  | "players"
+  | "coaches"
+  | "coach_external_ids"
+  | "coach_external_match_ids"
+  | "coach_observations"
+  | "match_coaches"
+  | "public_input_revision"
+  | "matches"
+  | "player_match_stats"
+  | "player_season_pav"
+  | "match_lineups"
+  | "match_weather"
+  | "match_predictions";
 
-interface CoverageTableExpectation {
+/** Expected availability of one table, with optional per-column deviations. */
+export interface CoverageTableExpectation {
   readonly range: string;
   readonly expected: CoverageExpectation;
   readonly source: readonly string[];
@@ -159,7 +181,7 @@ const STAT_COLUMNS = [
 ] as const;
 
 /** Analytics tables and real columns materialized into the coverage response. */
-export const ANALYTICS_COLUMNS = {
+export const ANALYTICS_COLUMNS: Readonly<Record<TableName, readonly string[]>> = {
   competitions: ["id", "code", "name"],
   player_provider_ids: ["provider", "provider_id", "player_id", "evidence_json"],
   player_id_redirects: ["retired_id", "canonical_id", "manifest_digest"],
@@ -259,7 +281,7 @@ export const ANALYTICS_COLUMNS = {
     "generated_at",
     "tipper_run_id",
   ],
-} as const;
+};
 
 const CORE = {
   range: "all",
@@ -382,7 +404,9 @@ const VFLW_STAT_OVERRIDES = {
 } as const satisfies Record<string, CoverageExpectation>;
 
 /** Canonical expectation manifest; exact ranges and prose are generated from this value. */
-export const COVERAGE_EXPECTATIONS = {
+export const COVERAGE_EXPECTATIONS: Readonly<
+  Record<CoverageCompetition, Readonly<Record<TableName, CoverageTableExpectation>>>
+> = {
   AFLM: {
     ...COACHING_TABLES,
     competitions: CORE,
@@ -564,7 +588,7 @@ export const COVERAGE_EXPECTATIONS = {
     match_weather: { ...MATCH_WEATHER_BASE, range: "2021..current" },
     match_predictions: MATCH_PREDICTIONS_ABSENT,
   },
-} as const satisfies Record<CoverageCompetition, Record<TableName, CoverageTableExpectation>>;
+};
 
 function legacyAvailability(spec: CoverageTableExpectation): boolean | string {
   if (spec.expected === "absent" || spec.expected === "not-applicable") return false;
@@ -572,9 +596,19 @@ function legacyAvailability(spec: CoverageTableExpectation): boolean | string {
   return spec.range === "all" ? true : spec.range.replace("..current", "+");
 }
 
+/** Deprecated per-competition availability summary kept for older clients. */
+export interface LegacyCompetitionCoverage {
+  readonly matches: boolean;
+  readonly stats: boolean;
+  readonly lineups: boolean | string;
+  readonly pav: boolean | string;
+}
+
 /** Generate the deprecated competition summary from the canonical manifest. */
-export function legacyCompetitionCoverage(competition: CoverageCompetition) {
-  const manifest: Record<TableName, CoverageTableExpectation> = COVERAGE_EXPECTATIONS[competition];
+export function legacyCompetitionCoverage(
+  competition: CoverageCompetition,
+): LegacyCompetitionCoverage {
+  const manifest = COVERAGE_EXPECTATIONS[competition];
   return {
     matches: manifest.matches.expected !== "absent",
     stats: manifest.player_match_stats.expected !== "absent",
@@ -598,7 +632,8 @@ export interface CoverageOptions {
   readonly season?: number | string | undefined;
 }
 
-interface RowObservation {
+/** Non-null counts for one column across a season's rows. */
+export interface RowObservation {
   readonly unit: "rows";
   readonly rows: number;
   readonly non_null: number;
@@ -606,13 +641,15 @@ interface RowObservation {
   readonly ratio: number | null;
 }
 
-interface TableRowsObservation {
+/** Row counts for a table whose rows carry known or unknown totals. */
+export interface TableRowsObservation {
   readonly known_totals: number;
   readonly unknown_totals: number;
   readonly unit: "table_rows";
   readonly rows: number;
 }
-interface MatchPresenceObservation {
+/** How many of a season's matches have at least one row in a table. */
+export interface MatchPresenceObservation {
   readonly unit: "match_presence";
   readonly total_matches: number;
   readonly matches_with_rows: number;
@@ -620,13 +657,13 @@ interface MatchPresenceObservation {
   readonly ratio: number | null;
 }
 /** Column-level deviation from a table default; only deviating keys are present. */
-interface ColumnException {
+export interface ColumnException {
   expected?: CoverageExpectation;
   range?: string;
 }
 
 /** Wire shape for one competition-table: a default plus exception columns. */
-interface TableContract {
+export interface TableContract {
   readonly range: string;
   readonly expected: CoverageExpectation;
   readonly source: readonly string[];
@@ -634,13 +671,14 @@ interface TableContract {
   readonly columns?: Readonly<Record<string, ColumnException>>;
 }
 
-type ContractCoverage = Record<string, TableContract>;
+/** Wire contract for every table of one competition. */
+export type ContractCoverage = Record<string, TableContract>;
 
 /**
  * One-paragraph reading key emitted with every contract response, so the
  * exceptions-only encoding is self-describing to an LLM consumer.
  */
-export const COVERAGE_HOW_TO_READ =
+export const COVERAGE_HOW_TO_READ: string =
   "Each table declares a default: `range` (inclusive season span; 'current' = latest season), " +
   "`expected` (complete | partial | best-effort | absent | not-applicable), and `source`. " +
   "The default applies to every column of that table. `columns` lists ONLY exceptions — a column " +
@@ -692,7 +730,8 @@ const OBSERVED_STAT_COLUMNS = STAT_COLUMNS.filter(
   (column) => !["id", "match_id", "player_id", "team_id"].includes(column),
 );
 
-interface CoachingObservation {
+/** Measured coaching assignment coverage for one competition-season. */
+export interface CoachingObservation {
   readonly applicable: boolean;
   readonly unit: "participant_assignments";
   readonly expected_assignments: number;
@@ -795,11 +834,35 @@ const InventoryRowSchema = Schema.Struct({
   observed_at: Schema.String,
 });
 
+/** Stored provider inventory and refresh state for one observed season. */
+export interface CoverageInventory {
+  readonly provider_matches: number | null;
+  readonly provider_observed_at: string | null;
+  readonly stored_matches: number;
+  readonly eligible_completed_matches: number;
+  readonly matches_with_statistics: number;
+  readonly participant_rows: number;
+  readonly refresh_failures: number;
+  readonly unresolved_refreshes: number;
+  readonly overdue_refreshes: number;
+  readonly input_revision: number | undefined;
+}
+
+/** One bounded competition-season measurement, as cached for 15 minutes. */
+export interface CoverageObservation {
+  readonly measured_at: string;
+  readonly scalar: Readonly<Record<string, RowObservation>>;
+  readonly coaches: CoachingObservation;
+  readonly inventory: CoverageInventory;
+  readonly pav: TableRowsObservation;
+  readonly lineups: MatchPresenceObservation;
+}
+
 async function queryObservation(
   env: Env,
   competition: CoverageCompetition,
   season: number | string,
-) {
+): Promise<CoverageObservation> {
   const seasonRow = await resolveStoredSeason(env, competition, season);
 
   const select = OBSERVED_STAT_COLUMNS.flatMap((column, index) => [
@@ -896,12 +959,12 @@ export async function observeCoverage(
   competition: CoverageCompetition,
   season: number | string,
   cache: Cache | undefined = typeof caches === "undefined" ? undefined : caches.default,
-) {
+): Promise<CoverageObservation> {
   const key = new Request(
     `https://coverage.internal/v${COVERAGE_CONTRACT_VERSION}/${competition}/${season}`,
   );
   const cached = await cache?.match(key);
-  if (cached) return await cached.json<Awaited<ReturnType<typeof queryObservation>>>();
+  if (cached) return await cached.json<CoverageObservation>();
   const result = await queryObservation(env, competition, season);
   await cache?.put(
     key,
@@ -911,8 +974,8 @@ export async function observeCoverage(
 }
 
 /** Measured coverage for one competition-season, attached beside the static contract. */
-interface ObservedBlock {
-  readonly field_capabilities: ReturnType<typeof statFieldCapabilities>;
+export interface ObservedBlock {
+  readonly field_capabilities: StatFieldCapabilities;
   readonly competition: CoverageCompetition;
   readonly season: number;
   readonly seasonKey: string;
@@ -922,7 +985,33 @@ interface ObservedBlock {
   readonly player_season_pav: TableRowsObservation;
   readonly match_lineups: MatchPresenceObservation;
   readonly match_coaches: CoachingObservation;
-  readonly inventory: Awaited<ReturnType<typeof queryObservation>>["inventory"];
+  readonly inventory: CoverageInventory;
+}
+
+/** Coaching coverage for one competition in the static contract. */
+export interface CoachingContractEntry {
+  readonly range: string;
+  readonly expected: CoverageExpectation;
+  readonly source: readonly string[];
+  readonly unit?: string;
+  readonly notes?: readonly string[];
+}
+
+/** The static coverage contract, with an optional measured `observed` block. */
+export interface CoverageContract {
+  readonly version: number;
+  readonly season_selectors: {
+    readonly ordinary: string;
+    readonly AFLW_2022: readonly string[];
+    readonly ambiguous: string;
+  };
+  readonly review_date: string;
+  readonly how_to_read: string;
+  readonly coaching_contract: {
+    readonly by_competition: Readonly<Record<CoverageCompetition, CoachingContractEntry>>;
+  };
+  readonly by_competition: Record<CoverageCompetition, ContractCoverage>;
+  readonly observed?: ObservedBlock;
 }
 
 /**
@@ -930,7 +1019,10 @@ interface ObservedBlock {
  * observation attached as a sibling `observed` block. Measurements never
  * mutate the static expectations — they are reported side by side.
  */
-export async function coverageContract(options: CoverageOptions, env?: Env) {
+export async function coverageContract(
+  options: CoverageOptions,
+  env?: Env,
+): Promise<CoverageContract> {
   const byCompetition = contractCoverage();
   let observed: ObservedBlock | undefined;
   if (options.includeObserved && options.competition && options.season !== undefined) {

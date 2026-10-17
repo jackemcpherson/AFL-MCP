@@ -43,7 +43,7 @@ describe("coverage contract", () => {
         for (const [column, exception] of Object.entries(contract?.columns ?? {})) {
           // Every exception names a real declared column...
           // SAFETY: widens the literal column tuple so any string can be looked up.
-          expect(columns as readonly string[]).toContain(column);
+          expect(columns).toContain(column);
           // ...and genuinely deviates from the table default.
           expect(
             exception.expected !== undefined || exception.range !== undefined,
@@ -97,7 +97,7 @@ describe("coverage contract", () => {
     expect(schema.database.coverage_contract.review_date).toBe("2026-10-04");
     expect(schema.database.coverage_contract.how_to_read).toContain("exceptions");
     expect(schema.database).not.toHaveProperty("column_coverage");
-    expect(schema.database.competitions.AFLM.coverage).toEqual({
+    expect(schema.database.competitions.AFLM?.coverage).toEqual({
       matches: true,
       stats: true,
       lineups: "2015+",

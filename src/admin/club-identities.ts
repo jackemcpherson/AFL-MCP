@@ -10,6 +10,7 @@ import { OperationConflictError } from "./errors";
 
 const BEARS_LAST_SEASON = 1996;
 
+/** Row counts a Brisbane Bears identity repair previews or applies. */
 export interface BearsRepairReport {
   readonly dryRun: boolean;
   readonly competition: "AFLM";

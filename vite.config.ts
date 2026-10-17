@@ -1,3 +1,4 @@
+import type { UserConfig } from "vite";
 import { defineConfig } from "vite-plus";
 
 /** Paths that neither Oxlint nor Oxfmt may touch. */
@@ -11,7 +12,7 @@ const ignorePatterns = [
   "tools/oxlint/anti-slop/**",
 ];
 
-export default defineConfig({
+const config: UserConfig = defineConfig({
   lint: {
     ignorePatterns,
     plugins: ["typescript", "import"],
@@ -43,9 +44,17 @@ export default defineConfig({
     overrides: [
       {
         // The Worker entry and MCP protocol module decode raw external input,
-        // the error logger accepts any thrown value, and tests build
-        // deliberately invalid request bodies.
-        files: ["src/index.ts", "src/mcp/protocol.ts", "src/lib/errors.ts", "test/**"],
+        // the decoder types name the raw input they parse, the error logger
+        // accepts any thrown value, and tests build deliberately invalid
+        // request bodies.
+        files: [
+          "src/index.ts",
+          "src/mcp/protocol.ts",
+          "src/lib/decode.ts",
+          "src/lib/errors.ts",
+          "src/lib/schemas.ts",
+          "test/**",
+        ],
         rules: {
           "anti-slop/no-unknown-parameters": "off",
         },
@@ -67,3 +76,5 @@ export default defineConfig({
     printWidth: 100,
   },
 });
+
+export default config;

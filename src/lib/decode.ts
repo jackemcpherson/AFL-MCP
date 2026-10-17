@@ -6,7 +6,19 @@
  * (route, script or test) uses that same decoder.
  */
 
+import type { Result, SchemaAST } from "effect";
 import { Predicate, Schema, SchemaIssue } from "effect";
+
+/**
+ * A boundary decoder: raw input in, a `Result` of the decoded value out.
+ *
+ * @example
+ * export const decodeBody: Decoder<Body> = strictDecoder(BodySchema);
+ */
+export type Decoder<A> = (
+  input: unknown,
+  options?: SchemaAST.ParseOptions,
+) => Result.Result<A, Schema.SchemaError>;
 
 /** Parse options that reject undeclared keys anywhere in the input. */
 const STRICT = { onExcessProperty: "error" } as const;
@@ -20,7 +32,9 @@ const STRICT = { onExcessProperty: "error" } as const;
  * const decode = strictDecoder(Schema.Struct({ dryRun: Schema.Boolean }));
  * decode({ dryRun: true, extra: 1 }); // Failure
  */
-export function strictDecoder<S extends Schema.ConstraintDecoder<unknown>>(schema: S) {
+export function strictDecoder<S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+): Decoder<S["Type"]> {
   return Schema.decodeUnknownResult(schema, STRICT);
 }
 
@@ -33,7 +47,9 @@ export function strictDecoder<S extends Schema.ConstraintDecoder<unknown>>(schem
  * const decode = looseDecoder(Schema.Struct({ n: Schema.Number }));
  * decode({ n: 1, extra: 1 }); // Success { n: 1 }
  */
-export function looseDecoder<S extends Schema.ConstraintDecoder<unknown>>(schema: S) {
+export function looseDecoder<S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+): Decoder<S["Type"]> {
   return Schema.decodeUnknownResult(schema);
 }
 

@@ -24,7 +24,7 @@
  *    AFL API starts returning before fitzroy ships support. Without them,
  *    a novel SDNR name silently breaks the sync (see issue #78 / 0009 mig).
  */
-export const TEAM_NAME_MAP = new Map(
+export const TEAM_NAME_MAP: Map<string, string> = new Map(
   Object.entries({
     // AFLM historical renames + capitalisation/punctuation variants
     "Greater Western Sydney": "GWS Giants",
@@ -51,7 +51,8 @@ export const TEAM_NAME_MAP = new Map(
   }),
 );
 
-export const VENUE_NAME_MAP = new Map(
+/** Maps provider venue spellings to the canonical `venues.name`. */
+export const VENUE_NAME_MAP: Map<string, string> = new Map(
   Object.entries({
     "Windsor Park Oval": "Windsor Park",
     "M.C.G.": "MCG",

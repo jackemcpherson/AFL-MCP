@@ -17,7 +17,7 @@ const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Sc
  * @example
  * await auditNextSeason(env);
  */
-export async function auditNextSeason(env: Env, now = new Date()): Promise<void> {
+export async function auditNextSeason(env: Env, now: Date = new Date()): Promise<void> {
   const season = await env.DB.prepare(`SELECT s.id, s.season_key, c.code
     FROM seasons s JOIN competitions c ON c.id=s.competition_id
     LEFT JOIN sync_log l ON l.type='audit:season:' || s.id

@@ -5,10 +5,10 @@ import {
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
-import { resolveStoredSeason } from "../db/seasons";
+import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { PavCompetitionSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
-import { strictDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import { booleanDefault, SeasonSelectorSchema, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
@@ -16,7 +16,13 @@ import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** One reviewed competition-season replacement; no implicit calendar-year scope. */
-export const PavRepairRequestSchema = Schema.Struct({
+export const PavRepairRequestSchema: Schema.Struct<{
+  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW"]>;
+  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
   competition: PavCompetitionSchema,
   season: SeasonSelectorSchema,
   dryRun: booleanDefault(true),
@@ -28,7 +34,22 @@ export const PavRepairRequestSchema = Schema.Struct({
 export type PavRepairRequest = typeof PavRepairRequestSchema.Type;
 
 /** Decode a PAV repair body, rejecting unknown keys. */
-export const decodePavRepairRequest = strictDecoder(PavRepairRequestSchema);
+export const decodePavRepairRequest: Decoder<PavRepairRequest> =
+  strictDecoder(PavRepairRequestSchema);
+
+/**
+ * Outcome of a PAV repair call. `busy` alone means another operation holds
+ * the lease. A preview carries `inputRevision` and `manifestDigest`; an
+ * applied repair carries `rows`.
+ */
+export interface PavRepairResult {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly season?: StoredSeason;
+  readonly inputRevision?: number;
+  readonly manifestDigest?: string;
+  readonly rows?: number;
+}
 
 /**
  * Preview or atomically replace one season's PAV while readers remain blocked.
@@ -40,7 +61,7 @@ export const decodePavRepairRequest = strictDecoder(PavRepairRequestSchema);
 
  * @example
  * await repairPav(env, Result.getOrThrow(decodePavRepairRequest(body))); */
-export async function repairPav(env: Env, request: PavRepairRequest) {
+export async function repairPav(env: Env, request: PavRepairRequest): Promise<PavRepairResult> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;

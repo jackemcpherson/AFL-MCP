@@ -1,10 +1,13 @@
 import type { Env } from "../../types";
 import {
   COVERAGE_COMPETITIONS,
+  type ContractCoverage,
   type CoverageCompetition,
+  type CoverageContract,
   type CoverageOptions,
   competitionYears,
   coverageContract,
+  type LegacyCompetitionCoverage,
   legacyCompetitionCoverage,
 } from "./coverage";
 
@@ -15,10 +18,79 @@ const COMPETITION_NAMES = {
   VFLW: "VFL Women's",
 } as const;
 
-interface CompetitionSummary {
+/** Name, year range and legacy availability for one competition. */
+export interface CompetitionSummary {
   readonly name: string;
   readonly years: string;
-  readonly coverage: ReturnType<typeof legacyCompetitionCoverage>;
+  readonly coverage: LegacyCompetitionCoverage;
+}
+
+/**
+ * The coverage contract as the schema tool returns it. A competition filter
+ * keeps only that competition's `by_competition` entry.
+ */
+export type SchemaCoverageContract = Omit<CoverageContract, "by_competition"> & {
+  readonly by_competition: Partial<Record<CoverageCompetition, ContractCoverage>>;
+};
+
+/** A table documented by the `schema` tool. */
+export type SchemaTable =
+  | "competitions"
+  | "seasons"
+  | "season_provider_ids"
+  | "player_provider_ids"
+  | "player_id_redirects"
+  | "teams"
+  | "venues"
+  | "players"
+  | "matches"
+  | "player_match_stats"
+  | "player_season_pav"
+  | "match_lineups"
+  | "match_weather"
+  | "match_predictions"
+  | "coach_backfill_progress"
+  | "coaches"
+  | "coach_external_ids"
+  | "coach_external_match_ids"
+  | "coach_observations"
+  | "match_coaches"
+  | "coach_import_pages"
+  | "coach_import_diagnostics"
+  | "public_input_revision";
+
+/** A named example query in the `schema` tool response. */
+export type CommonJoin =
+  | "multi_comp_summary"
+  | "team_roster_pav"
+  | "player_career_arc"
+  | "zone_leaders"
+  | "match_with_teams_venue"
+  | "match_coaches_lookup"
+  | "coaching_source_comparisons"
+  | "lineup_round_comparison"
+  | "lineup_with_pav"
+  | "match_weather_lookup"
+  | "wet_game_scoring"
+  | "round_predictions"
+  | "tipping_performance"
+  | "ladder";
+
+/** The public database contract returned by the `schema` tool. */
+export interface SchemaInfo {
+  readonly database: {
+    readonly engine: string;
+    readonly competitions: Partial<Record<CoverageCompetition, CompetitionSummary>>;
+    readonly coverage_contract: SchemaCoverageContract;
+    readonly tables: Readonly<Record<SchemaTable, string>>;
+    readonly notes: readonly string[];
+    readonly common_joins: Readonly<Record<CommonJoin, string>>;
+  };
+  readonly query_api: {
+    readonly usage: string;
+    readonly methods: readonly string[];
+    readonly notes: string;
+  };
 }
 
 function competitionSummaries<C extends CoverageCompetition>(
@@ -50,7 +122,7 @@ function competitionSummaries<C extends CoverageCompetition>(
  * @param options - Validated options from the schema tool boundary.
  * @param env - Worker environment; required only for observed coverage.
  */
-export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env) {
+export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): Promise<SchemaInfo> {
   const coverage = await coverageContract(options, env);
   // `competition` without includeObserved filters the base schema (#141).
   const baseFilter = !options.includeObserved && options.competition ? options.competition : null;

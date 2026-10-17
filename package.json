@@ -7,7 +7,8 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "check": "vp check",
+    "check": "vp check && bun run typecheck",
+    "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.test.json && tsc -p tsconfig.node.json",
     "format": "vp check --fix",
     "test": "vp test --run",
     "db:migrate": "wrangler d1 migrations apply afl-stats",

@@ -5,6 +5,7 @@
  * and status report in this Worker reads the codes from here.
  */
 
+import type { Schema } from "effect";
 import { CompetitionCodeSchema } from "fitzroy";
 
 export { CompetitionCodeSchema };
@@ -16,4 +17,5 @@ export type CompetitionCode = typeof CompetitionCodeSchema.Type;
 export const COMPETITION_CODES: readonly CompetitionCode[] = CompetitionCodeSchema.literals;
 
 /** Competitions for which the canonical HPN PAV formula can be computed. */
-export const PavCompetitionSchema = CompetitionCodeSchema.pick(["AFLM", "AFLW"]);
+export const PavCompetitionSchema: Schema.Literals<readonly ["AFLM", "AFLW"]> =
+  CompetitionCodeSchema.pick(["AFLM", "AFLW"]);

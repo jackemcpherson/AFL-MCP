@@ -74,7 +74,7 @@ describe("schema tool vs live D1 schema", () => {
       for (const competition of ["AFLM", "AFLW", "VFL", "VFLW"] as const) {
         // v2 contract: a table default covers every column; exceptions
         // must name real columns so stale entries fail CI.
-        const tableContract = contract[competition][table];
+        const tableContract = contract[competition]?.[table];
         expect(
           tableContract?.expected,
           `coverage contract is missing a ${competition}.${table} default`,

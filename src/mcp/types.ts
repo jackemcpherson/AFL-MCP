@@ -1,3 +1,4 @@
+/** A JSON-RPC 2.0 response: a `result` or an `error`. */
 export interface JsonRpcResponse {
   jsonrpc: "2.0";
   /** `null` when the request id could not be determined (JSON-RPC 2.0). */
@@ -19,6 +20,7 @@ export interface ToolAnnotations {
   openWorldHint: boolean;
 }
 
+/** One entry in the `tools/list` result. */
 export interface ToolDefinition {
   name: string;
   /** Human-readable display name. */

@@ -11,6 +11,7 @@
  */
 
 import { Schema } from "effect";
+import type { SyncDecoder } from "../lib/schemas";
 
 /**
  * Open-Meteo hourly payload: UTC epochs or a legacy local axis, plus arrays per
@@ -18,7 +19,16 @@ import { Schema } from "effect";
  * keys like `temperature_2m_era5_land` on dual-model archive responses).
  * Non-hourly top-level fields (latitude, elevation, ...) are ignored.
  */
-export const OpenMeteoPayloadSchema = Schema.Struct({
+export const OpenMeteoPayloadSchema: Schema.Struct<{
+  readonly hourly: Schema.StructWithRest<
+    Schema.Struct<{
+      readonly time: Schema.Union<
+        readonly [Schema.$Array<Schema.String>, Schema.$Array<Schema.Int>]
+      >;
+    }>,
+    readonly [Schema.$Record<Schema.String, Schema.$Array<Schema.NullOr<Schema.Number>>>]
+  >;
+}> = Schema.Struct({
   hourly: Schema.StructWithRest(
     Schema.Struct({
       time: Schema.Union([Schema.Array(Schema.String), Schema.Array(Schema.Int)]),
@@ -42,7 +52,8 @@ export type OpenMeteoPayload = typeof OpenMeteoPayloadSchema.Type;
  * @throws When the body is not an hourly payload (for example an API error
  *   body, or a variable that is not a nullable-number array).
  */
-export const decodeOpenMeteoPayload = Schema.decodeUnknownSync(OpenMeteoPayloadSchema);
+export const decodeOpenMeteoPayload: SyncDecoder<OpenMeteoPayload> =
+  Schema.decodeUnknownSync(OpenMeteoPayloadSchema);
 
 /** True for a UTC epoch-seconds axis, false for a legacy local-string axis. */
 const isEpochAxis = Schema.is(Schema.Array(Schema.Number));

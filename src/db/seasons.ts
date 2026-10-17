@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import type { CompetitionCode } from "fitzroy";
 import type { Env } from "../types";
+import type { TaggedErrorBase } from "../lib/errors";
 
 /** Exact stored season identity. The calendar year is descriptive, not unique. */
 export interface StoredSeason {
@@ -9,6 +10,22 @@ export interface StoredSeason {
   readonly season_key: string;
   readonly code: CompetitionCode;
 }
+
+const SeasonSelectionErrorBase: TaggedErrorBase<
+  SeasonSelectionError,
+  "SeasonSelectionError",
+  {
+    readonly message: Schema.String;
+    readonly code: Schema.Literals<
+      readonly ["AMBIGUOUS_SEASON", "INVALID_SEASON", "SEASON_NOT_FOUND"]
+    >;
+    readonly validSelectors: Schema.$Array<Schema.String>;
+  }
+> = Schema.TaggedError<SeasonSelectionError>()("SeasonSelectionError", {
+  message: Schema.String,
+  code: Schema.Literals(["AMBIGUOUS_SEASON", "INVALID_SEASON", "SEASON_NOT_FOUND"]),
+  validSelectors: Schema.Array(Schema.String),
+});
 
 /**
  * Expected selector failure shared by authenticated operations and coverage.
@@ -22,14 +39,7 @@ export interface StoredSeason {
  *   validSelectors: [],
  * });
  */
-export class SeasonSelectionError extends Schema.TaggedError<SeasonSelectionError>()(
-  "SeasonSelectionError",
-  {
-    message: Schema.String,
-    code: Schema.Literals(["AMBIGUOUS_SEASON", "INVALID_SEASON", "SEASON_NOT_FOUND"]),
-    validSelectors: Schema.Array(Schema.String),
-  },
-) {}
+export class SeasonSelectionError extends SeasonSelectionErrorBase {}
 
 /**
  * Reject ambiguous years and return an exact canonical key before any database write.

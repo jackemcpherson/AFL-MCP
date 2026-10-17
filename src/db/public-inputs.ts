@@ -17,7 +17,7 @@ import type { Env } from "../types";
 export async function beginPublicInputWrite(
   env: Env,
   holder: string,
-  now = new Date(),
+  now: Date = new Date(),
   operation: string | null = null,
 ): Promise<void> {
   const result = await env.DB.prepare(

@@ -1,5 +1,12 @@
 import { Schema } from "effect";
 import type { Env } from "../types";
+import type { TaggedErrorBase } from "../lib/errors";
+
+const SandboxTimeoutErrorBase: TaggedErrorBase<
+  SandboxTimeoutError,
+  "SandboxTimeoutError",
+  { readonly timeoutMs: Schema.Number }
+> = Schema.TaggedError<SandboxTimeoutError>()("SandboxTimeoutError", { timeoutMs: Schema.Number });
 
 /**
  * Sandbox code ran past its wall-clock budget.
@@ -7,15 +14,13 @@ import type { Env } from "../types";
  * @example
  * new SandboxTimeoutError({ timeoutMs: 30_000 }).message; // "Execution timed out after 30s"
  */
-export class SandboxTimeoutError extends Schema.TaggedError<SandboxTimeoutError>()(
-  "SandboxTimeoutError",
-  { timeoutMs: Schema.Number },
-) {
+export class SandboxTimeoutError extends SandboxTimeoutErrorBase {
   override get message(): string {
     return `Execution timed out after ${this.timeoutMs / 1000}s`;
   }
 }
 
+/** Outcome of one sandbox run: the result, or an error message, and the elapsed time. */
 export interface ExecuteResult {
   result: unknown;
   error?: string;
@@ -31,6 +36,17 @@ const MAX_RESULT_CHARS = 1_000_000;
 /** Resource limits applied to the sandbox isolate itself. */
 const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
 
+/**
+ * Run LLM-written code in a Dynamic Worker isolate with read-only D1 access.
+ *
+ * @param code - Body of an async function with `db` in scope.
+ * @param env - Worker bindings, including the Worker loader.
+ * @param ctx - Execution context that exposes the `DbProxy` entrypoint.
+ * @param timeoutMs - Wall-clock budget before the run is abandoned.
+ * @returns The serialised result, truncated when too large, or an error message.
+ * @example
+ * await executeCode("return (await db.prepare('SELECT 1').all()).results", env, ctx);
+ */
 export async function executeCode(
   code: string,
   env: Env,

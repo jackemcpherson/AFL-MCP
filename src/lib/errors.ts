@@ -7,7 +7,28 @@
  * the `src/` stack frames, which is enough to find the failing code.
  */
 
-import { Predicate } from "effect";
+import type { Cause } from "effect";
+import { Predicate, type Schema } from "effect";
+
+/**
+ * Declared type of a `Schema.TaggedError` base class.
+ *
+ * `isolatedDeclarations` rejects an `extends` clause that calls a function,
+ * so each tagged error first binds its base to a const of this type.
+ *
+ * @example
+ * const Base: TaggedErrorBase<MyError, "MyError", MessageFields> =
+ *   Schema.TaggedError<MyError>()("MyError", { message: Schema.String });
+ * export class MyError extends Base {}
+ */
+export type TaggedErrorBase<
+  Self,
+  Tag extends string,
+  Fields extends Schema.Struct.Fields,
+> = Schema.Class<Self, Schema.TaggedStruct<Tag, Fields>, Cause.YieldableError>;
+
+/** Fields of a tagged error that carries only an application-written message. */
+export type MessageFields = { readonly message: Schema.String };
 
 /** Matches a `src/` file position such as `src/sync/sync.ts:161:12`. */
 const SOURCE_FRAME = /src\/[a-zA-Z0-9_./-]+:\d+:\d+/g;

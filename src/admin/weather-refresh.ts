@@ -7,13 +7,14 @@ import {
 } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { strictDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import {
-  booleanDefault,
-  evidenceSchema,
+  type EvidenceSchema,
   PositiveIntSchema,
   SeasonSelectorSchema,
   Sha256HexSchema,
+  booleanDefault,
+  evidenceSchema,
 } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
@@ -26,7 +27,15 @@ const decodeRecordedManifest = Schema.decodeUnknownSync(
 );
 
 /** Exact weather recomputation after reviewing a fixture or venue correction. */
-export const WeatherRefreshRequestSchema = Schema.Struct({
+export const WeatherRefreshRequestSchema: Schema.Struct<{
+  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
+  readonly matchId: Schema.Int;
+  readonly evidence: Schema.$Array<EvidenceSchema>;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+}> = Schema.Struct({
   competition: CompetitionCodeSchema,
   season: SeasonSelectorSchema,
   matchId: PositiveIntSchema,
@@ -40,7 +49,23 @@ export const WeatherRefreshRequestSchema = Schema.Struct({
 export type WeatherRefreshRequest = typeof WeatherRefreshRequestSchema.Type;
 
 /** Decode a weather refresh body, rejecting unknown keys. */
-export const decodeWeatherRefreshRequest = strictDecoder(WeatherRefreshRequestSchema);
+export const decodeWeatherRefreshRequest: Decoder<WeatherRefreshRequest> = strictDecoder(
+  WeatherRefreshRequestSchema,
+);
+
+/**
+ * Outcome of a weather refresh call. `busy` alone means another operation
+ * holds the lease. A preview carries the reviewed `manifest`; an applied or
+ * idempotent repeat reports `applied` and `idempotent`.
+ */
+export interface WeatherRefreshResult {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly applied?: boolean;
+  readonly idempotent?: boolean;
+  readonly manifestDigest?: string | undefined;
+  readonly manifest?: Readonly<Record<string, unknown>>;
+}
 
 /**
  * Recompute one reviewed fixture's weather under the public input fence.
@@ -51,7 +76,10 @@ export const decodeWeatherRefreshRequest = strictDecoder(WeatherRefreshRequestSc
  * @example
  * await refreshWeather(env, Result.getOrThrow(decodeWeatherRefreshRequest(body)));
  */
-export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
+export async function refreshWeather(
+  env: Env,
+  request: WeatherRefreshRequest,
+): Promise<WeatherRefreshResult> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;

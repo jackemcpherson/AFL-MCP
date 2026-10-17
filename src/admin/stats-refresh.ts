@@ -5,17 +5,25 @@ import {
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
-import { resolveStoredSeason } from "../db/seasons";
+import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { strictDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import { booleanDefault, PositiveIntSchema, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
-import { refreshDueStats } from "../sync/stats-refresh";
+import { refreshDueStats, type StatsRefreshReport } from "../sync/stats-refresh";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** Explicit scope and resumable operation identity for historical corrections. */
-export const StatsRefreshRequestSchema = Schema.Struct({
+export const StatsRefreshRequestSchema: Schema.Struct<{
+  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
+  readonly matchId: Schema.optionalKey<Schema.Int>;
+  readonly operationId: Schema.String;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
   competition: CompetitionCodeSchema,
   season: Schema.Union([
     Schema.Int.check(Schema.isBetween({ minimum: 1897, maximum: 2100 })),
@@ -32,7 +40,23 @@ export const StatsRefreshRequestSchema = Schema.Struct({
 export type StatsRefreshRequest = typeof StatsRefreshRequestSchema.Type;
 
 /** Decode a statistics refresh body, rejecting unknown keys. */
-export const decodeStatsRefreshRequest = strictDecoder(StatsRefreshRequestSchema);
+export const decodeStatsRefreshRequest: Decoder<StatsRefreshRequest> =
+  strictDecoder(StatsRefreshRequestSchema);
+
+/**
+ * Outcome of a stats refresh call. `busy` alone means another operation
+ * holds the lease. A preview lists `matches` with a `manifestDigest`; a run
+ * reports batch progress and the `remaining` match count.
+ */
+export interface StatsRefreshResult extends Partial<StatsRefreshReport> {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly season?: StoredSeason;
+  readonly matches?: readonly Record<string, unknown>[];
+  readonly manifestDigest?: string;
+  readonly operationId?: string;
+  readonly remaining?: number;
+}
 
 /**
  * Preview, start, or resume a bounded refresh without fetching unrelated seasons.
@@ -44,7 +68,10 @@ export const decodeStatsRefreshRequest = strictDecoder(StatsRefreshRequestSchema
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
  * await operateStatsRefresh(env, Result.getOrThrow(decodeStatsRefreshRequest(body))); */
-export async function operateStatsRefresh(env: Env, request: StatsRefreshRequest) {
+export async function operateStatsRefresh(
+  env: Env,
+  request: StatsRefreshRequest,
+): Promise<StatsRefreshResult> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;

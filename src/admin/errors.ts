@@ -1,4 +1,13 @@
 import { Schema } from "effect";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
+
+const OperationConflictErrorBase: TaggedErrorBase<
+  OperationConflictError,
+  "OperationConflictError",
+  MessageFields
+> = Schema.TaggedError<OperationConflictError>()("OperationConflictError", {
+  message: Schema.String,
+});
 
 /**
  * A reviewed operation cannot proceed with its supplied scope or approval.
@@ -9,10 +18,7 @@ import { Schema } from "effect";
  * @example
  * throw new OperationConflictError({ message: "Preview is stale; preview again" });
  */
-export class OperationConflictError extends Schema.TaggedError<OperationConflictError>()(
-  "OperationConflictError",
-  { message: Schema.String },
-) {
+export class OperationConflictError extends OperationConflictErrorBase {
   /** Stable machine-readable code returned in the 409 body. */
   readonly code = "OPERATION_CONFLICT";
 }

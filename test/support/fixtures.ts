@@ -82,6 +82,12 @@ export function testCache(stub: CacheStub): Cache {
   return stub as Cache;
 }
 
+/** An in-memory `Cache` and the entries behind it. */
+export interface MemoryCache {
+  readonly cache: Cache;
+  readonly entries: Map<string, Response>;
+}
+
 /**
  * Builds an in-memory `Cache` keyed by request URL.
  *
@@ -89,7 +95,7 @@ export function testCache(stub: CacheStub): Cache {
  * @example
  * const { cache, entries } = memoryCache();
  */
-export function memoryCache() {
+export function memoryCache(): MemoryCache {
   const entries = new Map<string, Response>();
   const cache = testCache({
     async match(request) {
@@ -108,6 +114,12 @@ export interface D1Call {
   bindings: unknown[];
 }
 
+/** A scripted D1 binding and the `prepare` calls it has seen. */
+export interface ScriptedD1 {
+  readonly db: D1Database;
+  readonly calls: D1Call[];
+}
+
 /**
  * Builds a D1 binding that answers the nth `prepare(...).first()` with
  * `rows[n]`. Missing rows answer `null`. An `Error` row rejects instead.
@@ -117,7 +129,7 @@ export interface D1Call {
  * @example
  * const { db, calls } = scriptedD1([{ id: 1 }, null]);
  */
-export function scriptedD1(rows: readonly unknown[]) {
+export function scriptedD1(rows: readonly unknown[]): ScriptedD1 {
   const calls: D1Call[] = [];
   const db = {
     prepare(sql: string) {

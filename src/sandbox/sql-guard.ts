@@ -11,11 +11,17 @@
  */
 
 import { Schema } from "effect";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 
 const ALLOWED_LEADING_KEYWORDS = new Set(["SELECT", "WITH", "EXPLAIN"]);
 
 const FORBIDDEN_KEYWORDS =
   /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
+
+const ReadOnlySqlErrorBase: TaggedErrorBase<ReadOnlySqlError, "ReadOnlySqlError", MessageFields> =
+  Schema.TaggedError<ReadOnlySqlError>()("ReadOnlySqlError", {
+    message: Schema.String,
+  });
 
 /**
  * Thrown when a statement fails read-only validation.
@@ -26,9 +32,7 @@ const FORBIDDEN_KEYWORDS =
  * @example
  * throw new ReadOnlySqlError({ message: "Read-only access: ..." });
  */
-export class ReadOnlySqlError extends Schema.TaggedError<ReadOnlySqlError>()("ReadOnlySqlError", {
-  message: Schema.String,
-}) {}
+export class ReadOnlySqlError extends ReadOnlySqlErrorBase {}
 
 /**
  * Removes SQL comments (line and block) and string literals

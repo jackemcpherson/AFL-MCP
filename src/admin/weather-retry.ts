@@ -1,7 +1,7 @@
 import { Schema } from "effect";
-import { resolveStoredSeason } from "../db/seasons";
+import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { strictDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import {
   booleanDefault,
   PositiveIntSchema,
@@ -13,7 +13,13 @@ import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** Targeted retry of an unavailable observation after reviewing its stored diagnostic. */
-export const WeatherRetryRequestSchema = Schema.Struct({
+export const WeatherRetryRequestSchema: Schema.Struct<{
+  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
+  readonly matchId: Schema.Int;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
   competition: CompetitionCodeSchema,
   season: SeasonSelectorSchema,
   matchId: PositiveIntSchema,
@@ -25,7 +31,22 @@ export const WeatherRetryRequestSchema = Schema.Struct({
 export type WeatherRetryRequest = typeof WeatherRetryRequestSchema.Type;
 
 /** Decode a weather retry body, rejecting unknown keys. */
-export const decodeWeatherRetryRequest = strictDecoder(WeatherRetryRequestSchema);
+export const decodeWeatherRetryRequest: Decoder<WeatherRetryRequest> =
+  strictDecoder(WeatherRetryRequestSchema);
+
+/**
+ * Outcome of a weather retry call. `busy` alone means another operation
+ * holds the lease. A preview lists the unresolved `observations`; an applied
+ * retry reports how many schedules were `queued`.
+ */
+export interface WeatherRetryResult {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly season?: StoredSeason;
+  readonly observations?: readonly Record<string, unknown>[];
+  readonly manifestDigest?: string;
+  readonly queued?: number;
+}
 
 /**
  * Preview and queue one match's weather retry without fetching unrelated matches.
@@ -36,7 +57,10 @@ export const decodeWeatherRetryRequest = strictDecoder(WeatherRetryRequestSchema
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
  * await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(body))); */
-export async function retryWeather(env: Env, request: WeatherRetryRequest) {
+export async function retryWeather(
+  env: Env,
+  request: WeatherRetryRequest,
+): Promise<WeatherRetryResult> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   try {

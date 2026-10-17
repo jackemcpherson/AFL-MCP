@@ -10,14 +10,14 @@ import { assertReadOnlySql } from "./sql-guard";
  * entry re-exports it so `ctx.exports.DbProxy` resolves at runtime.
  */
 export class DbProxy extends WorkerEntrypoint<Env> {
-  async query(sql: string, ...params: unknown[]) {
+  async query(sql: string, ...params: unknown[]): Promise<D1Result<Record<string, unknown>>> {
     assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;
     return await bound.all();
   }
 
-  async queryFirst(sql: string, ...params: unknown[]) {
+  async queryFirst(sql: string, ...params: unknown[]): Promise<Record<string, unknown> | null> {
     assertReadOnlySql(sql);
     const stmt = this.env.DB.prepare(sql);
     const bound = params.length > 0 ? stmt.bind(...params) : stmt;

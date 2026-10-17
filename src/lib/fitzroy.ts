@@ -13,6 +13,7 @@
 import { Cause, type Effect, Exit, Layer, ManagedRuntime, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { FitzroyLive } from "fitzroy";
+import type { MessageFields, TaggedErrorBase } from "./errors";
 
 /** The services a fitzroy Effect may require. */
 export type FitzroyServices = Layer.Success<typeof FitzroyLive>;
@@ -29,6 +30,12 @@ const runtime = ManagedRuntime.make(
   FitzroyLive.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, currentFetch))),
 );
 
+const FitzroyDefectErrorBase: TaggedErrorBase<
+  FitzroyDefectError,
+  "FitzroyDefectError",
+  MessageFields
+> = Schema.TaggedError<FitzroyDefectError>()("FitzroyDefectError", { message: Schema.String });
+
 /**
  * A fitzroy call ended in a defect rather than one of its tagged failures.
  *
@@ -38,10 +45,7 @@ const runtime = ManagedRuntime.make(
  * @example
  * new FitzroyDefectError({ message: "cannot read rounds" });
  */
-export class FitzroyDefectError extends Schema.TaggedError<FitzroyDefectError>()(
-  "FitzroyDefectError",
-  { message: Schema.String },
-) {}
+export class FitzroyDefectError extends FitzroyDefectErrorBase {}
 
 /** The settled outcome of one fitzroy call. */
 export type FitzroyOutcome<A, E = Error> =

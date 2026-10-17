@@ -1,8 +1,8 @@
 import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfigFnPromise } from "vitest/config";
 
-export default defineConfig(async () => {
+const config: ViteUserConfigFnPromise = defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(import.meta.dirname, "src/db/migrations"));
 
   const contractMigrations = migrations.filter((entry) => entry.name.startsWith("0040"));
@@ -48,3 +48,5 @@ export default defineConfig(async () => {
     },
   };
 });
+
+export default config;

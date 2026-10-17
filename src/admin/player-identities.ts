@@ -7,24 +7,67 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
-import { strictDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import {
-  booleanDefault,
-  evidenceSchema,
+  type EvidenceSchema,
   IsoDateSchema,
   NonEmptyStringSchema,
   PositiveIntSchema,
   Sha256HexSchema,
+  booleanDefault,
+  evidenceSchema,
 } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
-const EvidenceSchema = evidenceSchema(20);
+const RepairEvidenceSchema: EvidenceSchema = evidenceSchema(20);
 
 /** Evidence and explicit field decisions required for one verified identity group. */
-export const IdentityRepairRequestSchema = Schema.Struct({
+export const IdentityRepairRequestSchema: Schema.Struct<{
+  readonly kind: Schema.withDecodingDefaultKey<
+    Schema.Literals<readonly ["merge", "reassign-appearances"]>,
+    never
+  >;
+  readonly canonicalId: Schema.optionalKey<Schema.Int>;
+  readonly newPerson: Schema.optionalKey<
+    Schema.Struct<{
+      readonly firstName: Schema.String;
+      readonly surname: Schema.String;
+      readonly dateOfBirth: Schema.String;
+      readonly evidence: EvidenceSchema;
+    }>
+  >;
+  readonly matchIds: Schema.withDecodingDefaultKey<Schema.$Array<Schema.Int>, never>;
+  readonly playerIds: Schema.$Array<Schema.Int>;
+  readonly evidence: Schema.$Array<EvidenceSchema>;
+  readonly providerIdentities: Schema.withDecodingDefaultKey<
+    Schema.$Array<
+      Schema.Struct<{
+        readonly provider: Schema.Literals<readonly ["afl-api", "afl-tables", "fryzigg"]>;
+        readonly providerId: Schema.String;
+        readonly evidence: EvidenceSchema;
+      }>
+    >,
+    never
+  >;
+  readonly resolutions: Schema.withDecodingDefaultKey<
+    Schema.$Array<
+      Schema.Struct<{
+        readonly table: Schema.Literals<readonly ["player_match_stats", "match_lineups"]>;
+        readonly matchId: Schema.Int;
+        readonly field: Schema.String;
+        readonly value: Schema.Union<readonly [Schema.Number, Schema.String]>;
+        readonly evidence: EvidenceSchema;
+      }>
+    >,
+    never
+  >;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
   kind: Schema.Literals(["merge", "reassign-appearances"]).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed("merge" as const)),
   ),
@@ -34,19 +77,19 @@ export const IdentityRepairRequestSchema = Schema.Struct({
       firstName: NonEmptyStringSchema,
       surname: NonEmptyStringSchema,
       dateOfBirth: IsoDateSchema,
-      evidence: EvidenceSchema,
+      evidence: RepairEvidenceSchema,
     }),
   ),
   matchIds: Schema.Array(PositiveIntSchema)
     .check(Schema.isMaxLength(500))
     .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   playerIds: Schema.Array(PositiveIntSchema).check(Schema.isMinLength(2), Schema.isMaxLength(10)),
-  evidence: Schema.Array(EvidenceSchema).check(Schema.isMinLength(1)),
+  evidence: Schema.Array(RepairEvidenceSchema).check(Schema.isMinLength(1)),
   providerIdentities: Schema.Array(
     Schema.Struct({
       provider: Schema.Literals(["afl-api", "afl-tables", "fryzigg"]),
       providerId: NonEmptyStringSchema,
-      evidence: EvidenceSchema,
+      evidence: RepairEvidenceSchema,
     }),
   )
     .check(Schema.isMaxLength(20))
@@ -57,7 +100,7 @@ export const IdentityRepairRequestSchema = Schema.Struct({
       matchId: PositiveIntSchema,
       field: Schema.String,
       value: Schema.Union([Schema.Number, Schema.String]),
-      evidence: EvidenceSchema,
+      evidence: RepairEvidenceSchema,
     }),
   ).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   dryRun: booleanDefault(true),
@@ -66,14 +109,15 @@ export const IdentityRepairRequestSchema = Schema.Struct({
 });
 
 /** Decode an identity repair body, rejecting unknown keys. */
-export const decodeIdentityRepairRequest = strictDecoder(IdentityRepairRequestSchema);
+export const decodeIdentityRepairRequest: Decoder<typeof IdentityRepairRequestSchema.Type> =
+  strictDecoder(IdentityRepairRequestSchema);
 
 type RepairRequest = typeof IdentityRepairRequestSchema.Type;
 /** One captured D1 row of an identity snapshot table. */
-const RowSchema = Schema.Record(
+const RowSchema: Schema.$Record<
   Schema.String,
-  Schema.NullOr(Schema.Union([Schema.String, Schema.Number])),
-);
+  Schema.NullOr<Schema.Union<readonly [Schema.String, Schema.Number]>>
+> = Schema.Record(Schema.String, Schema.NullOr(Schema.Union([Schema.String, Schema.Number])));
 type Row = typeof RowSchema.Type;
 const decodeRows = Schema.decodeUnknownSync(Schema.Array(RowSchema));
 
@@ -96,6 +140,12 @@ interface Conflict {
   readonly values: readonly (string | number)[];
 }
 
+/** Merged appearance rows and the conflicts no resolution addressed. */
+export interface AppearanceMerge {
+  readonly rows: Row[];
+  readonly conflicts: Conflict[];
+}
+
 /**
  * Merge appearances only after an operator verifies the people. Unknown values remain null.
  * @param table - Reviewed appearance table.
@@ -112,7 +162,7 @@ export function mergeIdentityAppearances(
   rows: readonly Row[],
   canonicalId: number,
   resolutions: RepairRequest["resolutions"],
-) {
+): AppearanceMerge {
   const groups = new Map<number, Row[]>();
   for (const row of rows) {
     const match = Number(row["match_id"]);
@@ -172,6 +222,26 @@ async function hash(value: object): Promise<string> {
 }
 
 /**
+ * Outcome of an identity repair call. `busy` alone means another operation
+ * holds the lease. A preview carries the reviewed `manifest` and any
+ * conflicts; an applied or idempotent repeat reports `applied`.
+ */
+export interface IdentityRepairResult {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly applied?: boolean;
+  readonly idempotent?: boolean;
+  readonly canonicalId?: number;
+  readonly manifestDigest?: string;
+  readonly conflicts?: readonly Conflict[];
+  readonly biographyConflicts?: readonly {
+    readonly field: string;
+    readonly values: readonly (string | number)[];
+  }[];
+  readonly manifest?: Readonly<Record<string, unknown>>;
+}
+
+/**
  * Preview or apply one approved identity group, then atomically replace affected PAV seasons.
  * The preview digest includes source rows, references and evidence. Mutated previews fail closed.
  * Issued prediction archives are never written by this operation.
@@ -182,7 +252,10 @@ async function hash(value: object): Promise<string> {
  * @example
  * await repairPlayerIdentity(env, Result.getOrThrow(decodeIdentityRepairRequest(body)));
  */
-export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
+export async function repairPlayerIdentity(
+  env: Env,
+  request: RepairRequest,
+): Promise<IdentityRepairResult> {
   const ids = [...new Set(request.playerIds)].sort((a, b) => a - b);
   const scoped = request.kind === "reassign-appearances";
   if (request.canonicalId !== undefined && (!scoped || !ids.includes(request.canonicalId)))

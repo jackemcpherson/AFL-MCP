@@ -37,6 +37,7 @@ type MatchCandidate = typeof MatchCandidateSchema.Type;
 
 const decodeMatchCandidates = Schema.decodeUnknownSync(Schema.Array(MatchCandidateSchema));
 
+/** Counts for one coaching season import, previewed or applied. */
 export interface CoachingImportSummary {
   readonly season: number;
   readonly source: CoachProvider;
@@ -81,8 +82,8 @@ export async function ingestMatchCoachResult(
       readonly failures: readonly MatchCoachFailure[];
     };
   },
-  dryRun = false,
-  retrievedAt = new Date().toISOString(),
+  dryRun: boolean = false,
+  retrievedAt: string = new Date().toISOString(),
 ): Promise<CoachingImportSummary> {
   const failuresByCoach = new Set(
     result.completeness.failures
@@ -472,7 +473,7 @@ export async function backfillCoaches(
  * @example
  * await refreshActiveCoaches(env, new Date());
  */
-export async function refreshActiveCoaches(env: Env, now = new Date()): Promise<void> {
+export async function refreshActiveCoaches(env: Env, now: Date = new Date()): Promise<void> {
   const season = now.getUTCFullYear();
   const last = await env.DB.prepare(
     "SELECT status, last_checked_at FROM coach_import_pages WHERE provider = 'afl-tables' AND season = ?1 AND scope = 'season'",

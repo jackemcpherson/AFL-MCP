@@ -143,7 +143,7 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (env.SYNC_PAUSED === "true") return;
     // An exception before the per-competition try/catch (e.g. in the
     // shouldRunNow gate) was previously invisible — waitUntil swallowed

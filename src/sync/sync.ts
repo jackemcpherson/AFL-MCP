@@ -37,6 +37,7 @@ import {
   upsertMatches,
   upsertPlayers,
 } from "./upserts";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 
 const FORWARD_DAYS = 3;
 const BACKWARD_DAYS = 1;
@@ -62,6 +63,11 @@ export interface BackfillResult {
   readonly error?: string;
 }
 
+const SyncSourceErrorBase: TaggedErrorBase<SyncSourceError, "SyncSourceError", MessageFields> =
+  Schema.TaggedError<SyncSourceError>()("SyncSourceError", {
+    message: Schema.String,
+  });
+
 /**
  * The provider's season data cannot be imported as delivered.
  *
@@ -70,9 +76,7 @@ export interface BackfillResult {
  * @example
  * throw new SyncSourceError({ message: "Provider season inventory contains duplicate match IDs" });
  */
-export class SyncSourceError extends Schema.TaggedError<SyncSourceError>()("SyncSourceError", {
-  message: Schema.String,
-}) {}
+export class SyncSourceError extends SyncSourceErrorBase {}
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {

@@ -508,7 +508,7 @@ export async function upsertMatches(
 }
 
 /** Input row for the {@link MATCH_COLUMNS} manifest: the fitzroy match plus resolved FK ids and derived date/time strings. */
-interface MatchRow {
+export interface MatchRow {
   readonly m: Match;
   readonly seasonId: number;
   readonly venueId: number | null;
@@ -533,7 +533,7 @@ interface MatchRow {
  * - `"coalesce"` columns never clobber a completed match's data with NULLs
  *   on an upcoming-status re-fetch.
  */
-export const MATCH_COLUMNS = [
+export const MATCH_COLUMNS: readonly UpsertColumn<MatchRow>[] = [
   { name: "external_afl_id", kind: "key", value: (r) => r.m.matchId },
   { name: "season_id", kind: "key", value: (r) => r.seasonId },
   { name: "round_number", kind: "replace", value: (r) => r.m.roundNumber },
@@ -589,7 +589,7 @@ export const MATCH_COLUMNS = [
   { name: "status", kind: "coalesce", value: (r) => r.m.status },
   { name: "live_period_status", kind: "coalesce", value: (r) => r.m.livePeriodStatus },
   { name: "completed_quarter", kind: "coalesce", value: (r) => r.m.completedQuarter },
-] as const satisfies readonly UpsertColumn<MatchRow>[];
+];
 
 // Shared UPDATE SET fragment for both ON CONFLICT branches in
 // `buildMatchUpsert`. `"key"` columns (the ones that differ between
@@ -712,7 +712,7 @@ export async function upsertStats(
 }
 
 /** Input row for the {@link STAT_COLUMNS} manifest: the fitzroy stats line plus resolved FK ids. */
-interface StatRow {
+export interface StatRow {
   readonly s: PlayerStats;
   readonly matchId: number;
   readonly playerId: number;
@@ -731,7 +731,7 @@ interface StatRow {
  * - `"coalesce"`: `supercoach_score` / `brownlow_votes` come from separate
  *   backfills, so a NULL from the AFL API must never clobber them.
  */
-export const STAT_COLUMNS = [
+export const STAT_COLUMNS: readonly UpsertColumn<StatRow>[] = [
   { name: "match_id", kind: "key", value: (r) => r.matchId },
   { name: "player_id", kind: "key", value: (r) => r.playerId },
   { name: "team_id", kind: "coalesce", value: (r) => r.teamId },
@@ -810,7 +810,7 @@ export const STAT_COLUMNS = [
   { name: "score_launches", kind: "coalesce", value: (r) => r.s.scoreLaunches },
   { name: "supercoach_score", kind: "coalesce", value: (r) => r.s.supercoachScore },
   { name: "brownlow_votes", kind: "coalesce", value: (r) => r.s.brownlowVotes },
-] as const satisfies readonly UpsertColumn<StatRow>[];
+];
 
 const STAT_UPSERT_SQL = `INSERT INTO player_match_stats (${insertColumnList(STAT_COLUMNS)})
     VALUES (${placeholderList(STAT_COLUMNS)})
