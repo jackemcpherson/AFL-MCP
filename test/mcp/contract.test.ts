@@ -60,6 +60,27 @@ function withExecutor(result: ExecuteResult): McpDeps {
   return { ...defaultDeps, executeCode: async () => result };
 }
 
+/** Deps with a faked executor, plus how many times it ran. */
+interface CountingExecutor {
+  readonly deps: McpDeps;
+  readonly calls: () => number;
+}
+
+/** An executor fake that counts its calls, to prove a request never ran. */
+function countingExecutor(): CountingExecutor {
+  let count = 0;
+  return {
+    deps: {
+      ...defaultDeps,
+      executeCode: async () => {
+        count += 1;
+        return { result: count, execution_time_ms: 1 };
+      },
+    },
+    calls: () => count,
+  };
+}
+
 async function capture(res: Response): Promise<GoldenResponse> {
   const headers: Record<string, string> = {};
   for (const name of PINNED_HEADERS) {
@@ -245,6 +266,24 @@ describe("MCP contract: code tool", () => {
     await expectGolden("code-missing", await serve(toolCall("code", {})));
   });
 
+  it("rejects an unknown argument without running the code", async () => {
+    const { deps, calls } = countingExecutor();
+    await expectGolden(
+      "code-unknown-argument",
+      await serve(toolCall("code", { code: "return 1", table: "matches" }), {
+        deps,
+      }),
+    );
+    expect(calls()).toBe(0);
+  });
+
+  it("rejects an unknown argument alongside an empty code argument", async () => {
+    await expectGolden(
+      "code-unknown-argument-empty-code",
+      await serve(toolCall("code", { code: "", extra: 1 })),
+    );
+  });
+
   it("rejects an unrecognised competition", async () => {
     const deps = withExecutor({ result: 1, execution_time_ms: 1 });
     await expectGolden(
@@ -365,7 +404,12 @@ describe("MCP contract: transport", () => {
   });
 
   it("rejects an invalid JSON-RPC envelope without an id with 400", async () => {
-    await expectGolden("transport-invalid-envelope-no-id-400", await serve(rpc([1, 2, 3])));
+    // Under 2025-03-26 (no header) an array is a batch, so pin a revision
+    // that has no batching to keep this a single invalid envelope.
+    await expectGolden(
+      "transport-invalid-envelope-no-id-400",
+      await serve(rpc([1, 2, 3], { "MCP-Protocol-Version": "2025-06-18" })),
+    );
   });
 
   it("serves a request carrying a supported MCP-Protocol-Version header", async () => {
@@ -522,5 +566,179 @@ describe("MCP contract: transport", () => {
       },
     };
     await expectGolden("transport-internal-error", await serve(toolCall("schema"), { deps }));
+  });
+});
+
+describe("MCP contract: JSON-RPC requests without an id", () => {
+  it("treats a tools/call without an id as a notification and runs nothing", async () => {
+    const { deps, calls } = countingExecutor();
+    await expectGolden(
+      "transport-request-without-id-202",
+      await serve(
+        rpc({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: "code", arguments: { code: "return 1" } },
+        }),
+        { deps },
+      ),
+    );
+    expect(calls()).toBe(0);
+  });
+
+  it.each(["initialize", "ping", "tools/list", "resources/list"])(
+    "answers %s without an id with 202 and no body",
+    async (method) => {
+      const res = await handleMcpRequest(rpc({ jsonrpc: "2.0", method }), stubEnv, stubCtx);
+      expect(res.status).toBe(202);
+      expect(await res.text()).toBe("");
+    },
+  );
+});
+
+describe("MCP contract: 2025-03-26 batches", () => {
+  const ping = (id: number | string) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "ping",
+  });
+  const initialized = { jsonrpc: "2.0", method: "notifications/initialized" };
+
+  it("answers each request in order and skips notifications", async () => {
+    const { deps, calls } = countingExecutor();
+    await expectGolden(
+      "transport-batch-200",
+      await serve(
+        rpc([
+          ping(1),
+          initialized,
+          {
+            jsonrpc: "2.0",
+            id: "call",
+            method: "tools/call",
+            params: { name: "code", arguments: { code: "return 1" } },
+          },
+          {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: "code", arguments: { code: "return 2" } },
+          },
+          { jsonrpc: "2.0", id: 3, method: "resources/list" },
+        ]),
+        { deps },
+      ),
+    );
+    // The id-less tools/call is a notification, so only one call runs.
+    expect(calls()).toBe(1);
+  });
+
+  it("accepts a batch carrying an explicit 2025-03-26 header", async () => {
+    const res = await handleMcpRequest(
+      rpc([ping(1), ping(2)], { "MCP-Protocol-Version": "2025-03-26" }),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<ReadonlyArray<{ id: unknown }>>();
+    expect(body.map((response) => response.id)).toEqual([1, 2]);
+  });
+
+  it.each(["2025-06-18", "2025-11-25"])("rejects a batch under %s", async (version) => {
+    const res = await handleMcpRequest(
+      rpc([ping(1), ping(2)], { "MCP-Protocol-Version": version }),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ id: unknown; error: { code: number } }>();
+    expect(body).toMatchObject({ id: null, error: { code: -32600 } });
+  });
+
+  it("acknowledges a batch of only notifications with 202", async () => {
+    await expectGolden(
+      "transport-batch-notifications-202",
+      await serve(rpc([initialized, { jsonrpc: "2.0", method: "notifications/cancelled" }])),
+    );
+  });
+
+  it("rejects an empty batch with one error object", async () => {
+    await expectGolden("transport-batch-empty-400", await serve(rpc([])));
+  });
+
+  it("answers each invalid element with its own error", async () => {
+    await expectGolden("transport-batch-invalid-elements", await serve(rpc([1, 2, 3])));
+  });
+
+  it("rejects initialize inside a batch and still answers the rest", async () => {
+    await expectGolden(
+      "transport-batch-initialize",
+      await serve(
+        rpc([
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: { protocolVersion: "2025-03-26" },
+          },
+          ping(2),
+        ]),
+      ),
+    );
+  });
+
+  it("rejects 2026-07-28 request metadata inside a batch", async () => {
+    const res = await handleMcpRequest(
+      rpc([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {
+            _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+          },
+        },
+        ping(2),
+      ]),
+      stubEnv,
+      stubCtx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<ReadonlyArray<{ id: unknown; error?: { code: number } }>>();
+    expect(body[0]).toMatchObject({ id: 1, error: { code: -32600 } });
+    expect(body[1]).toMatchObject({ id: 2, result: {} });
+  });
+
+  it("rejects a batch over 20 messages without running any of it", async () => {
+    const { deps, calls } = countingExecutor();
+    const call = (id: number) => ({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: "code", arguments: { code: "return 1" } },
+    });
+    await expectGolden(
+      "transport-batch-too-large-400",
+      await serve(rpc(Array.from({ length: 21 }, (_, index) => call(index))), {
+        deps,
+      }),
+    );
+    expect(calls()).toBe(0);
+  });
+
+  it("charges the rate limit once per message and refuses the whole batch", async () => {
+    let remaining = 2;
+    const env = testEnv({
+      MCP_RATE_LIMIT: {
+        limit: async () => {
+          remaining -= 1;
+          return { success: remaining >= 0 };
+        },
+      },
+    });
+    const { deps, calls } = countingExecutor();
+    const res = await handleMcpRequest(rpc([ping(1), ping(2), ping(3)]), env, stubCtx, deps);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    expect(calls()).toBe(0);
   });
 });

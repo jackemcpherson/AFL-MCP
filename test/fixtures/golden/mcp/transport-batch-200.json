@@ -1,0 +1,33 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {}
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "call",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "error": {
+        "code": -32601,
+        "message": "Method not found: resources/list"
+      }
+    }
+  ]
+}

@@ -35,9 +35,30 @@ The handler checks each request in this order:
    `MCP-Protocol-Version` header, or 2026-07-28 request metadata, returns
    400 with error `-32600`. Dual-era clients then fall back to
    `initialize`.
-7. Notifications return 202 with no body.
+7. Notifications return 202 with no body. A message without an `id` is a
+   notification whatever its method, so the server does not run it.
 
-Errors for a request whose id is unknown carry `id: null`. The handler logs
+Errors for a request whose id is unknown carry `id: null`.
+
+### Batches
+
+A 2025-03-26 client may send a JSON array of messages. The server takes
+the array as a batch when the request has no `MCP-Protocol-Version` header
+or the header is 2025-03-26. Later revisions removed batching, so under
+any other header an array is an invalid envelope and returns 400.
+
+- The 4 MiB cap applies to the whole body.
+- An empty batch returns 400 with one `-32600` error.
+- A batch over 20 messages returns 400 with `-32600` and runs nothing.
+- Each message after the first takes one more rate-limit token. When the
+  limit runs out, the whole batch returns 429 and nothing runs.
+- Messages run one at a time, in order. Each request gets its own response,
+  invalid messages and 2026-07-28 metadata get `-32600` errors, and
+  notifications get none.
+- `initialize` inside a batch gets a `-32600` error. The other messages
+  still run.
+- The reply is 200 with an array of responses in input order, or 202 with
+  no body when no message takes a response. The handler logs
 the `Origin` and protocol version of each request that passes steps 1 to 5
 as an `mcp:client` event. Requests rejected at those steps are not logged.
 The event records the `MCP-Protocol-Version` header, the `initialize`
@@ -55,7 +76,9 @@ clients.
 the unchanged text block. Array, scalar and truncated `code` results stay
 text only, and error results never carry it. `tools/call` naming an unknown
 tool returns JSON-RPC error `-32602`. A call without a string tool name
-returns `-32602` with `Missing tool name`.
+returns `-32602` with `Missing tool name`. Both tools reject undeclared
+arguments with an `isError` result that names the key and lists the valid
+arguments.
 
 ## Schema Contract
 

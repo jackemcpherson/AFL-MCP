@@ -49,6 +49,17 @@ the repository to TypeScript standard v4.
 - The `code` tool's read-only SQL guard is tighter.
 - The `mcp:client` log event adds `metaProtocolVersion`, the 2026-07-28
   `_meta` protocol version marker, or `null` when a request has none.
+- Breaking: a request without an `id` is a JSON-RPC notification. `/mcp`
+  answers it with 202 and no body and does not run it. It used to run and
+  reply with `id: 0`. `notifications/*` messages behave as before.
+- `/mcp` accepts JSON-RPC batches from 2025-03-26 clients, which send no
+  `MCP-Protocol-Version` header or send 2025-03-26. A batch holds at most
+  20 messages, and each message after the first takes one more rate-limit
+  token. `initialize` inside a batch gets a `-32600` error. Under
+  2025-06-18 and 2025-11-25 an array still returns 400.
+- Breaking: the `code` tool rejects arguments it does not declare with an
+  `isError` result that names the key and lists the valid arguments. It
+  used to ignore them. `competition: null` still counts as omitted.
 
 ### Fixed in 5.0.0
 

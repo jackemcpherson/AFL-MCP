@@ -45,7 +45,8 @@ Annotations mark both tools read-only, non-destructive, idempotent and
 closed-world. The optional `code` argument `competition` must be `AFLM`,
 `AFLW`, `VFL` or `VFLW`. Omitting it or passing `null` has the same effect.
 Any other value returns an `isError` result that lists the valid codes. The
-argument never changes the submitted SQL.
+argument never changes the submitted SQL. Both tools reject arguments they
+do not declare.
 
 Sandbox constraints (no network, no npm, 30-second timeout, 1 MB result cap,
 60 requests per minute per IP) travel in the `code` tool's description.

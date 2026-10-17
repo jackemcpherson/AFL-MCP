@@ -6,26 +6,21 @@
  * and trusted internally; types are derived from the schemas.
  */
 
-import { Effect, Schema } from "effect";
-import { CompetitionCodeSchema } from "../lib/competitions";
+import { Schema } from "effect";
+import { COMPETITION_CODES, CompetitionCodeSchema } from "../lib/competitions";
 import { type Decoder, looseDecoder, strictDecoder } from "../lib/decode";
 import { booleanDefault, SeasonKeySelectorSchema } from "../lib/schemas";
 
 /** JSON-RPC 2.0 request envelope. */
 export const JsonRpcRequestSchema: Schema.Struct<{
   readonly jsonrpc: Schema.Literal<"2.0">;
-  readonly id: Schema.withDecodingDefaultKey<
-    Schema.Union<readonly [Schema.String, Schema.Number]>,
-    never
-  >;
+  readonly id: Schema.optionalKey<Schema.Union<readonly [Schema.String, Schema.Number]>>;
   readonly method: Schema.String;
   readonly params: Schema.optionalKey<Schema.$Record<Schema.String, Schema.Unknown>>;
 }> = Schema.Struct({
   jsonrpc: Schema.Literal("2.0"),
-  // Notifications may omit id; default keeps response construction total.
-  id: Schema.Union([Schema.String, Schema.Number]).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(0)),
-  ),
+  // A message without an id is a notification and gets no response.
+  id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
   method: Schema.String.check(Schema.isNonEmpty()),
   params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 });
@@ -143,9 +138,12 @@ export const CodeToolRequestSchema: Schema.Struct<{
   competition: Schema.optionalKey(Schema.NullOr(CompetitionCodeSchema)),
 });
 
-/** Decode `code` tool arguments, ignoring unknown keys. */
+/** Decode `code` tool arguments, rejecting unknown keys. */
 export const decodeCodeToolRequest: Decoder<typeof CodeToolRequestSchema.Type> =
-  looseDecoder(CodeToolRequestSchema);
+  strictDecoder(CodeToolRequestSchema);
+
+/** The code tool's argument contract, appended to an unknown-argument error. */
+export const CODE_TOOL_CONTRACT: string = `Valid arguments: code (required non-empty string); competition (optional: ${COMPETITION_CODES.join(", ")} or null).`;
 
 /** Optional recovery flag for the current competition-season sync scope. */
 export const SyncRequestSchema: Schema.Struct<{

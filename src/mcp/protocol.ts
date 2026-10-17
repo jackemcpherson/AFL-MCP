@@ -9,6 +9,7 @@ import { McpRequestError } from "./errors";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolAnnotations, ToolDefinition } from "./types";
 import {
+  CODE_TOOL_CONTRACT,
   decodeCodeToolRequest,
   decodeJsonRpcId,
   decodeJsonRpcRequest,
@@ -212,11 +213,15 @@ async function handleToolCall(
       }
       const parsed = decodeCodeToolRequest(args);
       if (Result.isFailure(parsed)) {
-        return mcpError(
-          firstIssue(parsed.failure).path[0] === "competition"
-            ? `competition must be one of ${COMPETITION_CODES.join(", ")}`
-            : "code parameter is required and must be a non-empty string",
-        );
+        const key = firstIssue(parsed.failure).path[0];
+        if (key === "competition") {
+          return mcpError(`competition must be one of ${COMPETITION_CODES.join(", ")}`);
+        }
+        if (key === undefined || key === "code") {
+          return mcpError("code parameter is required and must be a non-empty string");
+        }
+        // Any other key is an argument the tool does not declare.
+        return mcpError(`${describeIssue(parsed.failure)}. ${CODE_TOOL_CONTRACT}`);
       }
       const { code } = parsed.success;
       const competition = parsed.success.competition ?? null;
@@ -233,8 +238,11 @@ async function handleToolCall(
   }
 }
 
+/** A JSON-RPC request that carries an id, so it takes a response. */
+type JsonRpcCall = JsonRpcRequest & { readonly id: string | number };
+
 async function handleJsonRpc(
-  request: JsonRpcRequest,
+  request: JsonRpcCall,
   env: Env,
   ctx: ExecutionContext,
   deps: McpDeps,
@@ -418,16 +426,7 @@ export async function handleMcpRequest(
     });
   }
 
-  if (env.MCP_RATE_LIMIT) {
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    const { success } = await env.MCP_RATE_LIMIT.limit({ key: ip });
-    if (!success) {
-      return Response.json(jsonRpcError(null, -32000, "Rate limit exceeded — retry later"), {
-        status: 429,
-        headers: { "Retry-After": "60" },
-      });
-    }
-  }
+  if (await isRateLimited(request, env)) return rateLimitedResponse();
 
   const contentType = request.headers.get("content-type") ?? "";
   const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
@@ -450,11 +449,56 @@ export async function handleMcpRequest(
     return Response.json(jsonRpcError(null, -32700, "Parse error: invalid JSON"), { status: 400 });
   }
 
-  const decoded = decodeJsonRpcRequest(body);
+  const header = request.headers.get("mcp-protocol-version");
+  if (Array.isArray(body) && (header === null || header === BATCH_PROTOCOL_VERSION)) {
+    return handleBatch(request, body, env, ctx, deps);
+  }
+
+  const outcome = await handleMessage(request, body, env, ctx, deps, false);
+  switch (outcome.kind) {
+    case "rejected":
+      return Response.json(outcome.response, { status: 400 });
+    case "none":
+      // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
+      return new Response(null, { status: 202 });
+    case "answered":
+      return Response.json(outcome.response, { headers: { "Content-Type": "application/json" } });
+  }
+}
+
+/**
+ * What one JSON-RPC message produced: an error that rejects it before any
+ * method runs, no response (a notification), or the method's response.
+ */
+type MessageOutcome =
+  | { readonly kind: "rejected"; readonly response: JsonRpcResponse }
+  | { readonly kind: "none" }
+  | { readonly kind: "answered"; readonly response: JsonRpcResponse };
+
+/**
+ * Validate and run one JSON-RPC message, alone or as a batch element.
+ * @param request - Incoming MCP POST request, for headers and logging.
+ * @param message - The parsed message.
+ * @param env - Worker environment.
+ * @param ctx - Worker execution context.
+ * @param deps - Collaborators.
+ * @param inBatch - Whether the message is an element of a batch.
+ * @returns The message's outcome.
+ */
+async function handleMessage(
+  request: Request,
+  message: unknown,
+  env: Env,
+  ctx: ExecutionContext,
+  deps: McpDeps,
+  inBatch: boolean,
+): Promise<MessageOutcome> {
+  const decoded = decodeJsonRpcRequest(message);
   if (Result.isFailure(decoded)) {
-    return Response.json(jsonRpcError(knownId(body), -32600, "Invalid JSON-RPC 2.0 request"), {
-      status: 400,
-    });
+    return {
+      kind: "rejected",
+      response: jsonRpcError(knownId(message), -32600, "Invalid JSON-RPC 2.0 request"),
+    };
   }
   const rpcRequest = decoded.success;
 
@@ -462,28 +506,107 @@ export async function handleMcpRequest(
 
   const unsupported = unsupportedProtocolMessage(request, rpcRequest);
   if (unsupported !== null) {
-    return Response.json(jsonRpcError(knownId(body), -32600, unsupported), { status: 400 });
+    return { kind: "rejected", response: jsonRpcError(knownId(message), -32600, unsupported) };
   }
 
-  // JSON-RPC notifications (method "notifications/*") take no response.
-  // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
-  if (rpcRequest.method.startsWith("notifications/")) {
-    return new Response(null, { status: 202 });
+  // JSON-RPC 2.0: a message without an id is a notification, whatever its
+  // method, so it is not run and takes no response. "notifications/*"
+  // methods take no response even when a client attaches an id.
+  const { id } = rpcRequest;
+  if (id === undefined || rpcRequest.method.startsWith("notifications/")) {
+    return { kind: "none" };
   }
 
-  let response: JsonRpcResponse;
+  // 2025-03-26 lifecycle: initialize MUST NOT be part of a batch.
+  if (inBatch && rpcRequest.method === "initialize") {
+    return {
+      kind: "rejected",
+      response: jsonRpcError(id, -32600, "initialize must not be part of a JSON-RPC batch"),
+    };
+  }
+
   try {
-    response = await handleJsonRpc(rpcRequest, env, ctx, deps);
+    const response = await handleJsonRpc({ ...rpcRequest, id }, env, ctx, deps);
+    return { kind: "answered", response };
   } catch (err) {
     if (err instanceof McpRequestError) {
-      response = jsonRpcError(rpcRequest.id, err.code, err.message);
-    } else {
-      logError("mcp_handler_error", err);
-      response = jsonRpcError(rpcRequest.id, -32603, "Internal error");
+      return { kind: "answered", response: jsonRpcError(id, err.code, err.message) };
     }
+    logError("mcp_handler_error", err);
+    return { kind: "answered", response: jsonRpcError(id, -32603, "Internal error") };
   }
+}
 
-  return Response.json(response, {
-    headers: { "Content-Type": "application/json" },
+/** The only revision this server speaks with JSON-RPC batching. 2025-06-18 removed it. */
+const BATCH_PROTOCOL_VERSION = "2025-03-26";
+
+/**
+ * Most messages accepted in one batch. Elements run one after another, so
+ * this bounds a batch to 20 sandbox runs.
+ */
+const MAX_BATCH_MESSAGES = 20;
+
+/**
+ * Serve a 2025-03-26 JSON-RPC batch.
+ *
+ * Elements run one at a time, in order, so a batch holds at most one
+ * sandbox isolate at once. Each element beyond the first costs one more
+ * rate-limit token, so batching does not multiply a caller's quota.
+ * @param request - Incoming MCP POST request.
+ * @param batch - The parsed JSON array.
+ * @param env - Worker environment.
+ * @param ctx - Worker execution context.
+ * @param deps - Collaborators.
+ * @returns 200 with the responses in input order, 202 when no element takes
+ * a response, or one error for an empty, oversized or rate-limited batch.
+ */
+async function handleBatch(
+  request: Request,
+  batch: readonly unknown[],
+  env: Env,
+  ctx: ExecutionContext,
+  deps: McpDeps,
+): Promise<Response> {
+  if (batch.length === 0) {
+    return Response.json(jsonRpcError(null, -32600, "Invalid JSON-RPC 2.0 request"), {
+      status: 400,
+    });
+  }
+  if (batch.length > MAX_BATCH_MESSAGES) {
+    return Response.json(
+      jsonRpcError(null, -32600, `Batch exceeds ${MAX_BATCH_MESSAGES} messages`),
+      { status: 400 },
+    );
+  }
+  const extraTokens = Array.from({ length: batch.length - 1 }, () => isRateLimited(request, env));
+  if ((await Promise.all(extraTokens)).includes(true)) return rateLimitedResponse();
+
+  const responses: JsonRpcResponse[] = [];
+  for (const message of batch) {
+    const outcome = await handleMessage(request, message, env, ctx, deps, true);
+    if (outcome.kind !== "none") responses.push(outcome.response);
+  }
+  if (responses.length === 0) return new Response(null, { status: 202 });
+  return Response.json(responses, { headers: { "Content-Type": "application/json" } });
+}
+
+/**
+ * Take one token from the caller's per-IP rate limit.
+ * @param request - Incoming MCP request.
+ * @param env - Worker environment.
+ * @returns `true` when the caller is over the limit.
+ */
+async function isRateLimited(request: Request, env: Env): Promise<boolean> {
+  if (!env.MCP_RATE_LIMIT) return false;
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const { success } = await env.MCP_RATE_LIMIT.limit({ key: ip });
+  return !success;
+}
+
+/** The 429 reply for a caller over the rate limit. */
+function rateLimitedResponse(): Response {
+  return Response.json(jsonRpcError(null, -32000, "Rate limit exceeded — retry later"), {
+    status: 429,
+    headers: { "Retry-After": "60" },
   });
 }
