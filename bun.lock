@@ -9,7 +9,7 @@
         "fitzroy": "7.0.0",
       },
       "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "^0.23.0",
+        "@cloudflare/vitest-pool-workers": "0.23.0",
         "@cloudflare/workers-types": "^5.0.0",
         "@oxlint/plugins": "1.79.0",
         "@types/node": "^24",

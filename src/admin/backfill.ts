@@ -5,7 +5,13 @@
 
 import { Schema } from "effect";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { type Decoder, firstIssue, looseDecoder, strictDecoder } from "../lib/decode";
+import {
+  type Decoder,
+  describeIssue,
+  firstIssue,
+  looseDecoder,
+  strictDecoder,
+} from "../lib/decode";
 import { booleanDefault, SeasonSelectorSchema } from "../lib/schemas";
 
 /** Shape of POST /mcp/admin/backfill bodies. Range clamps live with the route. */
@@ -64,8 +70,7 @@ export const decodeSeasonPresence: Decoder<{ readonly season: unknown }> =
  * @returns A stable caller-facing message.
  */
 export function describeBackfillIssue(error: Schema.SchemaError): string {
-  const { path, message } = firstIssue(error);
-  const [root, index] = path;
+  const [root, index] = firstIssue(error).path;
   if (root === "competitions") {
     return index === undefined
       ? "competitions must be a non-empty array"
@@ -73,5 +78,6 @@ export function describeBackfillIssue(error: Schema.SchemaError): string {
   }
   if (root === "fromYear") return "fromYear must be an integer";
   if (root === "toYear") return "toYear must be an integer";
-  return message;
+  // Names the failing key, such as an unknown one.
+  return describeIssue(error);
 }

@@ -86,6 +86,11 @@ the repository to TypeScript standard v4.
   standard: the minimal-Worker shape and the hand-rolled MCP protocol.
 - The repository waits to adopt `@effect/vitest` until
   `@cloudflare/vitest-pool-workers` supports Vitest 5.
+- CI bundles the Worker with `wrangler deploy --dry-run` after the tests.
+- `package.json` pins `@cloudflare/vitest-pool-workers` to the exact locked
+  version.
+- Workers-pool tests time out after 15 seconds instead of 5, because
+  isolates contend for CPU when every test file runs at once.
 
 ## [4.0.11] - 2026-10-17
 

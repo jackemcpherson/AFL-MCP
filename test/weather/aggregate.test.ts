@@ -259,11 +259,15 @@ describe("extractHourlySeries", () => {
   });
 
   it("throws when a variable is not an array", () => {
-    expect(() => extract({ hourly: { time, temperature_2m: "not-an-array" } })).toThrow(/Expected/);
+    expect(() => extract({ hourly: { time, temperature_2m: "not-an-array" } })).toThrow(
+      /^Unexpected Open-Meteo payload: Expected/,
+    );
   });
 
   it("throws when a variable array contains a non-numeric value", () => {
-    expect(() => extract({ hourly: { time, temperature_2m: [10, "11"] } })).toThrow(/Expected/);
+    expect(() => extract({ hourly: { time, temperature_2m: [10, "11"] } })).toThrow(
+      /^Unexpected Open-Meteo payload: Expected/,
+    );
   });
 
   it("throws when the time axis mixes strings and epochs", () => {
@@ -271,7 +275,7 @@ describe("extractHourlySeries", () => {
       extract({
         hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] },
       }),
-    ).toThrow(/Expected/);
+    ).toThrow(/^Unexpected Open-Meteo payload: Expected/);
   });
 });
 

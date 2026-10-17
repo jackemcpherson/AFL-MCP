@@ -48,6 +48,10 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
           ],
           test: {
             name: "integration",
+            // Workers-pool isolates share the CPU when every file runs at once,
+            // so a D1-heavy test can pass 5 s on a loaded machine. 15 s keeps
+            // full parallelism and still catches a hung test.
+            testTimeout: 15_000,
             include: ["test/**/*.worker.test.ts"],
             setupFiles: ["test/support/worker-setup.ts"],
           },

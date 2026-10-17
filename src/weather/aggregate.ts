@@ -11,6 +11,7 @@
  */
 
 import { Schema } from "effect";
+import { describeError } from "../lib/errors";
 import type { SyncDecoder } from "../lib/schemas";
 
 /**
@@ -46,14 +47,22 @@ export const OpenMeteoPayloadSchema: Schema.Struct<{
 /** Parsed Open-Meteo hourly payload (the external API boundary). */
 export type OpenMeteoPayload = typeof OpenMeteoPayloadSchema.Type;
 
+const decodePayload = Schema.decodeUnknownSync(OpenMeteoPayloadSchema);
+
 /**
  * Decode a raw Open-Meteo JSON body, ignoring non-hourly fields.
  *
  * @throws When the body is not an hourly payload (for example an API error
- *   body, or a variable that is not a nullable-number array).
+ *   body, or a variable that is not a nullable-number array). The message
+ *   starts `Unexpected Open-Meteo payload:`, which weather diagnostics keep.
  */
-export const decodeOpenMeteoPayload: SyncDecoder<OpenMeteoPayload> =
-  Schema.decodeUnknownSync(OpenMeteoPayloadSchema);
+export const decodeOpenMeteoPayload: SyncDecoder<OpenMeteoPayload> = (input) => {
+  try {
+    return decodePayload(input);
+  } catch (error) {
+    throw new Error(`Unexpected Open-Meteo payload: ${describeError(error)}`, { cause: error });
+  }
+};
 
 /** True for a UTC epoch-seconds axis, false for a legacy local-string axis. */
 const isEpochAxis = Schema.is(Schema.Array(Schema.Number));

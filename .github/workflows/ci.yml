@@ -48,3 +48,10 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      # Bundles the Worker as a deploy would, with no credentials and no
+      # upload, so a bundling failure fails CI instead of the release.
+      - name: Bundle Worker (dry run)
+        run: bunx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/wrangler-dry-run"
+        env:
+          WRANGLER_SEND_METRICS: "false"

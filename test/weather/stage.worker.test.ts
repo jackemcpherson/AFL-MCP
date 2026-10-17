@@ -569,6 +569,22 @@ describe("runWeatherStage — failure and hygiene", () => {
     expect(await weatherRows(match)).toHaveLength(1);
   });
 
+  it("records a malformed payload with the Open-Meteo payload prefix", async () => {
+    const seasonId = await seedSeason();
+    await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+    const match = await seedMatch({ seasonId, date: "2026-07-16" });
+
+    const malformed = async () => Response.json({ hourly: { time: [], temperature_2m: "x" } });
+    await runWeatherStage(env, malformed, NOW);
+
+    const diagnostic = await env.DB.prepare(
+      "SELECT diagnostic FROM weather_refresh_state WHERE match_id=?",
+    )
+      .bind(match)
+      .first("diagnostic");
+    expect(diagnostic).toMatch(/^Unexpected Open-Meteo payload: /);
+  });
+
   it("deletes stray weather rows for cancelled matches and fetches nothing for them", async () => {
     const seasonId = await seedSeason();
     await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });

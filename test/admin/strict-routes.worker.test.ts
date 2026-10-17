@@ -103,7 +103,7 @@ describe("strict admin routes reject undeclared keys", () => {
     {
       path: "backfill",
       body: { competitions: ["AFLM"], fromYear: 1800, toYear: 1800 },
-      error: "Expected no excess property",
+      error: 'Expected no excess property at "unexpected"',
     },
   ])("$path $body", async ({ path, body, error }) => {
     const control = await post(path, body);
