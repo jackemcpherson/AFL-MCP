@@ -4,19 +4,14 @@ vi.mock("cloudflare:workers", () => ({
   WorkerEntrypoint: class {},
 }));
 
+import { testCtx, testEnv, testLoader } from "#test/fixtures";
 import { executeCode, sanitizeErrorMessage } from "../src/sandbox/executor";
 import type { Env } from "../src/types";
 
-const stubCtx = {
-  exports: { DbProxy: (_opts: unknown) => ({}) },
-} as unknown as ExecutionContext;
+const stubCtx = testCtx({ DbProxy: () => ({}) });
 
 function envWithLoaderFetch(fetchImpl: () => Promise<Response>): Env {
-  return {
-    LOADER: {
-      load: () => ({ getEntrypoint: () => ({ fetch: fetchImpl }) }),
-    },
-  } as unknown as Env;
+  return testEnv({ LOADER: testLoader(fetchImpl) });
 }
 
 describe("executeCode limits", () => {

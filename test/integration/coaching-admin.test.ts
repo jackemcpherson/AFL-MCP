@@ -1,10 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requestUrl, testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 import type { Env } from "../../src/types";
 
 const adminEnv: Env = { ...(env as Env), ADMIN_TOKEN: "coaching-test-token" };
-const context = { waitUntil: () => {} } as unknown as ExecutionContext;
+const context = testCtx();
 const profileUrl = "https://afltables.com/afl/stats/coaches/Coach_A.html";
 
 function request(token = "coaching-test-token", dryRun = false): Request {
@@ -42,8 +43,8 @@ function upstream(html: string, count = 1): string[] {
     (_, i) => `<a href="Coach_${i === 0 ? "A" : i}.html">Coach ${i}</a>`,
   ).join("");
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    calls.push(String(input));
-    return new Response(String(input).endsWith("coaches_idx.html") ? index : html);
+    calls.push(requestUrl(input));
+    return new Response(requestUrl(input).endsWith("coaches_idx.html") ? index : html);
   });
   return calls;
 }
@@ -251,7 +252,7 @@ describe("authenticated coaching backfill on local D1", () => {
       "fetch",
       async (input: RequestInfo | URL) =>
         new Response(
-          String(input).endsWith("coaches_idx.html")
+          requestUrl(input).endsWith("coaches_idx.html")
             ? '<a href="Coach_B.html">Replacement coach</a>'
             : profile("Richmond", true),
         ),
@@ -288,7 +289,7 @@ describe("authenticated coaching backfill on local D1", () => {
     let failed = true;
     const calls: string[] = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       calls.push(url);
       if (url.endsWith("coaches_idx.html"))
         return new Response('<a href="Coach_A.html">Coach 0</a><a href="Coach_B.html">Coach B</a>');

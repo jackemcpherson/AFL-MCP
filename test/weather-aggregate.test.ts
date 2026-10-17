@@ -81,15 +81,15 @@ describe("aggregateWeatherWindow", () => {
     const series = makeSeries("2026-07-17", 2);
     // Match window for a 14:10 start is 14:00, 15:00, 16:00 on day two.
     const at = (hour: number) => 24 + hour;
-    const temps = series.temperatureC as (number | null)[];
+    const temps = series.temperatureC;
     temps[at(14)] = 12;
     temps[at(15)] = 14;
     temps[at(16)] = 13;
-    const wind = series.windSpeedKmh as (number | null)[];
+    const wind = series.windSpeedKmh;
     wind[at(14)] = 10;
     wind[at(15)] = 30;
     wind[at(16)] = 20;
-    const precip = series.precipitationMm as (number | null)[];
+    const precip = series.precipitationMm;
     precip[at(14)] = 1.2;
     precip[at(15)] = 0;
     precip[at(16)] = 0.4;
@@ -111,7 +111,7 @@ describe("aggregateWeatherWindow", () => {
 
   it("retains null for a metric with incomplete hourly coverage", () => {
     const series = makeSeries("2026-07-17", 2, { temp: null });
-    const temps = series.temperatureC as (number | null)[];
+    const temps = series.temperatureC;
     temps[24 + 19] = 8; // only one non-null hour in the window
     const metrics = aggregateWeatherWindow(series, "2026-07-18T19:40:00");
     expect(metrics.tempC).toBeNull();
@@ -163,7 +163,7 @@ describe("aggregateWeatherWindow", () => {
 
   it("spans the previous day for the prior-24h precipitation window", () => {
     const series = makeSeries("2026-07-17", 2, { precip: 0 });
-    const precip = series.precipitationMm as (number | null)[];
+    const precip = series.precipitationMm;
     precip[16] = 5; // 16:00 on the prior day — inside [start-24h, start)
     precip[24 + 13] = 2; // 13:00 on match day — inside the prior window for a 14:00 start
     precip[24 + 14] = 1; // 14:00 — match window, not prior

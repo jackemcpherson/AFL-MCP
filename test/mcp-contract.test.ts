@@ -9,6 +9,7 @@
  * `getSchemaInfo`, because faking it would pin nothing.
  */
 import { describe, expect, it } from "vitest";
+import { testCtx, testEnv } from "#test/fixtures";
 import pkg from "../package.json";
 import { defaultDeps, handleMcpRequest, type McpDeps } from "../src/mcp/protocol";
 import type { ExecuteResult } from "../src/sandbox/executor";
@@ -20,8 +21,8 @@ const GOLDEN_DIR = "fixtures/golden/mcp";
 /** Placeholder for `serverInfo.version`, which changes every release. */
 const VERSION_PLACEHOLDER = "<package.json version>";
 
-const stubEnv = {} as unknown as Env;
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubEnv = testEnv();
+const stubCtx = testCtx();
 
 /** Headers a client can act on. The rest of the header bag is not contract. */
 const PINNED_HEADERS = [
@@ -199,7 +200,7 @@ describe("MCP contract: code tool", () => {
   });
 
   it("reports the operator kill switch", async () => {
-    const env = { CODE_TOOL_DISABLED: "true" } as unknown as Env;
+    const env = testEnv({ CODE_TOOL_DISABLED: "true" });
     await expectGolden(
       "code-disabled",
       await serve(toolCall("code", { code: "return 1" }), { env }),
@@ -246,9 +247,9 @@ describe("MCP contract: transport", () => {
   });
 
   it("rejects rate-limited callers with 429 and Retry-After", async () => {
-    const env = {
+    const env = testEnv({
       MCP_RATE_LIMIT: { limit: async () => ({ success: false }) },
-    } as unknown as Env;
+    });
     await expectGolden(
       "transport-rate-limited-429",
       await serve(rpc({ jsonrpc: "2.0", id: 1, method: "ping" }), { env }),

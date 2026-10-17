@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { memoryCache, scriptedD1, testEnv } from "#test/fixtures";
 import {
   ANALYTICS_COLUMNS,
   COVERAGE_COMPETITIONS,
@@ -8,26 +9,8 @@ import {
 } from "../src/mcp/tools/coverage";
 import { getSchemaInfo } from "../src/mcp/tools/schema";
 import { SCHEMA_TOOL_CONTRACT, SchemaToolRequestSchema } from "../src/mcp/validation";
-import type { Env } from "../src/types";
-
-function fakeCache() {
-  const entries = new Map<string, Response>();
-  return {
-    entries,
-    cache: {
-      async match(request: Request) {
-        const response = entries.get(request.url);
-        return response?.clone();
-      },
-      async put(request: Request, response: Response) {
-        entries.set(request.url, response.clone());
-      },
-    } as unknown as Cache,
-  };
-}
 
 function observationEnv() {
-  const calls: { sql: string; bindings: unknown[] }[] = [];
   const rows = [
     { id: 77, year: 2026, season_key: "2026", code: "VFLW" },
     { row_count: 2, n0: 2, n1: 1 },
@@ -39,27 +22,8 @@ function observationEnv() {
     { revision: 10, in_progress: 0 },
     { revision: 10, in_progress: 0 },
   ];
-  const DB = {
-    async batch(statements: { first: () => Promise<unknown> }[]) {
-      return Promise.all(
-        statements.map(async (statement) => ({ results: [await statement.first()] })),
-      );
-    },
-    prepare(sql: string) {
-      const call = { sql, bindings: [] as unknown[] };
-      calls.push(call);
-      return {
-        bind(...bindings: unknown[]) {
-          call.bindings = bindings;
-          return this;
-        },
-        async first() {
-          return rows[calls.indexOf(call)] ?? null;
-        },
-      };
-    },
-  } as unknown as D1Database;
-  return { env: { DB } as Env, calls };
+  const { db, calls } = scriptedD1(rows);
+  return { env: testEnv({ DB: db }), calls };
 }
 
 describe("coverage contract", () => {
@@ -220,7 +184,7 @@ describe("coverage contract", () => {
 
   it("observes bounded inventories and caches one consistent result for 15 minutes", async () => {
     const { env, calls } = observationEnv();
-    const { cache, entries } = fakeCache();
+    const { cache, entries } = memoryCache();
     const first = await observeCoverage(env, "VFLW", 2026, cache);
     expect(first.scalar.guernsey_number).toEqual({
       unit: "rows",
@@ -260,18 +224,8 @@ describe("coverage contract", () => {
   });
 
   it("does not cache query errors", async () => {
-    const { cache, entries } = fakeCache();
-    const env = {
-      DB: {
-        prepare: () => ({
-          bind: () => ({
-            first: async () => {
-              throw new Error("D1 down");
-            },
-          }),
-        }),
-      },
-    } as unknown as Env;
+    const { cache, entries } = memoryCache();
+    const env = testEnv({ DB: scriptedD1([new Error("D1 down")]).db });
     await expect(observeCoverage(env, "AFLM", 2026, cache)).rejects.toThrow("D1 down");
     expect(entries.size).toBe(0);
   });

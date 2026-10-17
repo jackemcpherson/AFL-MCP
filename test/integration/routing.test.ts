@@ -5,13 +5,13 @@ vi.mock("cloudflare:workers", () => ({
   WorkerEntrypoint: class {},
 }));
 
+import { testCtx } from "#test/fixtures";
 import worker from "../../src/index";
-import type { Env } from "../../src/types";
 
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubCtx = testCtx();
 
 async function get(path: string): Promise<Response> {
-  return worker.fetch(new Request(`https://afl.test${path}`), env as Env, stubCtx);
+  return worker.fetch(new Request(`https://afl.test${path}`), env, stubCtx);
 }
 
 describe("root and unknown-path routing", () => {
@@ -50,7 +50,7 @@ it("returns a safe 409 for an unapproved PAV write", async () => {
       headers: { Authorization: "Bearer test-admin" },
       body: JSON.stringify({ competition: "AFLM", season: 2026, dryRun: false }),
     }),
-    { ...env, ADMIN_TOKEN: "test-admin" } as Env,
+    { ...env, ADMIN_TOKEN: "test-admin" },
     stubCtx,
   );
   expect(response.status).toBe(409);

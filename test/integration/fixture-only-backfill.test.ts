@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
+import { requestUrl, testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 import {
   ensureCompetition,
@@ -34,7 +35,7 @@ it("corrects fixtures at the hour without fetching or altering player inputs or 
   const before = await env.DB.prepare("SELECT * FROM player_match_stats").all();
   const unexpected = vi.fn();
   const network = vi.fn((input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = requestUrl(input);
     if (url.endsWith("/WMCTok")) return Response.json({ token: "fixture-token" });
     if (url.includes("/competitions/1/compseasons"))
       return Response.json({ compSeasons: [{ id: 85, name: "2026 Toyota AFL Premiership" }] });
@@ -58,7 +59,7 @@ it("corrects fixtures at the hour without fetching or altering player inputs or 
       body: JSON.stringify({ competition: "AFLM", season: 2026, fixturesOnly: true }),
     }),
     { ...env, ADMIN_TOKEN: "fixture-test" },
-    { waitUntil: () => {} } as unknown as ExecutionContext,
+    testCtx(),
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ results: [{ matches: 1, stats: 0, lineups: 0 }] });

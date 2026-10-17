@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { expect, it } from "vitest";
+import { testCache } from "#test/fixtures";
 import { observeCoverage } from "../../src/mcp/tools/coverage";
 import { ensureCompetition, ensureSeason } from "../../src/sync/upserts";
 
@@ -22,7 +23,7 @@ it("distinguishes an empty stored season from uncaptured and captured provider i
     )
     .run();
   // Use an explicit uncached reader to compare the same scope with direct SQL.
-  const noCache = { match: async () => undefined, put: async () => {} } as unknown as Cache;
+  const noCache = testCache({ match: async () => undefined, put: async () => {} });
   const observed = await observeCoverage(env, "AFLW", "2022-S6", noCache);
   const stored = await env.DB.prepare("SELECT count(*) AS n FROM matches WHERE season_id=?1")
     .bind(season)

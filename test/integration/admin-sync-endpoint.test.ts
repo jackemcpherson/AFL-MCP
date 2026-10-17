@@ -5,10 +5,11 @@ vi.mock("cloudflare:workers", () => ({
   WorkerEntrypoint: class {},
 }));
 
+import { testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 import type { Env } from "../../src/types";
 
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubCtx = testCtx();
 
 const ADMIN_TOKEN = "test-admin-token";
 const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };

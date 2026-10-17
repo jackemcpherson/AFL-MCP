@@ -11,7 +11,9 @@ vi.mock("../src/sandbox/executor", () => ({
   executeCode: vi.fn().mockResolvedValue({ result: "ok", execution_time_ms: 5 }),
 }));
 
+import { scriptedD1, testCtx, testEnv } from "#test/fixtures";
 import { handleMcpRequest } from "../src/mcp/protocol";
+import type { Env } from "../src/types";
 
 function makeRequest(body: unknown, method = "POST"): Request {
   return new Request("https://afl.test/mcp", {
@@ -40,10 +42,10 @@ async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
 }
 
 // Minimal env stub — tools that don't touch DB don't need it
-const stubEnv = {} as unknown as import("../src/types").Env;
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubEnv = testEnv();
+const stubCtx = testCtx();
 
-function observedSchemaEnv(): import("../src/types").Env {
+function observedSchemaEnv(): Env {
   const rows = [
     { id: 77, year: 2025, season_key: "2025", code: "AFLW" },
     { row_count: 2, n0: 2 },
@@ -55,22 +57,7 @@ function observedSchemaEnv(): import("../src/types").Env {
     { revision: 0, in_progress: 0 },
     { revision: 0, in_progress: 0 },
   ];
-  let callIndex = 0;
-  return {
-    DB: {
-      prepare: () => {
-        const row = rows[callIndex++];
-        return {
-          bind() {
-            return this;
-          },
-          first: async () => row,
-        };
-      },
-      batch: async (statements: { first: () => Promise<unknown> }[]) =>
-        Promise.all(statements.map(async (statement) => ({ results: [await statement.first()] }))),
-    } as unknown as D1Database,
-  } as import("../src/types").Env;
+  return testEnv({ DB: scriptedD1(rows).db });
 }
 
 describe("handleMcpRequest", () => {
@@ -374,7 +361,7 @@ describe("handleMcpRequest", () => {
   });
 
   it("rejects code execution when the kill switch is set", async () => {
-    const disabledEnv = { CODE_TOOL_DISABLED: "true" } as unknown as import("../src/types").Env;
+    const disabledEnv = testEnv({ CODE_TOOL_DISABLED: "true" });
     const res = await handleMcpRequest(
       makeRequest({
         jsonrpc: "2.0",
@@ -435,7 +422,7 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
         expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
@@ -463,7 +450,7 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
         expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
@@ -491,7 +478,7 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && (c[0] as string).includes("tool:code"),
+          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
         expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
@@ -505,9 +492,9 @@ describe("handleMcpRequest", () => {
   });
 
   it("returns 429 when the rate limiter denies the request", async () => {
-    const limitedEnv = {
+    const limitedEnv = testEnv({
       MCP_RATE_LIMIT: { limit: async () => ({ success: false }) },
-    } as unknown as import("../src/types").Env;
+    });
     const res = await handleMcpRequest(
       makeRequest({ jsonrpc: "2.0", id: 11, method: "ping" }),
       limitedEnv,
@@ -520,14 +507,14 @@ describe("handleMcpRequest", () => {
 
   it("keys the rate limiter on the connecting IP", async () => {
     const seenKeys: string[] = [];
-    const limitedEnv = {
+    const limitedEnv = testEnv({
       MCP_RATE_LIMIT: {
         limit: async ({ key }: { key: string }) => {
           seenKeys.push(key);
           return { success: true };
         },
       },
-    } as unknown as import("../src/types").Env;
+    });
     const req = new Request("https://afl.test/mcp", {
       method: "POST",
       headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7" },

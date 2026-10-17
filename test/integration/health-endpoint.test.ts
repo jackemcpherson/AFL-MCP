@@ -5,13 +5,14 @@ vi.mock("cloudflare:workers", () => ({
   WorkerEntrypoint: class {},
 }));
 
+import { testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 import type { Env } from "../../src/types";
 
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubCtx = testCtx();
 
 async function getHealth(): Promise<Response> {
-  return worker.fetch(new Request("https://afl.test/mcp/health"), env as Env, stubCtx);
+  return worker.fetch(new Request("https://afl.test/mcp/health"), env, stubCtx);
 }
 
 async function seedSyncLog(

@@ -14,6 +14,7 @@ vi.mock("../src/mcp/tools/schema", () => ({
   },
 }));
 
+import { testCtx, testEnv } from "#test/fixtures";
 import { handleMcpRequest } from "../src/mcp/protocol";
 
 function makeRequest(body: unknown, method = "POST"): Request {
@@ -37,8 +38,8 @@ async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
 }
 
 // Minimal env stub — tools that don't touch DB don't need it
-const stubEnv = {} as unknown as import("../src/types").Env;
-const stubCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stubEnv = testEnv();
+const stubCtx = testCtx();
 
 describe("handleMcpRequest error boundary", () => {
   it("returns a -32603 JSON-RPC error at HTTP 200 when a handler throws", async () => {

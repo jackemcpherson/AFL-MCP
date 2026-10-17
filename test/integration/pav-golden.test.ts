@@ -10,6 +10,7 @@
 
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { mustGet } from "#test/fixtures";
 import { normaliseTeam } from "../../src/lib/normalise";
 import { calculatePav } from "../../src/sync/pav";
 import {
@@ -555,13 +556,13 @@ function computeExpectedPav(
       teamSeason.set(m.awayTeam, { pts_for: 0, pts_against: 0, i50_for: 0, i50_against: 0 });
     }
 
-    const home = teamSeason.get(m.homeTeam)!;
+    const home = mustGet(teamSeason, m.homeTeam);
     home.pts_for += m.homePoints;
     home.pts_against += m.awayPoints;
     home.i50_for += homeI50;
     home.i50_against += awayI50;
 
-    const away = teamSeason.get(m.awayTeam)!;
+    const away = mustGet(teamSeason, m.awayTeam);
     away.pts_for += m.awayPoints;
     away.pts_against += m.homePoints;
     away.i50_for += awayI50;
@@ -620,7 +621,7 @@ function computeExpectedPav(
       playerScores.set(s.playerId, { team: s.team, off_score: 0, def_score: 0, mid_score: 0 });
     }
 
-    const ps = playerScores.get(s.playerId)!;
+    const ps = mustGet(playerScores, s.playerId);
     const player_points = 6 * s.goals + s.behinds;
     const fkDiff = s.freesFor - s.freesAgainst;
 
@@ -642,7 +643,7 @@ function computeExpectedPav(
     if (!teamScores.has(ps.team)) {
       teamScores.set(ps.team, { off: 0, def: 0, mid: 0 });
     }
-    const ts = teamScores.get(ps.team)!;
+    const ts = mustGet(teamScores, ps.team);
     ts.off += ps.off_score;
     ts.def += ps.def_score;
     ts.mid += ps.mid_score;
@@ -652,8 +653,8 @@ function computeExpectedPav(
   // Round components to 2dp; total_pav = ROUND(unrounded_sum, 2)
   const rows: RefPavRow[] = [];
   for (const [playerId, ps] of playerScores) {
-    const ts = teamScores.get(ps.team)!;
-    const tp = teamPavPools.get(ps.team)!;
+    const ts = mustGet(teamScores, ps.team);
+    const tp = mustGet(teamPavPools, ps.team);
 
     const off_pav_raw = ts.off === 0 ? 0 : (ps.off_score / ts.off) * tp.team_off_pavs;
     const mid_pav_raw = ts.mid === 0 ? 0 : (ps.mid_score / ts.mid) * tp.team_mid_pavs;
@@ -737,7 +738,7 @@ async function seedGoldenFixture(): Promise<{
   );
 
   const allStats = FIXTURE_STATS.map((s) => {
-    const fm = matchByMatchId.get(s.matchId)!;
+    const fm = mustGet(matchByMatchId, s.matchId);
     return makePlayerStats({
       matchId: s.matchId,
       season: YEAR,

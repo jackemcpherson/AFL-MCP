@@ -2,6 +2,9 @@
   "name": "afl-mcp",
   "version": "4.0.11",
   "private": true,
+  "imports": {
+    "#test/*": "./test/support/*.ts"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

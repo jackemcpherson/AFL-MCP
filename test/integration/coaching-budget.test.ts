@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
+import { requestUrl, testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 
 // Model the production D1 subrequest budget around the real endpoint and DB.
@@ -65,7 +66,7 @@ it("imports a complete season inside the production D1 request budget", async ()
     "fetch",
     async (url: RequestInfo | URL) =>
       new Response(
-        String(url).endsWith("coaches_idx.html")
+        requestUrl(url).endsWith("coaches_idx.html")
           ? '<a href="Coach_A.html">Coach A</a>'
           : `<h2>Games Coached</h2><table>${rows.join("")}</table>`,
       ),
@@ -78,7 +79,7 @@ it("imports a complete season inside the production D1 request budget", async ()
       body: JSON.stringify({ fromYear: 2024, toYear: 2024, source: "afl-tables", dryRun: false }),
     }),
     { ...env, DB: budget.db, ADMIN_TOKEN: "budget-test" },
-    { waitUntil: () => {} } as unknown as ExecutionContext,
+    testCtx(),
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
