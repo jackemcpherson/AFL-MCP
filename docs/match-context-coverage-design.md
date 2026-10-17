@@ -3,6 +3,11 @@
 This design reached implemented status on `advisor/017-match-context-coverage`.
 Evidence collected on 2026-07-12 uses baseline `e39598c` and fitzroy 3.4.0.
 
+This historical design predates 5.0.0. Since then, `effect/Schema` has
+replaced Zod, `bun run check` has replaced the separate Biome and
+`typecheck` gates, and Workers tests have moved from `test/integration/`
+to `test/**/*.worker.test.ts`.
+
 This document defines two additive changes to AFL-MCP:
 
 1. Persist the smallest authoritative live-match state supplied by fitzroy.

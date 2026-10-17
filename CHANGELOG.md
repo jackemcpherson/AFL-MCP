@@ -5,11 +5,12 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.0.0] - 2026-10-17
 
-This release has breaking changes to the MCP tool contract.
+This release has breaking changes to the MCP tool contract. It also moves
+the repository to TypeScript standard v4.
 
-### Changed in Unreleased
+### Changed in 5.0.0
 
 - Breaking: the `code` tool rejects an unknown `competition` with an
   `isError` result that lists the valid codes. It no longer runs the code
@@ -37,6 +38,31 @@ This release has breaking changes to the MCP tool contract.
   next to the unchanged text block. Other `code` results stay text only.
 - Breaking: `tools/call` naming an unknown tool returns JSON-RPC error
   `-32602` instead of an `isError` result.
+- `schema` argument errors now name the failing key, for example
+  `Expected boolean at "includeObserved"` or
+  `Expected no excess property at "table"`. Contract errors such as a
+  missing `season` keep their existing text.
+- `tools/call` without a string tool `name` returns `-32602` with
+  `Missing tool name`.
+
+### Internal Changes in 5.0.0
+
+- `effect/Schema` replaces Zod for every boundary decode: MCP and admin
+  request bodies, Open-Meteo payloads, D1 rows and stored JSON.
+- Vite+ (`vp`) replaces Biome. `oxfmt` formats, `oxlint` lints with type
+  information, and Vitest runs the tests. `bun run check` also runs `tsc`
+  on each tsconfig.
+- Separate tsconfig projects cover Worker source, tests and Node scripts.
+  New compiler flags: `noImplicitOverride`, `verbatimModuleSyntax`,
+  `noPropertyAccessFromIndexSignature` and `isolatedDeclarations`.
+- Golden contract tests pin the MCP wire format under
+  `test/fixtures/golden/mcp/`. CI fails when a golden file is missing.
+- Tests mirror the `src/` layout. Tests that need the Workers pool end in
+  `.worker.test.ts`, and no test mocks a module.
+- ADR 0001 and ADR 0002 record the deliberate deviations from the
+  standard: the minimal-Worker shape and the hand-rolled MCP protocol.
+- The repository waits to adopt `@effect/vitest` until
+  `@cloudflare/vitest-pool-workers` supports Vitest 5.
 
 ## [4.0.11] - 2026-10-17
 

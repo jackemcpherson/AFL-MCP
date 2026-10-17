@@ -14,7 +14,7 @@ It serves two tools over JSON request and response, with no streaming,
 resources or sessions. Version 5.0.0 upgrades it to negotiate protocol
 revisions up to 2025-11-25. The official `@modelcontextprotocol/server`
 package could replace it. That package adds about 55 KB gzipped to the
-bundle and keeps Zod as a dependency after the repo moves to
+bundle and would bring back Zod, which 5.0.0 replaced with
 `effect/Schema`.
 
 ## Decision

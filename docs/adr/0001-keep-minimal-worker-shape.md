@@ -71,3 +71,8 @@ functions, injected parameters and thrown tagged errors cover the same needs.
 - Route tests and sync tests keep exercising the Worker fetch handler
   against real D1 as the main seam.
 - Each new route moves the Worker closer to the routing threshold.
+- The repo defers the v4 test helper `@effect/vitest`. Every stable
+  `@effect/vitest` release requires Vitest 5, and
+  `@cloudflare/vitest-pool-workers` still requires Vitest 4. Adopt it once
+  the pool supports Vitest 5. No test runs an
+  Effect program directly, so nothing needs it yet.

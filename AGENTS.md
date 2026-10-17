@@ -20,7 +20,8 @@ For deeper context, read the appropriate doc:
 bun install              # Install dependencies
 bun run dev              # Start local worker (wrangler dev)
 bun run check:schema     # Compare migrated and consolidated schemas
-bun run check            # Format, lint and type check (vp check)
+bun run check            # vp check (Oxfmt, Oxlint, tsgo) + bun run typecheck
+bun run typecheck        # tsc -p on tsconfig.app/test/node.json (isolatedDeclarations)
 bun run format           # Auto-format and apply lint fixes (vp check --fix)
 bun run test             # Run all tests once (vp test --run)
 bunx wrangler deploy --dry-run  # Build the bundle and report its size
@@ -65,7 +66,9 @@ full pipeline.
 - `src/mcp/protocol.ts` — MCP streamable-http implementation.
 - `src/mcp/tools/schema.ts` — Hardcoded schema documentation (keep in sync
   with `src/db/schema.sql`).
-- `src/sandbox/executor.ts` — Dynamic Worker + `DbProxy` RPC bridge.
+- `src/sandbox/executor.ts` — Dynamic Worker loader and result handling.
+- `src/sandbox/db-proxy.ts` — `DbProxy` read-only RPC bridge (re-exported
+  from `src/index.ts`).
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
 - `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
   weather stage writes `match_weather` itself from `src/weather/stage.ts`).
@@ -74,17 +77,36 @@ full pipeline.
 
 ## Style-Guide Exception
 
-This Worker takes the style guide's **minimal-Worker exception**: no
-Hono (hand-rolled routing in `src/index.ts`) and no Drizzle (raw
-parameterised SQL, with the repeated upsert fragments generated from
-column manifests in `src/sync/columns.ts`). `effect/Schema` decodes
-all HTTP boundaries (`src/mcp/validation.ts`). Revisit if routing outgrows
-the current if/else chain or schema churn makes the manifests painful.
+This Worker deliberately deviates from TypeScript standard v4. Do not
+"fix" these without a superseding ADR.
+
+- [ADR 0001](./docs/adr/0001-keep-minimal-worker-shape.md): keep the
+  minimal-Worker shape. Hand-rolled routing in `src/index.ts`, raw
+  parameterised SQL with upsert fragments generated from column manifests
+  in `src/sync/columns.ts`, Wrangler config deployed by the
+  cloudflare-infra GitOps pipeline (no Alchemy), no Effect Layer
+  composition, and tagged errors thrown and caught at the Worker entry.
+  `effect/Schema` and the v4 toolchain still apply. Revisit routing at
+  about 20 routes or when admin needs typed clients.
+- [ADR 0002](./docs/adr/0002-keep-hand-rolled-mcp-protocol.md): keep the
+  hand-rolled MCP protocol in `src/mcp/protocol.ts`. Adopt
+  `@modelcontextprotocol/server` when logs show clients requesting
+  protocol 2026-07-28, or when a second transport feature (streaming,
+  resources) is needed.
+
+`effect/Schema` decodes every external input: MCP and admin request
+bodies (`src/mcp/validation.ts` and each `src/admin/*` module), Open-Meteo
+payloads, D1 rows and stored JSON. Shared field schemas live in
+`src/lib/schemas.ts`, decoders in `src/lib/decode.ts`, and competition
+codes in `src/lib/competitions.ts`.
 
 ## Key Constraints
 
 - **Strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
-  `noUnusedLocals`, `noUnusedParameters` are all enabled.
+  `noUnusedLocals`, `noUnusedParameters`, `noImplicitOverride`,
+  `verbatimModuleSyntax`, `noPropertyAccessFromIndexSignature` and
+  `isolatedDeclarations` are all enabled. `vp check` misses
+  `isolatedDeclarations` errors, so run `bun run check`, not bare `vp check`.
 - **No `any`** — Oxlint enforces `typescript/no-explicit-any`. Use `unknown` and narrow.
 - **No `enum`** — use union types instead.
 - **No default exports** — Oxlint enforces `import/no-default-export`, with overrides
@@ -92,6 +114,27 @@ the current if/else chain or schema churn makes the manifests painful.
 - **Bun** as package manager, **Vite+** (`vp`: Oxlint, Oxfmt, tsgo, Vitest) for
   checks and tests. Lint and format config lives in `vite.config.ts`.
 - Use Web Standard APIs only (no Bun-specific) — code runs on Cloudflare Workers V8.
+- **Tests** mirror `src/` under `test/`. Tests that need `cloudflare:test`
+  end in `.worker.test.ts`. Import support code as `#test/<name>`. No
+  `vi.mock` (Oxlint `no-module-mocking`); inject collaborators through
+  `McpDeps` in `src/mcp/protocol.ts` instead.
+- **Golden MCP contract** — `test/fixtures/golden/mcp/*.json` pin every
+  MCP response. Update them (`vp test --run -u`) only for a deliberate
+  wire-contract change, and review the diff. CI fails on a missing golden.
+
+## Toolchain Pins
+
+`vite-plus` is pinned at `0.3.3`, which bundles Vitest 4.1. vite-plus 1.x
+bundles Vitest 5, and `@cloudflare/vitest-pool-workers` (0.23) requires
+Vitest ^4.1: the Workers test project fails to boot on Vitest 5.
+
+Upgrade trigger: `@cloudflare/vitest-pool-workers` supports Vitest 5. Then:
+
+1. Move to vite-plus 1.x. Keep these in step with it: the `vite` and
+   `vitest` overrides in `package.json`, the `vitest` devDependency, and
+   `@oxlint/plugins` (imported by the vendored plugin in `tools/oxlint/`).
+2. Add `@effect/vitest` matching the `effect` version. It is deferred
+   until then because every stable 4.x release peers on Vitest 5.
 
 ## Documentation (TSDoc)
 

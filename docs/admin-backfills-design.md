@@ -2,6 +2,11 @@
 
 Plan 011 reached draft status on 2026-07-02.
 
+This historical design predates 5.0.0. Since then, `effect/Schema` has
+replaced Zod, `bun run check` has replaced the separate Biome and
+`typecheck` gates, and Workers tests have moved from `test/integration/`
+to `test/**/*.worker.test.ts`.
+
 > **Brownlow section superseded (2026-07-12):** fitzroy-ts closed #117 and
 > fitzroy 3.4 returns `{ stats, failedMatchIds }` with `brownlowVotes` parsed.
 > The Brownlow endpoint, lease-sharing, and private diagnostics contracts now

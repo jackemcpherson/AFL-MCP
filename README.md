@@ -36,15 +36,29 @@ does not supply the required inputs for VFL or VFLW.
 The server exposes 2 tools via the
 [Model Context Protocol](https://modelcontextprotocol.io/):
 
-| Tool     | Purpose                                                                                                                          |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `schema` | Database structure, per-competition coverage, column details, join patterns, query API reference                                 |
-| `code`   | Execute TypeScript against D1 in an isolated sandbox. `competition` records a telemetry hint but never changes the submitted SQL |
+| Tool     | Title             | Purpose                                                                                          |
+| -------- | ----------------- | ------------------------------------------------------------------------------------------------ |
+| `schema` | Database schema   | Database structure, per-competition coverage, column details, join patterns, query API reference |
+| `code`   | Run query code    | Execute TypeScript against D1 in an isolated sandbox                                             |
+
+Annotations mark both tools read-only, non-destructive, idempotent and
+closed-world. The optional `code` argument `competition` must be `AFLM`,
+`AFLW`, `VFL` or `VFLW`. Omitting it or passing `null` has the same effect.
+Any other value returns an `isError` result that lists the valid codes. The
+argument never changes the submitted SQL.
 
 Sandbox constraints (no network, no npm, 30-second timeout, 1 MB result cap,
 60 requests per minute per IP) travel in the `code` tool's description.
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
+
+The server negotiates MCP protocol revisions 2025-11-25, 2025-06-18 and
+2025-03-26 through the `initialize` handshake. Its instructions tell
+clients to call `schema` first and filter by competition. `schema`
+results and object `code` results carry `structuredContent` next to the
+text block. A call to an unknown tool returns JSON-RPC error `-32602`. See
+[the architecture guide](docs/architecture.md#mcp-protocol) for the full
+transport contract.
 
 The no-argument `schema` call remains deterministic and read-free. To measure
 current completeness for exactly one competition-season, pass
@@ -114,29 +128,27 @@ bun run dev
 bun run test
 ```
 
-### Type Checking
+### Lint, Format and Type Check
 
 ```bash
-bun run typecheck
+bun run check        # vp check (oxfmt, oxlint, tsgo) plus tsc per tsconfig
+bun run typecheck    # tsc on the app, test and node tsconfigs only
+bun run format       # auto-fix formatting and lint findings
 ```
 
-### Lint and Format
-
-```bash
-bun run check        # check for issues
-bun run format       # auto-fix formatting
-```
+Vite+ (`vp`) supplies the formatter, linter and Vitest. The repository
+pins `vite-plus` at 0.3.3 until `@cloudflare/vitest-pool-workers` supports
+Vitest 5.
 
 ### Deployment
 
-```bash
-bunx wrangler deploy
-```
+The repository does not deploy itself. Merging to `main` publishes the
+bundle and D1 migrations to R2. The cloudflare-infra GitOps pipeline
+promotes a commit, applies its migrations, then uploads the Worker. To
+check the bundle locally:
 
-D1 migrations:
-
 ```bash
-bunx wrangler d1 migrations apply afl-stats --remote
+bunx wrangler deploy --dry-run
 ```
 
 ## Data Sync
@@ -195,7 +207,7 @@ queries, including Opening Round, finals codes, and the VFL Wildcard.
 
 1. Create a feature branch.
 2. Make changes and add tests.
-3. Run `bun run typecheck` and `bun run check`.
+3. Run `bun run check`.
 4. Run `bun run test`.
 5. Submit a pull request.
 
