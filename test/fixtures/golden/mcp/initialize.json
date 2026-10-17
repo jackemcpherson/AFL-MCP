@@ -1,0 +1,21 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2025-11-25",
+      "capabilities": {
+        "tools": {}
+      },
+      "serverInfo": {
+        "name": "afl-mcp",
+        "version": "<package.json version>"
+      },
+      "instructions": "Call the schema tool before your first code call. It returns the tables, query rules, per-competition coverage and query API that code-tool queries depend on."
+    }
+  }
+}

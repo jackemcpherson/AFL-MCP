@@ -2,6 +2,11 @@
 
 Plan 013/016 reached implemented status on 2026-07-12.
 
+This historical design predates 5.0.0. Since then, `effect/Schema` has
+replaced Zod, `bun run check` has replaced the separate Biome and
+`typecheck` gates, and Workers tests have moved from `test/integration/`
+to `test/**/*.worker.test.ts`.
+
 This document specifies two authenticated admin operations:
 
 - annual AFLM Brownlow vote ingestion

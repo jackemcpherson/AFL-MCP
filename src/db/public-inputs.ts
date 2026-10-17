@@ -1,4 +1,6 @@
+import { Schema } from "effect";
 import { OperationConflictError } from "../admin/errors";
+import { decodeRow } from "../lib/decode";
 import type { Env } from "../types";
 
 /**
@@ -17,7 +19,7 @@ import type { Env } from "../types";
 export async function beginPublicInputWrite(
   env: Env,
   holder: string,
-  now = new Date(),
+  now: Date = new Date(),
   operation: string | null = null,
 ): Promise<void> {
   const result = await env.DB.prepare(
@@ -30,9 +32,9 @@ export async function beginPublicInputWrite(
     .bind(now.toISOString(), holder, operation)
     .run();
   if (result.meta.changes !== 1)
-    throw new OperationConflictError(
-      "Input write requires an active lease and a recovered public marker",
-    );
+    throw new OperationConflictError({
+      message: "Input write requires an active lease and a recovered public marker",
+    });
 }
 
 /**
@@ -56,7 +58,9 @@ export async function finishPublicInputWrite(env: Env, holder: string): Promise<
     .bind(holder)
     .run();
   if (result.meta.changes !== 1)
-    throw new OperationConflictError("Input write lease lost; marker retained for recovery");
+    throw new OperationConflictError({
+      message: "Input write lease lost; marker retained for recovery",
+    });
 }
 
 /**
@@ -83,9 +87,46 @@ export async function resumePublicInputWrite(
     .bind(holder, operation)
     .run();
   if (result.meta.changes !== 1)
-    throw new OperationConflictError(
-      "Recovery requires the matching operation marker and active lease",
-    );
+    throw new OperationConflictError({
+      message: "Recovery requires the matching operation marker and active lease",
+    });
+}
+
+const StrandedWriteSchema = Schema.Struct({
+  write_holder: Schema.NullOr(Schema.String),
+  write_started_at: Schema.NullOr(Schema.String),
+});
+
+/** Owner and start time of an unfinished public input write. */
+export interface StrandedWrite {
+  readonly holder: string | null;
+  readonly startedAt: string | null;
+}
+
+/**
+ * Find an unfinished write left by an earlier run of exactly this operation.
+ * Callers hold the operation lease, so the marker's owner can no longer write.
+ * @param env - Worker bindings.
+ * @param operation - Persisted operation identity of the caller.
+ * @returns The stranded owner and start time, or null when the marker is clear
+ * or names another operation.
+ * @example
+ * const stranded = await findStrandedWrite(env, "sync:[...]");
+ */
+export async function findStrandedWrite(
+  env: Env,
+  operation: string,
+): Promise<StrandedWrite | null> {
+  const row = decodeRow(
+    await env.DB.prepare(
+      `SELECT write_holder, write_started_at FROM public_input_revision
+       WHERE id=1 AND in_progress=1 AND write_operation=?1`,
+    )
+      .bind(operation)
+      .first(),
+    StrandedWriteSchema,
+  );
+  return row === null ? null : { holder: row.write_holder, startedAt: row.write_started_at };
 }
 
 /**
@@ -157,6 +198,8 @@ export function protectOperationWrites(env: Env, holder: string): Env {
         if (property === "all") return async () => read(target, readOnly);
         if (property === "first")
           return async (column?: string) => {
+            // SAFETY: D1 returns each row as a plain column-name record, which is what
+            // `first()` hands back to callers that asked for a typed row.
             const row = (await read(target, readOnly))?.results[0] as
               | Record<string, unknown>
               | undefined;

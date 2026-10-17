@@ -1,0 +1,31 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"results\": [\n    {\n      \"team\": \"Carlton\",\n      \"wins\": 12\n    }\n  ],\n  \"success\": true\n}"
+        },
+        {
+          "type": "text",
+          "text": "Console output:\nrows: 1\n[warn] slow query"
+        }
+      ],
+      "structuredContent": {
+        "results": [
+          {
+            "team": "Carlton",
+            "wins": 12
+          }
+        ],
+        "success": true
+      }
+    }
+  }
+}

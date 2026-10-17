@@ -72,8 +72,10 @@ AFLW.
 
 Provider statistics failures retain successful match results and persist
 retries.
-Database failures retain the public write marker and require recovery with the
-identical operation scope.
+Database failures retain the public write marker. The next scheduled sync
+resumes a marker left by its own identical operation scope and logs
+`sync:recovered`. Backfills and every other operation still require explicit
+recovery with the identical operation scope.
 
 ## Publication Inputs
 
@@ -192,13 +194,20 @@ labels directly, no cross-competition normalisation.
 Two round-string columns on `matches`:
 
 - `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024+,
-  `round_number = 0`), `Wildcard` (VFL only, before finals), and finals
-  `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`.
-  Pre-2020 AFLM finals retain the historical `Elimination Final` /
-  `Qualifying Final` distinction the AFL collapsed in 2020.
-- `round_abbreviation` is the AFL's short form: `Rd N`, `OR`, `WC`, `FW1`, `SF`,
-  `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM. Stable across all four
-  competitions. Use this column for cross-competition queries.
+  `round_number = 0`), `Wildcard` (VFL before finals, through 2025), and a
+  finals name that varies by competition and era. AFLW 2024 is the
+  exception for numbered rounds: the API labels them `Week 1` to `Week 10`,
+  with `round_abbreviation` `Rd N` and `round_number` 1 to 10. AFLM used
+  `Qualifying Final` and `Elimination Final` through 2014 and
+  `Finals Week 1` from 2015. Later weeks are `Semi Finals`,
+  `Preliminary Finals` and `Grand Final`. From 2026 AFLM and VFL open the
+  finals with `Wildcard Finals` and `Qualifying & Elimination Finals`.
+- `round_abbreviation` is the AFL's short form, which the sync derives with
+  fitzroy's `roundAbbreviation`: `Rd N`, `OR`, `WC`, `FW1`, `QF`, `EF`, `SF`, `PF`,
+  `GF`. A finals name with no mapping, such as the 2026 `Wildcard Finals`,
+  becomes `F<round_number>`. Select finals with
+  `round_type = 'Finals'`, and compare `round_abbreviation` across
+  competitions only for the mapped names.
 
 `round_type` is `Regular` (home-and-away + Opening Round + Wildcard) or
 `Finals`. `round_number` is a per-season ordinal continuous through finals. For

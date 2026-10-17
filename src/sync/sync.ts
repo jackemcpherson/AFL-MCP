@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import type { CompetitionCode, SeasonSelector } from "fitzroy";
 import {
   fetchLineup,
@@ -8,11 +9,13 @@ import {
 import { refreshActiveCoaches } from "../admin/coaching";
 import {
   beginPublicInputWrite,
+  findStrandedWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { seasonKey } from "../db/seasons";
+import { describeError, logError, type MessageFields, type TaggedErrorBase } from "../lib/errors";
 import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
@@ -59,6 +62,21 @@ export interface BackfillResult {
   readonly lineups: number;
   readonly error?: string;
 }
+
+const SyncSourceErrorBase: TaggedErrorBase<SyncSourceError, "SyncSourceError", MessageFields> =
+  Schema.TaggedError<SyncSourceError>()("SyncSourceError", {
+    message: Schema.String,
+  });
+
+/**
+ * The provider's season data cannot be imported as delivered.
+ *
+ * The message is application-written and lands in `sync_log`.
+ *
+ * @example
+ * throw new SyncSourceError({ message: "Provider season inventory contains duplicate match IDs" });
+ */
+export class SyncSourceError extends SyncSourceErrorBase {}
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {
@@ -124,8 +142,22 @@ export async function sync(
       }
     }
     const operation = `sync:${options?.fixturesOnly ? "fixtures:" : ""}${JSON.stringify(scopes)}`;
-    if (options?.resume) await resumePublicInputWrite(env, holder, operation);
-    else await beginPublicInputWrite(env, holder, now, operation);
+    // A run that dies mid-write (e.g. a D1 connection drop) keeps the marker so
+    // readers never see partial inputs. The scheduled path re-runs the same
+    // idempotent scope, so it resumes its own stranded write instead of
+    // failing every tick until an operator resumes it. Markers from any other
+    // operation still require explicit recovery.
+    const stranded = options?.resume || isBackfill ? null : await findStrandedWrite(env, operation);
+    if (options?.resume || stranded !== null) {
+      await resumePublicInputWrite(env, holder, operation);
+      if (stranded !== null)
+        await logSync(
+          env,
+          "sync:recovered",
+          0,
+          `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
+        );
+    } else await beginPublicInputWrite(env, holder, now, operation);
     const writer = protectOperationWrites(env, holder);
     const results: BackfillResult[] = [];
     for (const { competition, season } of scopes)
@@ -159,9 +191,12 @@ export async function sync(
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
     // debugging horizon while keeping the table tiny.
+    // The purge is best-effort, but a failure must stay visible.
     await env.DB.prepare("DELETE FROM sync_log WHERE timestamp < datetime('now', '-90 days')")
       .run()
-      .catch(() => undefined);
+      .catch((error) => {
+        logError("sync_log_purge_failed", error);
+      });
 
     // Fixture score/status changes also invalidate PAV on five-minute ticks.
     await rebuildQueuedStatsPav(writer, undefined, holder);
@@ -206,7 +241,9 @@ async function syncCompetition(
     if (!discovered.success) throw discovered.error;
     const identity = discovered.data.find((entry) => entry.seasonKey === String(season));
     if (!identity)
-      throw new Error(`No exact ${competition} season ${season}; use season discovery`);
+      throw new SyncSourceError({
+        message: `No exact ${competition} season ${season}; use season discovery`,
+      });
     const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
     if (!matchResult.success) {
       const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
@@ -237,7 +274,9 @@ async function syncCompetition(
     ]);
 
     if (new Set(allMatches.map((match) => match.matchId)).size !== allMatches.length) {
-      throw new Error("Provider season inventory contains duplicate match IDs");
+      throw new SyncSourceError({
+        message: "Provider season inventory contains duplicate match IDs",
+      });
     }
     await env.DB.prepare(`INSERT INTO season_provider_inventory(season_id, provider, observed_at, matches_json)
       VALUES (?1, 'afl-api', ?2, ?3) ON CONFLICT(season_id, provider) DO UPDATE SET
@@ -390,8 +429,4 @@ async function fetchLineupsSafe(
     return [];
   }
   return result.data;
-}
-
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

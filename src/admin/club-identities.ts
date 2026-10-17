@@ -1,15 +1,20 @@
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
+import { booleanDefault, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 const BEARS_LAST_SEASON = 1996;
 
+/** Row counts a Brisbane Bears identity repair previews or applies. */
 export interface BearsRepairReport {
   readonly dryRun: boolean;
   readonly competition: "AFLM";
@@ -64,35 +69,36 @@ export async function reconcileBearsIdentity(
       "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
     ).first<{ revision: number; in_progress: number }>();
     if (!revision) throw new Error("Public input revision is unavailable");
-    const digest = Array.from(
-      new Uint8Array(
-        await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(
-            JSON.stringify({ ids: previewIds, report, matchIds, revision: revision.revision }),
-          ),
-        ),
-      ),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(
+      JSON.stringify({
+        ids: previewIds,
+        report,
+        matchIds,
+        revision: revision.revision,
+      }),
+    );
     if (dryRun) {
       if (revision.in_progress)
-        throw new OperationConflictError("Recover the active public write before previewing Bears");
+        throw new OperationConflictError({
+          message: "Recover the active public write before previewing Bears",
+        });
       return { busy: false, report, manifestDigest: digest, matchIds };
     }
     if (options.resume) {
       if (!options.manifestDigest)
-        throw new OperationConflictError("Bears recovery requires the approved digest");
+        throw new OperationConflictError({
+          message: "Bears recovery requires the approved digest",
+        });
       await resumePublicInputWrite(env, holder, `bears:${options.manifestDigest}`);
     } else {
       if (options.manifestDigest !== digest)
-        throw new OperationConflictError("Bears preview missing or stale");
+        throw new OperationConflictError({ message: "Bears preview missing or stale" });
       await beginPublicInputWrite(env, holder, new Date(), `bears:${digest}`);
     }
     marked = true;
     const writer = protectOperationWrites(env, holder);
     const ids = await findClubIds(writer, false);
-    if (!dryRun && report.matchSides > 0) {
+    if (report.matchSides > 0) {
       const stmts: D1PreparedStatement[] = [];
       stmts.push(
         writer.DB.prepare(
@@ -168,7 +174,8 @@ async function findClubIds(
   const competition = await env.DB.prepare(
     "SELECT id FROM competitions WHERE code = 'AFLM'",
   ).first<{ id: number }>();
-  if (!competition) throw new OperationConflictError("AFLM competition does not exist");
+  if (!competition)
+    throw new OperationConflictError({ message: "AFLM competition does not exist" });
   let bears = await env.DB.prepare(
     "SELECT id FROM teams WHERE competition_id = ?1 AND name = 'Brisbane Bears'",
   )
@@ -194,7 +201,7 @@ async function findClubIds(
     .bind(competition.id)
     .first<{ id: number }>();
   if (!lions || (!bears && !dryRun))
-    throw new OperationConflictError("Brisbane team identity is missing");
+    throw new OperationConflictError({ message: "Brisbane team identity is missing" });
   return { bearsId: bears?.id ?? -1, lionsId: lions.id };
 }
 
@@ -259,3 +266,18 @@ async function countReferences(
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
+
+/** Explicit historical club identity repair request. */
+export const BearsRepairRequestSchema: Schema.Struct<{
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
+});
+
+/** Decode a Bears repair body, rejecting unknown keys. */
+export const decodeBearsRepairRequest: Decoder<typeof BearsRepairRequestSchema.Type> =
+  strictDecoder(BearsRepairRequestSchema);

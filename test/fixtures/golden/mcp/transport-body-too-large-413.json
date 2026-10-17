@@ -1,0 +1,14 @@
+{
+  "status": 413,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32600,
+      "message": "Request body exceeds 4 MiB"
+    }
+  }
+}

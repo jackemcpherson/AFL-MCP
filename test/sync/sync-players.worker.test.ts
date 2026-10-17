@@ -1,0 +1,120 @@
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { upsertPlayers } from "../../src/sync/upserts";
+
+describe("upsertPlayers", () => {
+  it("inserts a brand-new player keyed by external_afl_player_id", async () => {
+    const map = await upsertPlayers(env, [
+      { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
+    ]);
+
+    const rows = await env.DB.prepare(
+      "SELECT first_name, surname, external_afl_player_id FROM players",
+    ).all<{ first_name: string; surname: string; external_afl_player_id: string }>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]).toEqual({
+      first_name: "Patrick",
+      surname: "Cripps",
+      external_afl_player_id: "P-1",
+    });
+    expect(map.get("P-1")).toBeDefined();
+  });
+
+  it("returns a map of every player keyed by external_afl_player_id", async () => {
+    const map = await upsertPlayers(env, [
+      { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
+      { playerId: "P-2", givenName: "Sam", surname: "Walsh" },
+    ]);
+
+    expect(map.size).toBe(2);
+    expect(map.has("P-1")).toBe(true);
+    expect(map.has("P-2")).toBe(true);
+  });
+
+  it("is idempotent on re-run with the same player", async () => {
+    const player = { playerId: "P-1", givenName: "Patrick", surname: "Cripps" };
+    await upsertPlayers(env, [player]);
+    await upsertPlayers(env, [player]);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM players").first<{
+      n: number;
+    }>();
+    expect(count?.n).toBe(1);
+  });
+
+  it("keeps a same-name legacy row separate until provider identity is verified", async () => {
+    await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
+      .bind("Patrick", "Cripps", "fryzigg-123")
+      .run();
+
+    await upsertPlayers(env, [{ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }]);
+
+    const rows = await env.DB.prepare(
+      "SELECT first_name, surname, external_id, external_afl_player_id FROM players",
+    ).all<{
+      first_name: string;
+      surname: string;
+      external_id: string | null;
+      external_afl_player_id: string | null;
+    }>();
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results[0]).toEqual({
+      first_name: "Patrick",
+      surname: "Cripps",
+      external_id: "fryzigg-123",
+      external_afl_player_id: null,
+    });
+  });
+
+  it("does not assign a new provider ID to either of two legacy homonyms", async () => {
+    // Two distinct historical players with the same name (homonyms are
+    // real across 130 seasons). Pre-fix, both got the same AFL id and the
+    // unique-index violation aborted the whole batch.
+    await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
+      .bind("Jack", "Smith", "fryzigg-100")
+      .run();
+    await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
+      .bind("Jack", "Smith", "fryzigg-200")
+      .run();
+
+    await upsertPlayers(env, [{ playerId: "P-1", givenName: "Jack", surname: "Smith" }]);
+
+    const rows = await env.DB.prepare(
+      "SELECT external_id, external_afl_player_id FROM players ORDER BY id",
+    ).all<{ external_id: string | null; external_afl_player_id: string | null }>();
+    // The new provider identity remains separate from both unverified historical people.
+    expect(rows.results).toHaveLength(3);
+    expect(rows.results[0]).toEqual({
+      external_id: "fryzigg-100",
+      external_afl_player_id: null,
+    });
+    expect(rows.results[1]).toEqual({
+      external_id: "fryzigg-200",
+      external_afl_player_id: null,
+    });
+  });
+
+  it("does not adopt across distinct names (Patrick Cripps ≠ Tom Cripps)", async () => {
+    await env.DB.prepare("INSERT INTO players (first_name, surname, external_id) VALUES (?, ?, ?)")
+      .bind("Tom", "Cripps", "fryzigg-999")
+      .run();
+
+    await upsertPlayers(env, [{ playerId: "P-1", givenName: "Patrick", surname: "Cripps" }]);
+
+    const rows = await env.DB.prepare(
+      "SELECT first_name, external_id, external_afl_player_id FROM players ORDER BY first_name",
+    ).all<{
+      first_name: string;
+      external_id: string | null;
+      external_afl_player_id: string | null;
+    }>();
+
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results[0]?.first_name).toBe("Patrick");
+    expect(rows.results[0]?.external_id).toBeNull();
+    expect(rows.results[0]?.external_afl_player_id).toBe("P-1");
+    expect(rows.results[1]?.first_name).toBe("Tom");
+    expect(rows.results[1]?.external_id).toBe("fryzigg-999");
+    expect(rows.results[1]?.external_afl_player_id).toBeNull();
+  });
+});

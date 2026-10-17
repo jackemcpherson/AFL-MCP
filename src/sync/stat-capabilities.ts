@@ -1,5 +1,20 @@
 import samples from "./stat-field-capabilities.json";
 
+/** Source-backed field support for one exact competition-season sample. */
+export interface StatFieldCapabilities {
+  readonly source: string;
+  readonly scope: string;
+  readonly supported: readonly string[];
+  readonly unverified: readonly string[];
+  readonly notApplicable: readonly string[];
+  readonly evidence: {
+    readonly url: string;
+    readonly sha256: string;
+    readonly capturedAt: string;
+  } | null;
+  readonly diagnostic: string;
+}
+
 /**
  * Return source-backed support for an exact competition-season sample.
  * Support demonstrates that the source can supply a field, not that every row
@@ -11,7 +26,10 @@ import samples from "./stat-field-capabilities.json";
  * @example
  * statFieldCapabilities("AFLW", "2022-S7");
  */
-export function statFieldCapabilities(competition: string, seasonKey: string) {
+export function statFieldCapabilities(
+  competition: string,
+  seasonKey: string,
+): StatFieldCapabilities {
   const sample = samples.samples.find(
     (row) => row.competition === competition && row.seasonKey === seasonKey,
   );

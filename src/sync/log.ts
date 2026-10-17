@@ -1,5 +1,16 @@
 import type { Env } from "../types";
 
+/**
+ * Append one row to `sync_log`.
+ *
+ * @param env - Worker bindings.
+ * @param type - Event type, such as `admin:brownlow-backfill`.
+ * @param rowsAffected - Rows the step changed.
+ * @param error - Failure message, when the step failed.
+ * @returns Resolves once the row is written.
+ * @example
+ * await logSync(env, "admin:brownlow-backfill", 12);
+ */
 export async function logSync(
   env: Env,
   type: string,

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "scripts/**/*.mts",
+    "tools/**/*.ts",
+    "vite.config.ts",
+    "vitest.config.mts"
+  ],
+  "exclude": ["tools/oxlint/anti-slop/**"]
+}

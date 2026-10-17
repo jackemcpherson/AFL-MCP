@@ -112,7 +112,9 @@ export function matchWeatherUpsertSql(valuesTuple: string): string {
 }
 
 /** The `match_weather` upsert with `?` placeholders, for D1 `.bind()`. */
-export const MATCH_WEATHER_UPSERT = matchWeatherUpsertSql(placeholderList(MATCH_WEATHER_MANIFEST));
+export const MATCH_WEATHER_UPSERT: string = matchWeatherUpsertSql(
+  placeholderList(MATCH_WEATHER_MANIFEST),
+);
 
 /**
  * Metric values in manifest column order (the columns between the

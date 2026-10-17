@@ -27,7 +27,9 @@ Existing AFLW 2022 keeps its internal ID and becomes season six.
 
 Keep the expansion release separate from the contract release. Do not
 restore the database automatically after a failed operation. Retain its marker
-and checkpoint, diagnose the failure, and resume the same scope.
+and checkpoint, diagnose the failure, and resume the same scope. The one
+exception is the scheduled sync. It re-runs its own idempotent scope on the
+next tick and logs `sync:recovered`.
 
 ## Fixture Corrections
 

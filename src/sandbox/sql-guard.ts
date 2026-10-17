@@ -10,18 +10,30 @@
  * the statement once comments and string literals are stripped.
  */
 
+import { Schema } from "effect";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
+
 const ALLOWED_LEADING_KEYWORDS = new Set(["SELECT", "WITH", "EXPLAIN"]);
 
 const FORBIDDEN_KEYWORDS =
-  /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
+  /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|ANALYZE|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
 
-/** Error thrown when a statement fails read-only validation. */
-export class ReadOnlySqlError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReadOnlySqlError";
-  }
-}
+const ReadOnlySqlErrorBase: TaggedErrorBase<ReadOnlySqlError, "ReadOnlySqlError", MessageFields> =
+  Schema.TaggedError<ReadOnlySqlError>()("ReadOnlySqlError", {
+    message: Schema.String,
+  });
+
+/**
+ * Thrown when a statement fails read-only validation.
+ *
+ * The message is part of the public `code` tool contract. The sandbox RPC
+ * boundary prefixes it with the class name, so the caller sees
+ * `ReadOnlySqlError: Read-only access: ...`.
+ *
+ * @example
+ * throw new ReadOnlySqlError({ message: "Read-only access: ..." });
+ */
+export class ReadOnlySqlError extends ReadOnlySqlErrorBase {}
 
 /**
  * Removes SQL comments (line and block) and string literals
@@ -81,8 +93,8 @@ function stripCommentsAndStrings(sql: string): string {
  * Validates that a SQL statement is read-only.
  *
  * A statement passes when its first keyword is `SELECT`, `WITH`, or
- * `EXPLAIN` and no write/DDL/session keyword appears anywhere outside
- * comments and string literals.
+ * `EXPLAIN`, no write/DDL/session keyword appears anywhere outside
+ * comments and string literals, and nothing but whitespace follows a `;`.
  *
  * @param sql - The statement supplied by sandboxed code.
  * @throws ReadOnlySqlError if the statement is not provably read-only.
@@ -91,14 +103,19 @@ export function assertReadOnlySql(sql: string): void {
   const cleaned = stripCommentsAndStrings(sql).trim();
   const leading = cleaned.match(/^[A-Za-z_]+/)?.[0]?.toUpperCase() ?? "";
   if (!ALLOWED_LEADING_KEYWORDS.has(leading)) {
-    throw new ReadOnlySqlError(
-      "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
-    );
+    throw new ReadOnlySqlError({
+      message: "Read-only access: statements must begin with SELECT, WITH, or EXPLAIN.",
+    });
   }
   const forbidden = cleaned.match(FORBIDDEN_KEYWORDS);
   if (forbidden) {
-    throw new ReadOnlySqlError(
-      `Read-only access: ${forbidden[0].toUpperCase()} statements are not permitted.`,
-    );
+    throw new ReadOnlySqlError({
+      message: `Read-only access: ${forbidden[0].toUpperCase()} statements are not permitted.`,
+    });
+  }
+  if (/;\s*\S/.test(cleaned)) {
+    throw new ReadOnlySqlError({
+      message: "Read-only access: only one statement is permitted.",
+    });
   }
 }

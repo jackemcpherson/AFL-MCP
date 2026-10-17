@@ -4,13 +4,14 @@ interface WorkerLoader {
     mainModule: string;
     modules: Record<string, string>;
     env?: Record<string, unknown>;
-    globalOutbound?: unknown | null;
+    globalOutbound?: unknown;
     limits?: { cpuMs?: number; subRequests?: number };
   }): {
     getEntrypoint(): { fetch(request: Request): Promise<Response> };
   };
 }
 
+/** Bindings, vars and secrets the Worker receives. */
 export interface Env {
   DB: D1Database;
   /** GitOps rollout gate: pause scheduled writes while compatible readers deploy. */

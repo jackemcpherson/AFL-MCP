@@ -3,6 +3,11 @@
 This design reached implemented status on `advisor/017-match-context-coverage`.
 Evidence collected on 2026-07-12 uses baseline `e39598c` and fitzroy 3.4.0.
 
+This historical design predates 5.0.0. Since then, `effect/Schema` has
+replaced Zod, `bun run check` has replaced the separate Biome and
+`typecheck` gates, and Workers tests have moved from `test/integration/`
+to `test/**/*.worker.test.ts`.
+
 This document defines two additive changes to AFL-MCP:
 
 1. Persist the smallest authoritative live-match state supplied by fitzroy.
@@ -283,7 +288,7 @@ review can detect additions or reordering.
 |   10 | Opening Round AFLM 2024+                             | source/version bound                                                  | competition/season capability. generate from round metadata if retained           |
 |   11 | AFLM finals labels rewritten by v3.0.0               | source/version bound                                                  | completed source migration. historical-format provenance                          |
 |   12 | players have no team ID                              | not a coverage claim                                                  | identity/join semantics                                                           |
-|   13 | PAV component rounding difference                    | empirical completeness                                                | measured 12-15% behaviour. label observation with `as_of`                         |
+|   13 | PAV component rounding difference                    | empirical completeness                                                | about a third of rows differ by +/-0.01. label observation with `as_of`           |
 |   14 | PAV zone meanings                                    | not a coverage claim                                                  | metric semantics                                                                  |
 |   15 | PAV interpretation thresholds                        | not a coverage claim                                                  | analysis guidance                                                                 |
 |   16 | PAV join absence by competition/year                 | static derived eligibility                                            | duplicates PAV expectation. generate from manifest                                |

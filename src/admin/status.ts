@@ -1,10 +1,12 @@
+import { Schema } from "effect";
+import { COMPETITION_CODES, type CompetitionCode } from "../lib/competitions";
+import { batchRow, batchRows } from "../lib/decode";
 import type { Env } from "../types";
 
-const COMPETITION_CODES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 const DEGRADATION_WINDOW_HOURS = 24;
 
 interface CompetitionStatus {
-  readonly code: (typeof COMPETITION_CODES)[number];
+  readonly code: CompetitionCode;
   readonly latestSyncAt: string | null;
   readonly syncAgeSeconds: number | null;
   readonly latestSuccessAt: string | null;
@@ -55,6 +57,49 @@ export interface AdminStatusResponse {
     readonly currentSeasonObservedAssignments: number;
   };
 }
+
+/** A nullable count or age column; absent and NULL both read as no value. */
+const NumberColumn = Schema.optionalKey(Schema.NullOr(Schema.Number));
+/** A nullable text column. */
+const TextColumn = Schema.optionalKey(Schema.NullOr(Schema.String));
+
+const LeaseRowSchema = Schema.Struct({ held: NumberColumn, ageSeconds: NumberColumn });
+const SyncRowSchema = Schema.Struct({
+  code: Schema.String,
+  latestSyncAt: TextColumn,
+  latestSuccessAt: TextColumn,
+  latestErrorAt: TextColumn,
+});
+const MatchRowSchema = Schema.Struct({ code: Schema.String, latestCompletedMatchDate: TextColumn });
+const CountRowSchema = Schema.Struct({ count: NumberColumn });
+const DegradationRowSchema = Schema.Struct({
+  partialLineupEvents: NumberColumn,
+  partialStatsEvents: NumberColumn,
+  unmappedTeamEvents: NumberColumn,
+});
+const CoachingRowSchema = Schema.Struct({
+  latestSuccessAt: TextColumn,
+  failedScopes: NumberColumn,
+});
+const CoachingJoinsRowSchema = Schema.Struct({ unresolvedJoins: NumberColumn });
+const CoachingConflictRowSchema = Schema.Struct({ conflicts: NumberColumn });
+const CoachingCoverageRowSchema = Schema.Struct({
+  expectedAssignments: NumberColumn,
+  observedAssignments: NumberColumn,
+});
+const RemediationRowSchema = Schema.Struct({
+  in_progress: NumberColumn,
+  write_started_at: TextColumn,
+  write_operation: TextColumn,
+  auditScopesUnresolved: NumberColumn,
+  statisticsDue: NumberColumn,
+  statisticsFailed: NumberColumn,
+  statisticsUnresolved: NumberColumn,
+  weatherUnresolved: NumberColumn,
+  weatherUnavailable: NumberColumn,
+  pavSeasonsPending: NumberColumn,
+  identityRepairsPending: NumberColumn,
+});
 
 /**
  * Reads a fixed, bounded set of aggregate operational diagnostics.
@@ -152,16 +197,16 @@ export async function getAdminStatus(
       FROM public_input_revision WHERE id=1`).bind(asOf),
   ]);
 
-  const lease = resultRow(results, 0);
-  const syncRows = resultRows(results, 1);
-  const matchRows = resultRows(results, 2);
-  const syncByCode = new Map(syncRows.map((row) => [stringValue(row.code), row]));
-  const matchesByCode = new Map(matchRows.map((row) => [stringValue(row.code), row]));
+  const lease = batchRow(results, 0, LeaseRowSchema);
+  const syncByCode = new Map(batchRows(results, 1, SyncRowSchema).map((row) => [row.code, row]));
+  const matchesByCode = new Map(
+    batchRows(results, 2, MatchRowSchema).map((row) => [row.code, row]),
+  );
   const competitions = COMPETITION_CODES.map((code): CompetitionStatus => {
     const sync = syncByCode.get(code);
-    const latestSyncAt = nullableString(sync?.latestSyncAt);
-    const latestSuccessAt = nullableString(sync?.latestSuccessAt);
-    const latestErrorAt = nullableString(sync?.latestErrorAt);
+    const latestSyncAt = sync?.latestSyncAt ?? null;
+    const latestSuccessAt = sync?.latestSuccessAt ?? null;
+    const latestErrorAt = sync?.latestErrorAt ?? null;
     return {
       code,
       latestSyncAt,
@@ -170,21 +215,21 @@ export async function getAdminStatus(
       successAgeSeconds: ageSeconds(latestSuccessAt, now),
       latestErrorAt,
       errorAgeSeconds: ageSeconds(latestErrorAt, now),
-      latestCompletedMatchDate: nullableString(matchesByCode.get(code)?.latestCompletedMatchDate),
+      latestCompletedMatchDate: matchesByCode.get(code)?.latestCompletedMatchDate ?? null,
     };
   });
-  const degradation = resultRow(results, 8);
-  const coaching = resultRow(results, 9);
-  const coachingJoins = resultRow(results, 10);
-  const coachingConflict = resultRow(results, 11);
-  const coachingCoverage = resultRow(results, 12);
-  const remediation = resultRow(results, 13);
+  const degradation = batchRow(results, 8, DegradationRowSchema);
+  const coaching = batchRow(results, 9, CoachingRowSchema);
+  const coachingJoins = batchRow(results, 10, CoachingJoinsRowSchema);
+  const coachingConflict = batchRow(results, 11, CoachingConflictRowSchema);
+  const coachingCoverage = batchRow(results, 12, CoachingCoverageRowSchema);
+  const remediation = batchRow(results, 13, RemediationRowSchema);
   const response: AdminStatusResponse = {
     status: "ok",
     asOf,
     lease: {
-      held: numberValue(lease?.held) === 1,
-      ageSeconds: numberOrNull(lease?.ageSeconds),
+      held: countOrZero(lease?.held) === 1,
+      ageSeconds: ageOrNull(lease?.ageSeconds),
     },
     competitions,
     integrity: {
@@ -196,30 +241,30 @@ export async function getAdminStatus(
     },
     degradation: {
       windowHours: DEGRADATION_WINDOW_HOURS,
-      partialLineupEvents: numberValue(degradation?.partialLineupEvents),
-      partialStatsEvents: numberValue(degradation?.partialStatsEvents),
-      unmappedTeamEvents: numberValue(degradation?.unmappedTeamEvents),
+      partialLineupEvents: countOrZero(degradation?.partialLineupEvents),
+      partialStatsEvents: countOrZero(degradation?.partialStatsEvents),
+      unmappedTeamEvents: countOrZero(degradation?.unmappedTeamEvents),
     },
     remediation: {
-      inputWriteActive: numberValue(remediation?.in_progress) === 1,
-      inputWriteOperation: nullableString(remediation?.write_operation),
-      auditScopesUnresolved: numberValue(remediation?.auditScopesUnresolved),
-      inputWriteAgeSeconds: ageSeconds(nullableString(remediation?.write_started_at), now),
-      statisticsDue: numberValue(remediation?.statisticsDue),
-      statisticsFailed: numberValue(remediation?.statisticsFailed),
-      statisticsUnresolved: numberValue(remediation?.statisticsUnresolved),
-      weatherUnresolved: numberValue(remediation?.weatherUnresolved),
-      weatherUnavailable: numberValue(remediation?.weatherUnavailable),
-      pavSeasonsPending: numberValue(remediation?.pavSeasonsPending),
-      identityRepairsPending: numberValue(remediation?.identityRepairsPending),
+      inputWriteActive: countOrZero(remediation?.in_progress) === 1,
+      inputWriteOperation: remediation?.write_operation ?? null,
+      auditScopesUnresolved: countOrZero(remediation?.auditScopesUnresolved),
+      inputWriteAgeSeconds: ageSeconds(remediation?.write_started_at ?? null, now),
+      statisticsDue: countOrZero(remediation?.statisticsDue),
+      statisticsFailed: countOrZero(remediation?.statisticsFailed),
+      statisticsUnresolved: countOrZero(remediation?.statisticsUnresolved),
+      weatherUnresolved: countOrZero(remediation?.weatherUnresolved),
+      weatherUnavailable: countOrZero(remediation?.weatherUnavailable),
+      pavSeasonsPending: countOrZero(remediation?.pavSeasonsPending),
+      identityRepairsPending: countOrZero(remediation?.identityRepairsPending),
     },
     coaching: {
-      latestSuccessAt: nullableString(coaching?.latestSuccessAt),
-      failedScopes: numberValue(coaching?.failedScopes),
-      unresolvedJoins: numberValue(coachingJoins?.unresolvedJoins),
-      conflicts: numberValue(coachingConflict?.conflicts),
-      currentSeasonExpectedAssignments: numberValue(coachingCoverage?.expectedAssignments),
-      currentSeasonObservedAssignments: numberValue(coachingCoverage?.observedAssignments),
+      latestSuccessAt: coaching?.latestSuccessAt ?? null,
+      failedScopes: countOrZero(coaching?.failedScopes),
+      unresolvedJoins: countOrZero(coachingJoins?.unresolvedJoins),
+      conflicts: countOrZero(coachingConflict?.conflicts),
+      currentSeasonExpectedAssignments: countOrZero(coachingCoverage?.expectedAssignments),
+      currentSeasonObservedAssignments: countOrZero(coachingCoverage?.observedAssignments),
     },
   };
   console.log(
@@ -231,44 +276,20 @@ export async function getAdminStatus(
   return response;
 }
 
-function resultRows(
-  results: readonly D1Result<unknown>[],
-  index: number,
-): Record<string, unknown>[] {
-  const rows = results[index]?.results;
-  if (!Array.isArray(rows)) return [];
-  return rows.filter(isRecord);
+function countAt(results: readonly D1Result[], index: number): number {
+  return countOrZero(batchRow(results, index, CountRowSchema)?.count);
 }
 
-function resultRow(
-  results: readonly D1Result<unknown>[],
-  index: number,
-): Record<string, unknown> | undefined {
-  return resultRows(results, index)[0];
+/** A finite count, with NULL or a missing row read as zero. */
+function countOrZero(value: number | null | undefined): number {
+  return value !== null && value !== undefined && Number.isFinite(value) ? value : 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function countAt(results: readonly D1Result<unknown>[], index: number): number {
-  return numberValue(resultRow(results, index)?.count);
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function numberValue(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : null;
+/** A non-negative age, or null when unknown. */
+function ageOrNull(value: number | null | undefined): number | null {
+  return value !== null && value !== undefined && Number.isFinite(value)
+    ? Math.max(0, value)
+    : null;
 }
 
 function ageSeconds(timestamp: string | null, now: Date): number | null {

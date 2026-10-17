@@ -16,10 +16,11 @@
  * Provider failures are isolated per match and persisted for daily retries.
  * After three failed retries, missing values retain an explicit diagnostic.
  */
+import { describeError, logError } from "../lib/errors";
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
-import { aggregateWeatherWindow, extractHourlySeries } from "./aggregate";
+import { aggregateWeatherWindow, decodeOpenMeteoPayload, extractHourlySeries } from "./aggregate";
 import {
   ARCHIVE_API,
   FORECAST_API,
@@ -128,9 +129,9 @@ export async function runWeatherStage(
   } catch (err) {
     // Provider failures are handled per match. A database failure can leave
     // partial state and must retain the caller's public write marker.
-    await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) =>
-      console.error("weather stage: failed to record sync_log row", logErr),
-    );
+    await logSync(env, "sync:weather", 0, describeError(err)).catch((logErr) => {
+      logError("weather_sync_log_failed", logErr);
+    });
     throw err;
   }
 }
@@ -151,33 +152,27 @@ async function selectNeedsWork(env: Env, now: Date, matchId: number | null): Pro
     selectFinalObservedCandidates(env, now, matchId),
   ]);
   return [
-    ...forecast.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "forecast",
-        source: "best_match",
-        apiBase: FORECAST_API,
-        isDualModel: false,
-      }),
-    ),
-    ...fastObserved.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "observed",
-        source: "historical_forecast",
-        apiBase: HISTORICAL_FORECAST_API,
-        isDualModel: false,
-      }),
-    ),
-    ...finalObserved.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "observed",
-        source: OBSERVED_FINAL_SOURCE,
-        apiBase: ARCHIVE_API,
-        isDualModel: true,
-      }),
-    ),
+    ...forecast.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "forecast",
+      source: "best_match",
+      apiBase: FORECAST_API,
+      isDualModel: false,
+    })),
+    ...fastObserved.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "observed",
+      source: "historical_forecast",
+      apiBase: HISTORICAL_FORECAST_API,
+      isDualModel: false,
+    })),
+    ...finalObserved.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "observed",
+      source: OBSERVED_FINAL_SOURCE,
+      apiBase: ARCHIVE_API,
+      isDualModel: true,
+    })),
   ];
 }
 
@@ -324,7 +319,7 @@ async function fetchAndStore(
     if (!response.ok) {
       throw new Error(`Open-Meteo ${response.status} for match ${job.candidate.match_id}`);
     }
-    const series = extractHourlySeries(await response.json());
+    const series = extractHourlySeries(decodeOpenMeteoPayload(await response.json()));
     const scheduledStart = `${job.candidate.date}T${job.candidate.local_time}`;
     metrics = aggregateWeatherWindow(series, scheduledStart);
   } catch (error) {
@@ -342,8 +337,4 @@ async function fetchAndStore(
   return weatherMetricValues(metrics).some((value) => value === null)
     ? "partial: missing-weather-metrics"
     : null;
-}
-
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

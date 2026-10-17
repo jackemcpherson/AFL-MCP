@@ -22,14 +22,30 @@ export function normaliseTeamForMatch(name: string, competition: string, season:
   return normaliseTeam(trimmed);
 }
 
+/**
+ * Map a provider team name to its canonical name.
+ *
+ * @param name - Team name as the provider spells it.
+ * @returns The canonical team name, or the trimmed input when unmapped.
+ * @example
+ * normaliseTeam("Greater Western Sydney"); // "GWS Giants"
+ */
 export function normaliseTeam(name: string): string {
   const trimmed = name.trim();
-  return TEAM_NAME_MAP[trimmed] ?? trimmed;
+  return TEAM_NAME_MAP.get(trimmed) ?? trimmed;
 }
 
+/**
+ * Map a provider venue name to its canonical name.
+ *
+ * @param name - Venue name as the provider spells it.
+ * @returns The canonical venue name, or the trimmed input when unmapped.
+ * @example
+ * normaliseVenue("M.C.G."); // "MCG"
+ */
 export function normaliseVenue(name: string): string {
   const trimmed = name.trim();
-  return VENUE_NAME_MAP[trimmed] ?? trimmed;
+  return VENUE_NAME_MAP.get(trimmed) ?? trimmed;
 }
 
 /**

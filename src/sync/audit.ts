@@ -1,4 +1,16 @@
+import { Schema } from "effect";
+import { batchRow, decodeRow } from "../lib/decode";
 import type { Env } from "../types";
+
+/** The public input revision marker. */
+const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Schema.Number });
+
+/** The least recently audited competition-season. */
+const AuditSeasonRowSchema = Schema.Struct({
+  id: Schema.Number,
+  season_key: Schema.String,
+  code: Schema.String,
+});
 
 /**
  * Inspect one competition-season per hourly pass without changing public inputs.
@@ -12,18 +24,15 @@ import type { Env } from "../types";
  * @example
  * await auditNextSeason(env);
  */
-export async function auditNextSeason(env: Env, now = new Date()): Promise<void> {
-  const season = await env.DB.prepare(`SELECT s.id, s.season_key, c.code
+export async function auditNextSeason(env: Env, now: Date = new Date()): Promise<void> {
+  const nextSeason = await env.DB.prepare(`SELECT s.id, s.season_key, c.code
     FROM seasons s JOIN competitions c ON c.id=s.competition_id
     LEFT JOIN sync_log l ON l.type='audit:season:' || s.id
     WHERE c.code IN ('AFLM','AFLW','VFL','VFLW')
-    GROUP BY s.id ORDER BY MAX(l.timestamp), s.id LIMIT 1`).first<{
-    id: number;
-    season_key: string;
-    code: string;
-  }>();
+    GROUP BY s.id ORDER BY MAX(l.timestamp), s.id LIMIT 1`).first();
+  const season = decodeRow(nextSeason, AuditSeasonRowSchema);
   if (!season) return;
-  const [marker, findings] = await env.DB.batch([
+  const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, in_progress FROM public_input_revision WHERE id=1"),
     env.DB.prepare(`SELECT 'completed-without-statistics' AS issue, CAST(m.id AS TEXT) AS record_id
       FROM matches m WHERE m.season_id=?1 AND m.status='Complete'
@@ -43,13 +52,16 @@ export async function auditNextSeason(env: Env, now = new Date()): Promise<void>
       FROM player_season_pav p WHERE p.season_id=?1 AND p.total_pav IS NULL
       LIMIT 101`).bind(season.id),
   ]);
-  const start = marker?.results[0] as { revision: number; in_progress: number } | undefined;
-  const end = await env.DB.prepare(
-    "SELECT revision, in_progress FROM public_input_revision WHERE id=1",
-  ).first<{ revision: number; in_progress: number }>();
+  const start = batchRow(results, 0, MarkerRowSchema);
+  const end = decodeRow(
+    await env.DB.prepare(
+      "SELECT revision, in_progress FROM public_input_revision WHERE id=1",
+    ).first(),
+    MarkerRowSchema,
+  );
   if (!start || !end || start.in_progress || end.in_progress || start.revision !== end.revision)
     return;
-  const rows = findings?.results ?? [];
+  const rows = results[1]?.results ?? [];
   const report = {
     competition: season.code,
     season: season.season_key,

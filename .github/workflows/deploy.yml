@@ -1,11 +1,13 @@
 name: Publish artifact
 
-# afl-mcp no longer self-deploys. On merge to main it builds the Worker bundle
-# and publishes it to R2 (worker-artifacts/afl-mcp/<sha>.js) together with the
-# D1 migrations (afl-mcp/<sha>-migrations.tar.gz). Deployment happens from the
+# afl-mcp no longer self-deploys. On merge to main CI checks the commit,
+# bundles the Worker once and hands that bundle and the D1 migrations to the
+# publish job, which puts them in R2 (worker-artifacts/afl-mcp/<sha>.js and
+# afl-mcp/<sha>-migrations.tar.gz). Deployment happens from the
 # cloudflare-infra repo through promote-worker.yml and its reviewed release
-# descriptor. The pipeline applies migrations BEFORE uploading the Worker, so migrations must
-# stay backwards-compatible with the previous Worker version (expand-contract).
+# descriptor. The pipeline applies migrations BEFORE uploading the Worker, so
+# migrations must stay backwards-compatible with the previous Worker version
+# (expand-contract).
 on:
   push:
     branches: [main]
@@ -14,6 +16,7 @@ on:
       - "wrangler.toml"
       - "package.json"
       - "bun.lock"
+      - ".github/workflows/ci.yml"
       - ".github/workflows/deploy.yml"
 
 concurrency:
@@ -27,6 +30,8 @@ jobs:
   ci:
     name: CI checks
     uses: ./.github/workflows/ci.yml
+    with:
+      upload-bundle: true
 
   publish:
     name: Publish to R2
@@ -35,6 +40,8 @@ jobs:
     timeout-minutes: 10
     environment: production
     steps:
+      # Checkout and install only provide the lockfile-pinned wrangler for the
+      # R2 upload. The bundle itself comes from the CI job.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -46,11 +53,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build Worker bundle
-        run: bunx wrangler deploy --dry-run --outdir dist
-
-      - name: Bundle D1 migrations
-        run: tar -czf migrations.tar.gz -C src/db migrations
+      - name: Download checked bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: worker-bundle
+          path: dist
 
       - name: Publish artifact to R2
         env:
@@ -58,12 +65,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           ARTIFACT_DIGEST="$(sha256sum dist/index.js | cut -d' ' -f1)"
-          MIGRATIONS_DIGEST="$(sha256sum migrations.tar.gz | cut -d' ' -f1)"
+          MIGRATIONS_DIGEST="$(sha256sum dist/migrations.tar.gz | cut -d' ' -f1)"
           echo "Publishing afl-mcp/${GITHUB_SHA}.js and afl-mcp/${GITHUB_SHA}-migrations.tar.gz"
           bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}.js" \
             --file dist/index.js --remote
           bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}-migrations.tar.gz" \
-            --file migrations.tar.gz --remote
+            --file dist/migrations.tar.gz --remote
           {
             echo "### Published Worker artifacts"
             echo "- Commit: \`${GITHUB_SHA}\`"

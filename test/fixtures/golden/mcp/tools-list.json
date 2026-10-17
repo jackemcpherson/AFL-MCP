@@ -1,0 +1,94 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "tools": [
+        {
+          "name": "schema",
+          "title": "Database schema",
+          "description": "Get the schema of the Australian football database: table definitions, column details, query rules, per-competition coverage, join patterns and query API. Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "includeObserved": {
+                "type": "boolean",
+                "default": false,
+                "description": "Overlay measured coverage for one competition-season. Requires both competition and season."
+              },
+              "competition": {
+                "type": "string",
+                "enum": [
+                  "AFLM",
+                  "AFLW",
+                  "VFL",
+                  "VFLW"
+                ],
+                "description": "Alone: filter the schema response to this competition. With season + includeObserved:true: the competition to measure."
+              },
+              "season": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]{4}(-S[67])?$"
+                  }
+                ],
+                "description": "Canonical season key or unambiguous year. AFLW 2022 requires 2022-S6 or 2022-S7. Requires competition and includeObserved:true."
+              }
+            },
+            "additionalProperties": false
+          },
+          "annotations": {
+            "title": "Database schema",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "code",
+          "title": "Run query code",
+          "description": "Run JavaScript in an isolated sandbox with read-only access to the Australian football D1 database through `db`.\n\nWrite the body of an async function in plain JavaScript: use await, and end with return and a JSON-serialisable value, such as `const r = await db.prepare(sql).bind('AFLM').all(); return r.results;`. A single `async () => { ... }` function also works.\n\nDo NOT use TypeScript syntax: no type annotations, interfaces, `as` casts or generics. The sandbox does not compile TypeScript, so that code fails to parse.\n\nThe `db` API, declared in TypeScript for reference:\ntype Row = Record<string, unknown>;\ninterface D1Result { results: Row[]; success: boolean; meta: Record<string, unknown> }\ninterface Statement {\n  /** Bind positional values to ? placeholders. */\n  bind(...values: unknown[]): Statement;\n  /** Run the read-only statement and return every row. */\n  all(): Promise<D1Result>;\n  /** Run the read-only statement and return the first row, or null. */\n  first(): Promise<Row | null>;\n}\ndeclare const db: { prepare(sql: string): Statement };\n\nFilter every SQL query by competition with JOIN competitions c ... WHERE c.code = ?, as the schema notes show.\n\nconsole.log, info, warn, error and debug output comes back in a separate Console output block, up to 100 lines and 10,000 characters.\n\nSandbox constraints: no network access, no npm imports, 30-second timeout, write/DDL statements rejected, rate limited at 60 requests/minute per IP. Results over 100,000 characters come back shortened but still valid JSON: long arrays keep their first items and end with a --- TRUNCATED --- notice giving the full count, so narrow the query with LIMIT, WHERE or aggregation.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "JavaScript async function body to run, ending in return. `db` is in scope, with the API in the tool description. TypeScript syntax is not supported."
+              },
+              "competition": {
+                "type": "string",
+                "enum": [
+                  "AFLM",
+                  "AFLW",
+                  "VFL",
+                  "VFLW"
+                ],
+                "description": "Optional hint naming the competition the query is about. It adds no SQL filter."
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          "annotations": {
+            "title": "Run query code",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        }
+      ]
+    }
+  }
+}

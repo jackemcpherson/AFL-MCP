@@ -115,7 +115,8 @@ team_ratings AS (
 -- The original ((2dn - dn²)/(2dn)) × 100 × 2 reduces algebraically to
 -- 100 × (2 - dn); written in reduced form for clarity. The CASE keeps
 -- the old NULLIF guard's dn = 0 → NULL behaviour exactly (COR-11:
--- semantics unchanged, only simplified — see test/pav.test.ts).
+-- semantics unchanged, only simplified — see
+-- test/sync/pav-defence-transform.worker.test.ts).
 team_ratings_full AS (
     SELECT team_id, off_rating, mid_rating, dn,
         CASE WHEN dn = 0 THEN NULL

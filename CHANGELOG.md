@@ -5,6 +5,131 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-10-17
+
+This release has breaking changes to the MCP tool contract. It also moves
+the repository to TypeScript standard v4.
+
+### Changed in 5.0.0
+
+- Breaking: the `code` tool rejects an unknown `competition` with an
+  `isError` result that lists the valid codes. It no longer runs the code
+  with the hint ignored. Calls that omit `competition` or set it to
+  `null` behave as before.
+- The Worker logs each failure as a JSON event with the error's tag and
+  source frames, and never the raw error message. A failed `sync_log` purge
+  now logs a `sync_log_purge_failed` event instead of failing silently.
+- `initialize` negotiates protocol revisions 2025-11-25, 2025-06-18 and
+  2025-03-26. It echoes a supported requested revision and otherwise
+  answers 2025-11-25.
+- `/mcp` answers 400 with error `-32600` when a request other than
+  `initialize` carries an unsupported `MCP-Protocol-Version` header or
+  2026-07-28 request metadata. Clients that speak both eras fall back to
+  `initialize`.
+- `/mcp` rejects request bodies over 4 MiB with 413, counted on the bytes
+  received.
+- 405 responses carry an `Allow` header. Errors for a request whose id is
+  unknown carry `id: null` instead of `0`.
+- Both tools carry a `title` and annotations that mark them read-only,
+  non-destructive, idempotent and closed-world. `initialize` returns
+  server instructions to call `schema` before the first `code` call.
+- Agent guidance has one home per rule. The `code` tool description holds
+  the competition-filter rule, and tool descriptions no longer repeat the
+  call-`schema`-first rule. The `schema` description lists the same valid
+  calls as its argument errors.
+- `schema` results and object `code` results add `structuredContent`
+  next to the unchanged text block. Other `code` results stay text only.
+- Breaking: `tools/call` naming an unknown tool returns JSON-RPC error
+  `-32602` instead of an `isError` result.
+- `schema` argument errors now name the failing key, for example
+  `Expected boolean at "includeObserved"` or
+  `Expected no excess property at "table"`. Every `schema` argument error
+  ends with the usage hint that lists the valid calls. Contract errors such
+  as a missing `season` keep their existing text.
+- Breaking: `tools/call` with a non-string tool `name` returns `-32602` with
+  `Missing tool name`. It used to return an `Unknown tool` result. A missing
+  `name` already returned `Missing tool name`.
+- The `code` tool's read-only SQL guard is tighter.
+- The `mcp:client` log event adds `metaProtocolVersion`, the 2026-07-28
+  `_meta` protocol version marker, or `null` when a request has none.
+- Breaking: a request without an `id` is a JSON-RPC notification. `/mcp`
+  answers it with 202 and no body and does not run it. It used to run and
+  reply with `id: 0`. `notifications/*` messages behave as before.
+- `/mcp` accepts JSON-RPC batches from 2025-03-26 clients, which send no
+  `MCP-Protocol-Version` header or send 2025-03-26. A batch holds at most
+  20 messages, and each message after the first takes one more rate-limit
+  token. `initialize` inside a batch gets a `-32600` error. Under
+  2025-06-18 and 2025-11-25 an array still returns 400.
+- Breaking: the `code` tool rejects arguments it does not declare with an
+  `isError` result that names the key and lists the valid arguments. It
+  used to ignore them. `competition: null` still counts as omitted.
+- `schema` output is 17% smaller and puts the query API and shared rules
+  first. It corrects stale notes. The `ladder` example counts only
+  completed home-and-away matches, and `lineup_round_comparison` stays
+  within one season.
+- `schema` with `competition` alone also filters
+  `coverage_contract.coaching_contract` to that competition.
+- `schema` no longer documents the internal coach import tables
+  `coach_backfill_progress`, `coach_import_pages` and
+  `coach_import_diagnostics`.
+- Breaking: the `code` tool asks for JavaScript instead of TypeScript,
+  because the sandbox runs JavaScript only. Its description states that
+  TypeScript syntax is not supported and declares the `db` API it exposes:
+  `prepare`, `bind`, `all` and `first`.
+- The `code` tool accepts code in a Markdown fence and a single
+  `async () => { ... }` function. Code that returns nothing gets a clear
+  error instead of `Unexpected end of JSON input`. Syntax errors show the
+  parser message, plus a JavaScript hint when the code holds TypeScript
+  syntax. The `tool:code` log event adds `outcome` and, on failure,
+  `errorClass`.
+- Breaking: `code` results over 100,000 characters come back shortened
+  but still valid JSON, instead of as a string cut at 1,000,000
+  characters. A long array keeps its first items and ends with a
+  `--- TRUNCATED ---` notice that gives the full count. A long string keeps
+  its start and states its full length. Shortened object results keep
+  `structuredContent`.
+- The `code` tool returns what the code writes with `console.log`,
+  `info`, `warn`, `error` and `debug`, after a result or an error, in a
+  separate `Console output:` text block. It keeps 100 lines and 10,000
+  characters at most. The lines never reach the server logs.
+- A `code` call that times out returns the console lines written before
+  the timeout. The sandbox stops waiting on the code just inside the
+  30-second budget, and the Worker keeps its own timeout as a backstop.
+- A `code` syntax error names the line and column in the submitted code,
+  such as `SyntaxError: Unexpected token ':' (line 1, column 13)`. The
+  position is left out when it falls outside the submitted code.
+
+### Fixed in 5.0.0
+
+- The scheduled sync now resumes a public write marker left by its own
+  interrupted run, such as after a D1 connection drop, and logs
+  `sync:recovered`. Before, every later tick failed until an operator resumed
+  it. Backfills and other operations still require explicit recovery.
+
+### Internal Changes in 5.0.0
+
+- `effect/Schema` replaces Zod for every boundary decode: MCP and admin
+  request bodies, Open-Meteo payloads, D1 rows and stored JSON.
+- Vite+ (`vp`) replaces Biome. `oxfmt` formats, `oxlint` lints with type
+  information, and Vitest runs the tests. `bun run check` also runs `tsc`
+  on each tsconfig.
+- Separate tsconfig projects cover Worker source, tests and Node scripts.
+  New compiler flags: `noImplicitOverride`, `verbatimModuleSyntax`,
+  `noPropertyAccessFromIndexSignature` and `isolatedDeclarations`.
+- Golden contract tests pin the MCP wire format under
+  `test/fixtures/golden/mcp/`. CI fails when a golden file is missing.
+- Tests mirror the `src/` layout. Tests that need the Workers pool end in
+  `.worker.test.ts`, and no test mocks a module.
+- ADR 0001 and ADR 0002 record the deliberate deviations from the
+  standard: the minimal-Worker shape and the hand-rolled MCP protocol.
+- The repository waits to adopt `@effect/vitest` until
+  `@cloudflare/vitest-pool-workers` supports Vitest 5.
+- CI bundles the Worker with `wrangler deploy --dry-run` after the tests.
+- `package.json` pins `@cloudflare/vitest-pool-workers` to the exact locked
+  version.
+- Workers-pool tests time out after 15 seconds instead of 5, because
+  isolates contend for CPU when every test file runs at once.
+
 ## [4.0.11] - 2026-10-17
 
 This patch tightens MCP request media-type validation.

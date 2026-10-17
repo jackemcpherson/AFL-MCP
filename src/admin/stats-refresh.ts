@@ -1,29 +1,68 @@
-import { z } from "zod";
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
-import { resolveStoredSeason } from "../db/seasons";
+import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
+import { CompetitionCodeSchema } from "../lib/competitions";
+import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
+import {
+  booleanDefault,
+  PositiveIntSchema,
+  SeasonKeyStringSchema,
+  Sha256HexSchema,
+} from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
-import { refreshDueStats } from "../sync/stats-refresh";
+import { refreshDueStats, type StatsRefreshReport } from "../sync/stats-refresh";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** Explicit scope and resumable operation identity for historical corrections. */
-export const StatsRefreshRequestSchema = z.strictObject({
-  competition: z.enum(["AFLM", "AFLW", "VFL", "VFLW"]),
-  season: z.union([z.number().int().min(1897).max(2100), z.string().regex(/^\d{4}(?:-S[67])?$/)]),
-  matchId: z.number().int().positive().optional(),
-  operationId: z.string().uuid(),
-  dryRun: z.boolean().default(true),
-  resume: z.boolean().default(false),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
+export const StatsRefreshRequestSchema: Schema.Struct<{
+  readonly competition: typeof CompetitionCodeSchema;
+  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
+  readonly matchId: Schema.optionalKey<Schema.Int>;
+  readonly operationId: Schema.String;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
+  competition: CompetitionCodeSchema,
+  season: Schema.Union([
+    Schema.Int.check(Schema.isBetween({ minimum: 1897, maximum: 2100 })),
+    SeasonKeyStringSchema,
+  ]),
+  matchId: Schema.optionalKey(PositiveIntSchema),
+  operationId: Schema.String.check(Schema.isUUID()),
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
 });
+
+/** A validated statistics refresh request. */
+export type StatsRefreshRequest = typeof StatsRefreshRequestSchema.Type;
+
+/** Decode a statistics refresh body, rejecting unknown keys. */
+export const decodeStatsRefreshRequest: Decoder<StatsRefreshRequest> =
+  strictDecoder(StatsRefreshRequestSchema);
+
+/**
+ * Outcome of a stats refresh call. `busy` alone means another operation
+ * holds the lease. A preview lists `matches` with a `manifestDigest`; a run
+ * reports batch progress and the `remaining` match count.
+ */
+export interface StatsRefreshResult extends Partial<StatsRefreshReport> {
+  readonly busy: boolean;
+  readonly dryRun?: boolean;
+  readonly season?: StoredSeason;
+  readonly matches?: readonly Record<string, unknown>[];
+  readonly manifestDigest?: string;
+  readonly operationId?: string;
+  readonly remaining?: number;
+}
 
 /**
  * Preview, start, or resume a bounded refresh without fetching unrelated seasons.
@@ -34,11 +73,11 @@ export const StatsRefreshRequestSchema = z.strictObject({
 
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await operateStatsRefresh(env, StatsRefreshRequestSchema.parse(request)); */
+ * await operateStatsRefresh(env, Result.getOrThrow(decodeStatsRefreshRequest(body))); */
 export async function operateStatsRefresh(
   env: Env,
-  request: z.infer<typeof StatsRefreshRequestSchema>,
-) {
+  request: StatsRefreshRequest,
+): Promise<StatsRefreshResult> {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;
@@ -52,12 +91,11 @@ export async function operateStatsRefresh(
         .bind(season.id, request.matchId ?? null)
         .all();
     if (!matches.results.length)
-      throw new OperationConflictError("No eligible completed matches in requested scope");
+      throw new OperationConflictError({
+        message: "No eligible completed matches in requested scope",
+      });
     const payload = JSON.stringify({ season, matches: matches.results });
-    const digest = Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(payload);
     if (request.dryRun)
       return {
         busy: false,
@@ -75,15 +113,19 @@ export async function operateStatsRefresh(
       operation &&
       (operation.season_id !== season.id || operation.match_id !== (request.matchId ?? null))
     ) {
-      throw new OperationConflictError("Operation ID already belongs to a different scope");
+      throw new OperationConflictError({
+        message: "Operation ID already belongs to a different scope",
+      });
     }
     if (!operation && request.manifestDigest !== digest)
-      throw new OperationConflictError("Preview digest missing or stale; preview again");
+      throw new OperationConflictError({
+        message: "Preview digest missing or stale; preview again",
+      });
     if (request.resume) {
       if ((operation?.manifest_digest ?? digest) !== request.manifestDigest)
-        throw new OperationConflictError(
-          "Recovery requires the existing operation and its approved digest",
-        );
+        throw new OperationConflictError({
+          message: "Recovery requires the existing operation and its approved digest",
+        });
       await resumePublicInputWrite(env, holder, `stats:${request.operationId}`);
     } else await beginPublicInputWrite(env, holder, new Date(), `stats:${request.operationId}`);
     marked = true;

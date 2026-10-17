@@ -1,31 +1,36 @@
 {
   "name": "afl-mcp",
-  "version": "4.0.11",
+  "version": "5.0.0",
   "private": true,
+  "imports": {
+    "#test/*": "./test/support/*.ts"
+  },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test": "vitest",
-    "check": "biome check .",
-    "format": "biome format --write .",
-    "typecheck": "tsc --noEmit",
+    "check": "vp check && bun run typecheck",
+    "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.test.json && tsc -p tsconfig.node.json",
+    "format": "vp check --fix",
+    "test": "vp test --run",
     "db:migrate": "wrangler d1 migrations apply afl-stats",
     "check:schema": "python3 scripts/test_schema_parity.py && python3 scripts/verify_schema_parity.py"
   },
   "dependencies": {
     "effect": "4.0.4",
-    "fitzroy": "7.0.0",
-    "zod": "^4.4.3"
-  },
-  "overrides": {
-    "undici": ">=7.28.0"
+    "fitzroy": "7.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.9",
-    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/vitest-pool-workers": "0.23.0",
     "@cloudflare/workers-types": "^5.0.0",
+    "@oxlint/plugins": "1.79.0",
+    "@types/node": "^24",
     "typescript": "^7.0.0",
-    "vitest": "^4.1.4",
+    "vite-plus": "0.3.3",
+    "vitest": "4.1.11",
     "wrangler": "^4.0.0"
+  },
+  "overrides": {
+    "undici": ">=7.28.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.3",
+    "vitest": "4.1.11"
   }
 }

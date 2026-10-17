@@ -40,9 +40,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
+import { Effect, Predicate, Schema } from "effect";
 import {
   aggregateWeatherWindow,
+  decodeOpenMeteoPayload,
   extractHourlySeries,
   type WeatherMetrics,
 } from "../src/weather/aggregate";
@@ -67,7 +68,7 @@ const SPOT_CHECK_ROWS = 30;
 
 function escapeSQL(value: string | number | null | undefined): string {
   if (value == null) return "NULL";
-  if (typeof value === "number") return String(value);
+  if (Predicate.isNumber(value)) return String(value);
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
@@ -87,16 +88,25 @@ function writeBatchedSQL(prefix: string, statements: string[]): number {
 }
 
 /** Envelope of `wrangler d1 execute --json`: one result set per statement. */
-const D1ExecuteOutputSchema = z.array(z.object({ results: z.array(z.unknown()).default([]) }));
+const D1ExecuteOutputSchema = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      results: Schema.Array(Schema.Unknown).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+    }),
+  ),
+);
 
-function queryD1<T>(sql: string, rowSchema: z.ZodType<T>): T[] {
+function queryD1<S extends Schema.ConstraintDecoder<unknown>>(
+  sql: string,
+  rowSchema: S,
+): readonly S["Type"][] {
   const escaped = sql.replace(/\n/g, " ").replace(/"/g, '\\"');
   const raw = execSync(`npx wrangler d1 execute afl-stats --remote --command "${escaped}" --json`, {
     encoding: "utf-8",
     maxBuffer: 50 * 1024 * 1024,
   });
-  const output = D1ExecuteOutputSchema.parse(JSON.parse(raw));
-  return z.array(rowSchema).parse(output[0]?.results ?? []);
+  const output = Schema.decodeUnknownSync(D1ExecuteOutputSchema)(raw);
+  return Schema.decodeUnknownSync(Schema.Array(rowSchema))(output[0]?.results ?? []);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -105,16 +115,16 @@ function sleep(ms: number): Promise<void> {
 
 // ── Eligibility ──────────────────────────────────────────────────────
 
-const EligibleMatchSchema = z.object({
-  id: z.number(),
-  date: z.string(),
-  local_time: z.string().nullable(),
-  competition: z.string(),
-  year: z.number(),
-  latitude: z.number(),
-  longitude: z.number(),
+const EligibleMatchSchema = Schema.Struct({
+  id: Schema.Number,
+  date: Schema.String,
+  local_time: Schema.NullOr(Schema.String),
+  competition: Schema.String,
+  year: Schema.Number,
+  latitude: Schema.Number,
+  longitude: Schema.Number,
 });
-type EligibleMatch = z.infer<typeof EligibleMatchSchema>;
+type EligibleMatch = typeof EligibleMatchSchema.Type;
 
 const ELIGIBILITY_SELECT = `
   FROM matches m
@@ -127,7 +137,7 @@ const ELIGIBILITY_SELECT = `
     AND w.match_id IS NULL
     AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL`;
 
-function loadEligibleMatches(): EligibleMatch[] {
+function loadEligibleMatches(): readonly EligibleMatch[] {
   return queryD1(
     `SELECT m.id, m.date, m.local_time, c.code AS competition, s.year,
        cv.latitude, cv.longitude
@@ -137,14 +147,14 @@ function loadEligibleMatches(): EligibleMatch[] {
   );
 }
 
-function printEligibilitySummary(matches: EligibleMatch[]): void {
+function printEligibilitySummary(matches: readonly EligibleMatch[]): void {
   const bySeason = new Map<string, number>();
   for (const m of matches) {
     const key = `${m.competition} ${m.year}`;
     bySeason.set(key, (bySeason.get(key) ?? 0) + 1);
   }
   console.log("Eligible matches per competition/season:");
-  for (const [key, count] of [...bySeason.entries()].sort()) {
+  for (const [key, count] of [...bySeason.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     console.log(`  ${key}: ${count}`);
   }
   const cached = matches.filter((m) => existsSync(cachePath(m.id))).length;
@@ -172,7 +182,7 @@ async function fetchArchivePayload(match: {
   return response.json();
 }
 
-async function fetchPhase(matches: EligibleMatch[]): Promise<void> {
+async function fetchPhase(matches: readonly EligibleMatch[]): Promise<void> {
   console.log("\nPhase 1: fetching from Open-Meteo archive...");
   let fetched = 0;
   let skipped = 0;
@@ -207,11 +217,21 @@ async function fetchPhase(matches: EligibleMatch[]): Promise<void> {
 // ── Phase 2: generate ────────────────────────────────────────────────
 
 /** Shape of one data/weather-cache/<matchId>.json entry written by fetchPhase. */
-const CacheEntrySchema = z.object({ fetchedAt: z.string(), payload: z.unknown() });
+const CacheEntrySchema = Schema.fromJsonString(
+  Schema.Struct({ fetchedAt: Schema.String, payload: Schema.Unknown }),
+);
 
-function metricsFromCache(match: EligibleMatch): { metrics: WeatherMetrics; fetchedAt: string } {
-  const cached = CacheEntrySchema.parse(JSON.parse(readFileSync(cachePath(match.id), "utf-8")));
-  const series = extractHourlySeries(cached.payload);
+/** Weather metrics generated from one cached Open-Meteo response. */
+interface CachedMetrics {
+  readonly metrics: WeatherMetrics;
+  readonly fetchedAt: string;
+}
+
+function metricsFromCache(match: EligibleMatch): CachedMetrics {
+  const cached = Schema.decodeUnknownSync(CacheEntrySchema)(
+    readFileSync(cachePath(match.id), "utf-8"),
+  );
+  const series = extractHourlySeries(decodeOpenMeteoPayload(cached.payload));
   if (match.local_time === null) throw new Error(`Match ${match.id}: kickoff time unavailable`);
   const scheduledStart = `${match.date}T${match.local_time}`;
   return { metrics: aggregateWeatherWindow(series, scheduledStart), fetchedAt: cached.fetchedAt };
@@ -228,7 +248,7 @@ function upsertStatement(matchId: number, metrics: WeatherMetrics, fetchedAt: st
   return matchWeatherUpsertSql(values);
 }
 
-function generatePhase(matches: EligibleMatch[]): number {
+function generatePhase(matches: readonly EligibleMatch[]): number {
   console.log("\nPhase 2: generating SQL...");
   const statements: string[] = [];
   let missing = 0;
@@ -264,11 +284,11 @@ function verifyCoverage(): void {
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
      GROUP BY c.code, s.year
      ORDER BY c.code, s.year`,
-    z.object({
-      competition: z.string(),
-      year: z.number(),
-      eligible: z.number(),
-      observed: z.number(),
+    Schema.Struct({
+      competition: Schema.String,
+      year: Schema.Number,
+      eligible: Schema.Number,
+      observed: Schema.Number,
     }),
   );
   let gaps = 0;
@@ -298,7 +318,7 @@ function verifyRanges(): void {
   for (const [label, predicate] of checks) {
     const rows = queryD1(
       `SELECT COUNT(*) AS n FROM match_weather WHERE kind = 'observed' AND (${predicate})`,
-      z.object({ n: z.number() }),
+      Schema.Struct({ n: Schema.Number }),
     );
     const n = rows[0]?.n ?? 0;
     console.log(`  ${label}: ${n}${n > 0 ? "  <-- VIOLATION" : ""}`);
@@ -316,16 +336,16 @@ async function verifySpotCheck(): Promise<void> {
      JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)
      WHERE w.kind = 'observed' AND w.source = '${OBSERVED_FINAL_SOURCE}'
      ORDER BY RANDOM() LIMIT ${SPOT_CHECK_ROWS}`,
-    z.object({
-      id: z.number(),
-      date: z.string(),
-      local_time: z.string().nullable(),
-      latitude: z.number(),
-      longitude: z.number(),
-      temp_c: z.number().nullable(),
-      precip_mm: z.number().nullable(),
-      wind_speed_kmh: z.number().nullable(),
-      humidity_pct: z.number().nullable(),
+    Schema.Struct({
+      id: Schema.Number,
+      date: Schema.String,
+      local_time: Schema.NullOr(Schema.String),
+      latitude: Schema.Number,
+      longitude: Schema.Number,
+      temp_c: Schema.NullOr(Schema.Number),
+      precip_mm: Schema.NullOr(Schema.Number),
+      wind_speed_kmh: Schema.NullOr(Schema.Number),
+      humidity_pct: Schema.NullOr(Schema.Number),
     }),
   );
   let mismatches = 0;
@@ -335,7 +355,7 @@ async function verifySpotCheck(): Promise<void> {
       continue;
     }
     const payload = await fetchArchivePayload(row);
-    const series = extractHourlySeries(payload);
+    const series = extractHourlySeries(decodeOpenMeteoPayload(payload));
     const fresh = aggregateWeatherWindow(series, `${row.date}T${row.local_time}`);
     const diffs: string[] = [];
     const compare = (label: string, stored: number | null, live: number | null, tol: number) => {

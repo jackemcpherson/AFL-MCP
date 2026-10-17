@@ -1,4 +1,6 @@
+import { Schema } from "effect";
 import type { CompetitionCode } from "fitzroy";
+import type { TaggedErrorBase } from "../lib/errors";
 import type { Env } from "../types";
 
 /** Exact stored season identity. The calendar year is descriptive, not unique. */
@@ -9,17 +11,35 @@ export interface StoredSeason {
   readonly code: CompetitionCode;
 }
 
-/** Expected selector failure shared by authenticated operations and coverage. */
-export class SeasonSelectionError extends Error {
-  constructor(
-    message: string,
-    readonly code: "AMBIGUOUS_SEASON" | "INVALID_SEASON" | "SEASON_NOT_FOUND",
-    readonly validSelectors: readonly string[] = [],
-  ) {
-    super(message);
-    this.name = "SeasonSelectionError";
+const SeasonSelectionErrorBase: TaggedErrorBase<
+  SeasonSelectionError,
+  "SeasonSelectionError",
+  {
+    readonly message: Schema.String;
+    readonly code: Schema.Literals<
+      readonly ["AMBIGUOUS_SEASON", "INVALID_SEASON", "SEASON_NOT_FOUND"]
+    >;
+    readonly validSelectors: Schema.$Array<Schema.String>;
   }
-}
+> = Schema.TaggedError<SeasonSelectionError>()("SeasonSelectionError", {
+  message: Schema.String,
+  code: Schema.Literals(["AMBIGUOUS_SEASON", "INVALID_SEASON", "SEASON_NOT_FOUND"]),
+  validSelectors: Schema.Array(Schema.String),
+});
+
+/**
+ * Expected selector failure shared by authenticated operations and coverage.
+ *
+ * The admin entry maps `SEASON_NOT_FOUND` to 404 and the other codes to 400.
+ *
+ * @example
+ * throw new SeasonSelectionError({
+ *   message: "No AFLM season 1800 exists",
+ *   code: "SEASON_NOT_FOUND",
+ *   validSelectors: [],
+ * });
+ */
+export class SeasonSelectionError extends SeasonSelectionErrorBase {}
 
 /**
  * Reject ambiguous years and return an exact canonical key before any database write.
@@ -33,17 +53,18 @@ export class SeasonSelectionError extends Error {
 export function seasonKey(competition: string, selector: number | string): string {
   const key = String(selector);
   if (competition === "AFLW" && key === "2022") {
-    throw new SeasonSelectionError(
-      "Ambiguous AFLW season 2022; choose 2022-S6 or 2022-S7",
-      "AMBIGUOUS_SEASON",
-      ["2022-S6", "2022-S7"],
-    );
+    throw new SeasonSelectionError({
+      message: "Ambiguous AFLW season 2022; choose 2022-S6 or 2022-S7",
+      code: "AMBIGUOUS_SEASON",
+      validSelectors: ["2022-S6", "2022-S7"],
+    });
   }
   if (!/^\d{4}$/.test(key) && !(competition === "AFLW" && ["2022-S6", "2022-S7"].includes(key))) {
-    throw new SeasonSelectionError(
-      `Invalid ${competition} season selector: ${key}`,
-      "INVALID_SEASON",
-    );
+    throw new SeasonSelectionError({
+      message: `Invalid ${competition} season selector: ${key}`,
+      code: "INVALID_SEASON",
+      validSelectors: [],
+    });
   }
   return key;
 }
@@ -70,6 +91,10 @@ export async function resolveStoredSeason(
     .bind(competition, key)
     .first<StoredSeason>();
   if (!row)
-    throw new SeasonSelectionError(`No ${competition} season ${key} exists`, "SEASON_NOT_FOUND");
+    throw new SeasonSelectionError({
+      message: `No ${competition} season ${key} exists`,
+      code: "SEASON_NOT_FOUND",
+      validSelectors: [],
+    });
   return row;
 }

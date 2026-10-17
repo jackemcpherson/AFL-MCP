@@ -1,38 +1,88 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { Predicate, Schema } from "effect";
 import type { Env } from "../types";
-import { assertReadOnlySql } from "./sql-guard";
+import type { TaggedErrorBase } from "../lib/errors";
+import { boundConsoleLines, CONSOLE_CAPTURE_SOURCE } from "./console";
+import { normalizeSubmission } from "./normalize";
+import { isJsonObject, type JsonValue, truncateResult } from "./truncate";
 
-export class DbProxy extends WorkerEntrypoint<Env> {
-  async query(sql: string, ...params: unknown[]) {
-    assertReadOnlySql(sql);
-    const stmt = this.env.DB.prepare(sql);
-    const bound = params.length > 0 ? stmt.bind(...params) : stmt;
-    return await bound.all();
-  }
+const SandboxTimeoutErrorBase: TaggedErrorBase<
+  SandboxTimeoutError,
+  "SandboxTimeoutError",
+  { readonly timeoutMs: Schema.Number }
+> = Schema.TaggedError<SandboxTimeoutError>()("SandboxTimeoutError", { timeoutMs: Schema.Number });
 
-  async queryFirst(sql: string, ...params: unknown[]) {
-    assertReadOnlySql(sql);
-    const stmt = this.env.DB.prepare(sql);
-    const bound = params.length > 0 ? stmt.bind(...params) : stmt;
-    return await bound.first();
+/**
+ * Sandbox code ran past its wall-clock budget.
+ *
+ * @example
+ * new SandboxTimeoutError({ timeoutMs: 30_000 }).message; // "Execution timed out after 30s"
+ */
+export class SandboxTimeoutError extends SandboxTimeoutErrorBase {
+  override get message(): string {
+    return `Execution timed out after ${this.timeoutMs / 1000}s`;
   }
 }
 
+/**
+ * Outcome of one sandbox run: the result, or an error message and the
+ * error's class name, any console output, and the elapsed time.
+ */
 export interface ExecuteResult {
-  result: unknown;
+  result: JsonValue;
   error?: string;
+  /** Class name of the failure, such as `SyntaxError`. Safe to log: it carries no user text. */
+  errorClass?: string;
+  /** Bounded console lines the code wrote, present only when it wrote any. User text: never log it. */
+  logs?: readonly string[];
   execution_time_ms: number;
 }
+
+/** A sandbox run before its elapsed time is added. */
+type RunOutcome = Omit<ExecuteResult, "execution_time_ms">;
+
+/** Message for code that finished without returning anything. */
+const NO_RETURN_VALUE_MESSAGE =
+  "The code returned no value. End it with `return` and a JSON-serialisable value, such as `return rows.results`.";
 
 /** Wall-clock execution budget, matching the limit documented by the `tools` tool. */
 const EXECUTION_TIMEOUT_MS = 30_000;
 
-/** Serialized results larger than this are truncated rather than returned whole. */
-const MAX_RESULT_CHARS = 1_000_000;
+/**
+ * Results whose text form is longer than this are shortened structurally.
+ * About 25,000 tokens: room for a few hundred wide rows, inside the default
+ * MCP output budget of common clients.
+ */
+const MAX_RESULT_CHARS = 100_000;
+
+/**
+ * How far inside the parent's budget the sandbox stops waiting: a tenth of
+ * the budget, at most one second. The sandbox can then still reply with the
+ * console lines written so far, while the parent's own race stays a backstop
+ * for code that never yields, such as a busy loop.
+ *
+ * @param timeoutMs - The parent's wall-clock budget.
+ * @returns The sandbox's own budget in milliseconds.
+ */
+function sandboxBudgetMs(timeoutMs: number): number {
+  return Math.max(0, timeoutMs - Math.min(1_000, timeoutMs / 10));
+}
 
 /** Resource limits applied to the sandbox isolate itself. */
 const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
 
+/**
+ * Run LLM-written code in a Dynamic Worker isolate with read-only D1 access.
+ *
+ * @param code - Body of an async function with `db` in scope, or a shape
+ *   {@link normalizeCode} accepts.
+ * @param env - Worker bindings, including the Worker loader.
+ * @param ctx - Execution context that exposes the `DbProxy` entrypoint.
+ * @param timeoutMs - Wall-clock budget before the run is abandoned.
+ * @returns The result, shortened when too large, or an error message with
+ *   its class name, plus any console output.
+ * @example
+ * await executeCode("return (await db.prepare('SELECT 1').all()).results", env, ctx);
+ */
 export async function executeCode(
   code: string,
   env: Env,
@@ -40,12 +90,8 @@ export async function executeCode(
   timeoutMs: number = EXECUTION_TIMEOUT_MS,
 ): Promise<ExecuteResult> {
   const start = Date.now();
-
-  try {
-    // biome-ignore lint/suspicious/noExplicitAny: Dynamic Worker ctx.exports has no public type defs
-    const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
-
-    const wrappedCode = `
+  const submission = normalizeSubmission(code);
+  const head = `
       export default {
         async fetch(request, env) {
           const db = {
@@ -58,13 +104,46 @@ export async function executeCode(
               }
             }
           }
-          const __result = await (async () => { ${code} })()
-          return new Response(JSON.stringify(__result), {
-            headers: { "Content-Type": "application/json" },
+${CONSOLE_CAPTURE_SOURCE}
+          const __headers = { "Content-Type": "application/json" }
+          const __timeoutMark = Symbol("timeout")
+          let __timer
+          const __timeout = new Promise((resolve) => {
+            __timer = setTimeout(() => resolve(__timeoutMark), ${sandboxBudgetMs(timeoutMs)})
           })
+          try {
+            const __result = await Promise.race([(async () => { `;
+  const tail = ` })(), __timeout])
+            if (__result === __timeoutMark) {
+              return new Response(JSON.stringify({ timedOut: true, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
+            }
+            const __body = JSON.stringify({ hasValue: __result !== undefined, value: __result, logs: __logs, droppedLogs: __dropped })
+            return new Response(__body, { headers: __headers })
+          } catch (__error) {
+            const error = __error instanceof Error
+              ? { name: __error.name, message: __error.message }
+              : { name: "NonError", message: String(__error) }
+            return new Response(JSON.stringify({ error, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
+          } finally {
+            clearTimeout(__timer)
+          }
         }
       }
     `;
+  const wrappedCode = `${head}${submission.body}${tail}`;
+  const span: SubmissionSpan = {
+    module: wrappedCode,
+    moduleStart: head.length + submission.bodyStart,
+    code,
+    codeStart: submission.sourceStart,
+    length: submission.length,
+  };
+
+  try {
+    // SAFETY: Dynamic Worker `ctx.exports` has no public type definitions. `DbProxy` is
+    // exported from `src/index.ts`, so the runtime always provides it here.
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
 
     const worker = env.LOADER.load({
       compatibilityDate: "2026-04-01",
@@ -75,32 +154,24 @@ export async function executeCode(
       limits: SANDBOX_LIMITS,
     });
 
-    const execution = (async (): Promise<unknown> => {
+    const execution = (async (): Promise<RunOutcome> => {
       const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
-      const text = await response.text();
-      if (text.length > MAX_RESULT_CHARS) {
-        return `${text.slice(0, MAX_RESULT_CHARS)}\n… [result truncated at ${MAX_RESULT_CHARS} characters — narrow your query with LIMIT or aggregation]`;
-      }
-      return JSON.parse(text) as unknown;
+      return readReply(await response.text(), timeoutMs);
     })();
-    // If the timeout wins the race, the abandoned execution promise may still
-    // reject later; swallow that so it never becomes an unhandled rejection.
+    // The sandbox races the code against a slightly shorter budget, so this
+    // race is a backstop for code that never yields. If it wins, the abandoned
+    // execution promise may still reject later; swallow that so it never
+    // becomes an unhandled rejection.
     execution.catch(() => undefined);
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`Execution timed out after ${timeoutMs / 1000}s`)),
-        timeoutMs,
-      );
+      timeoutHandle = setTimeout(() => reject(new SandboxTimeoutError({ timeoutMs })), timeoutMs);
     });
 
     try {
-      const result = await Promise.race([execution, timeout]);
-      return {
-        result,
-        execution_time_ms: Date.now() - start,
-      };
+      const outcome = await Promise.race([execution, timeout]);
+      return { ...outcome, execution_time_ms: Date.now() - start };
     } finally {
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle);
@@ -108,20 +179,198 @@ export async function executeCode(
     }
   } catch (err) {
     return {
-      result: null,
-      error: sanitizeErrorMessage(err),
+      ...failure(err, [], positionInSubmission(err, span)),
       execution_time_ms: Date.now() - start,
     };
   }
 }
 
+/** Where the submitted text sits in the loaded module and in the submission. */
+interface SubmissionSpan {
+  readonly module: string;
+  readonly moduleStart: number;
+  readonly code: string;
+  readonly codeStart: number;
+  readonly length: number;
+}
+
+/** The location line of a module that failed to parse, such as `at agent.js:3:16`. */
+const START_FAILURE_LOCATION =
+  /^Failed to start Worker:\s*\n\s*Uncaught [^\n]*\n\s*at agent\.js:(\d+):(\d+)/;
+
+/** Line breaks other than `\n`, which the parser counts but this mapping does not. */
+const OTHER_LINE_BREAK = /[\r\u2028\u2029]/;
+
+/**
+ * Locate a parse failure in the submitted code. The loader reports a
+ * 1-based line and a 0-based column in the wrapped module, and the span
+ * maps that back to the submission. A module with other line breaks gets
+ * no position rather than a wrong one.
+ *
+ * @param cause - The thrown value.
+ * @param span - Where the submitted text sits.
+ * @returns `line L, column C` in the submission, or `undefined` when the
+ *   error carries no location or points outside the submitted text.
+ */
+function positionInSubmission(cause: unknown, span: SubmissionSpan): string | undefined {
+  if (!(cause instanceof Error)) return undefined;
+  const match = START_FAILURE_LOCATION.exec(cause.message);
+  if (match === null || OTHER_LINE_BREAK.test(span.module)) return undefined;
+  const offset = offsetAt(span.module, Number(match[1]), Number(match[2]));
+  if (offset === undefined) return undefined;
+  const relative = offset - span.moduleStart;
+  if (relative < 0 || relative >= span.length) return undefined;
+  const before = span.code.slice(0, span.codeStart + relative);
+  const line = before.split("\n").length;
+  const column = before.length - before.lastIndexOf("\n");
+  return `line ${line}, column ${column}`;
+}
+
+/**
+ * The character offset of a 1-based line and a 0-based column, as the
+ * loader reports them.
+ *
+ * @param text - The text the position refers to.
+ * @param line - 1-based line number.
+ * @param column - 0-based column number.
+ * @returns The offset, or `undefined` when the position is not in `text`.
+ */
+function offsetAt(text: string, line: number, column: number): number | undefined {
+  let lineStart = 0;
+  for (let current = 1; current < line; current++) {
+    const newline = text.indexOf("\n", lineStart);
+    if (newline === -1) return undefined;
+    lineStart = newline + 1;
+  }
+  const lineEnd = text.indexOf("\n", lineStart);
+  const lineLength = (lineEnd === -1 ? text.length : lineEnd) - lineStart;
+  return column < lineLength ? lineStart + column : undefined;
+}
+
+/**
+ * Decode the sandbox's reply envelope: the value or the error the code
+ * threw, and its console output.
+ *
+ * @param text - Response body from the sandbox.
+ * @param timeoutMs - The run's wall-clock budget, reported when the sandbox
+ *   stopped waiting on the code.
+ * @returns The run's outcome, with the result shortened to the cap.
+ */
+function readReply(text: string, timeoutMs: number): RunOutcome {
+  const reply = parseJson(text);
+  if (!isJsonObject(reply)) return failure(new SandboxReplyError(), []);
+  const lines = Array.isArray(reply["logs"]) ? reply["logs"].filter(Predicate.isString) : [];
+  const dropped = Predicate.isNumber(reply["droppedLogs"]) ? reply["droppedLogs"] : 0;
+  const logs = boundConsoleLines(lines, dropped);
+  if (reply["timedOut"] === true) return failure(new SandboxTimeoutError({ timeoutMs }), logs);
+  const thrown = reply["error"];
+  if (isJsonObject(thrown)) {
+    const message = Predicate.isString(thrown["message"]) ? thrown["message"] : "";
+    const name = Predicate.isString(thrown["name"]) ? thrown["name"] : "Error";
+    return failure(Object.assign(new Error(message), { name }), logs);
+  }
+  // A returned `undefined` or function has no JSON form, so `value` is absent.
+  const value = reply["value"];
+  if (reply["hasValue"] !== true || value === undefined) {
+    return failure(new NoReturnValueError(), logs);
+  }
+  return withLogs({ result: truncateResult(value, MAX_RESULT_CHARS) }, logs);
+}
+
+/**
+ * Parse a reply body.
+ *
+ * @param text - Response body from the sandbox.
+ * @returns The parsed JSON, or `null` when the body is not JSON.
+ */
+function parseJson(text: string): JsonValue {
+  try {
+    // SAFETY: JSON.parse returns only JSON values; the reply checks narrow it.
+    return JSON.parse(text) as JsonValue;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A failed run's outcome.
+ *
+ * @param cause - The thrown value.
+ * @param logs - Console lines written before the failure.
+ * @param position - Where in the submission a syntax error sits, when known.
+ * @returns The sanitised message, the error class and the lines.
+ */
+function failure(cause: unknown, logs: readonly string[], position?: string): RunOutcome {
+  const message = sanitizeErrorMessage(cause);
+  const error = position === undefined ? message : `${message} (${position})`;
+  return withLogs({ result: null, error, errorClass: errorClassOf(cause) }, logs);
+}
+
+function withLogs(outcome: RunOutcome, logs: readonly string[]): RunOutcome {
+  return logs.length > 0 ? { ...outcome, logs } : outcome;
+}
+
+/** The sandbox answered with something other than its reply envelope. */
+class SandboxReplyError extends Error {
+  override readonly name = "SandboxReplyError";
+
+  constructor() {
+    super("The sandbox returned an unreadable reply.");
+  }
+}
+
+/** Sandbox code finished without returning a value. */
+class NoReturnValueError extends Error {
+  override readonly name = "NoReturnValueError";
+
+  constructor() {
+    super(NO_RETURN_VALUE_MESSAGE);
+  }
+}
+
+/**
+ * The loader reports a module that fails to parse as a start-up failure,
+ * with the engine's own error on the next line, such as
+ * `Uncaught SyntaxError: Unexpected token ':'`.
+ */
+const WORKER_START_FAILURE = /^Failed to start Worker:\s*\n\s*Uncaught (([A-Z]\w*): [^\n]*)/;
+
+/** A message that starts with an error class name, as the RPC boundary writes it. */
+const CLASS_PREFIX = /^([A-Z]\w*Error): /;
+
+/** V8 parser messages, for a syntax error that reaches the parent as a plain `Error`. */
+const PARSER_MESSAGE =
+  /^(?:Unexpected (?:token|identifier|strict mode reserved word|reserved word|end of input)|Invalid or unexpected token|Missing initializer)/;
+
+/**
+ * Name the class of an execution failure for logs.
+ *
+ * @param cause - The thrown value.
+ * @returns The error's class name, `NonError` for a thrown non-`Error`.
+ */
+function errorClassOf(cause: unknown): string {
+  if (!(cause instanceof Error)) return "NonError";
+  const wrapped = WORKER_START_FAILURE.exec(cause.message)?.[2];
+  if (wrapped !== undefined) return wrapped;
+  const prefixed = CLASS_PREFIX.exec(cause.message)?.[1];
+  if (prefixed !== undefined) return prefixed;
+  return cause.name === "Error" && PARSER_MESSAGE.test(cause.message) ? "SyntaxError" : cause.name;
+}
+
 /**
  * Reduces an execution error to a single bounded line so callers get
  * actionable feedback (their own SQL/code errors) without stack frames,
- * file paths, or unbounded internal detail.
+ * file paths, or unbounded internal detail. A loader start-up failure is
+ * reduced to the engine error it wraps, without the wrapper's location.
+ *
+ * @param cause - The thrown value.
+ * @returns One line of at most 500 characters, plus an ellipsis when cut.
+ * @example
+ * sanitizeErrorMessage(new Error("boom\n  at x.ts:1:1")); // "boom"
  */
-export function sanitizeErrorMessage(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+export function sanitizeErrorMessage(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const message = WORKER_START_FAILURE.exec(raw)?.[1] ?? raw;
   const firstLine = message.split("\n")[0]?.trim() ?? "";
   if (firstLine === "") {
     return "execution failed";
