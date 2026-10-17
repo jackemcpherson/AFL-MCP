@@ -352,6 +352,10 @@ These differences carry little user-facing impact:
 
 - Disposal. The SDK disposes the Worker and its stub after each run, citing a
   `workerd` teardown assertion under `vitest-pool-workers`.
+  Status: not adopted in v5.0.0. The SDK disposes only when the handle has a
+  disposer. `@cloudflare/workers-types` declares none on `WorkerStub` or
+  `Fetcher`, and `workerd` 1.20260828.1 exposes none at runtime, so the call
+  would do nothing. Revisit when the runtime adds one.
 
 ### Pricing Note
 
