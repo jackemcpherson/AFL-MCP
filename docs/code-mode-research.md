@@ -334,8 +334,14 @@ These differences carry little user-facing impact:
 - Timeout placement. AFL-MCP races the call in the parent. On a timeout the
   parent returns, and the isolate may keep running until its `cpuMs` limit.
   The SDK races inside the sandbox instead.
+
+  Status: closed in v5.0.0. The sandbox races the code against a budget just
+  under the parent's and replies with the console lines written so far. The
+  parent race stays as a backstop for code that never yields.
+
 - Entry style. An RPC `evaluate()` method returns a structured value and
   avoids the extra JSON round trip through a `Response`.
+
 - Disposal. The SDK disposes the Worker and its stub after each run, citing a
   `workerd` teardown assertion under `vitest-pool-workers`.
 

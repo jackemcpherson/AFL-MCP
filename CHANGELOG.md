@@ -92,6 +92,9 @@ the repository to TypeScript standard v4.
   `info`, `warn`, `error` and `debug`, after a result or an error, in a
   separate `Console output:` text block. It keeps 100 lines and 10,000
   characters at most. The lines never reach the server logs.
+- A `code` call that times out returns the console lines written before
+  the timeout. The sandbox stops waiting on the code just inside the
+  30-second budget, and the Worker keeps its own timeout as a backstop.
 
 ### Fixed in 5.0.0
 

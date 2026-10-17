@@ -176,6 +176,15 @@ describe("executeCode console output", () => {
     expect(result.logs?.[2]).toBe("… [1 more console line not shown]");
   });
 
+  it("returns console lines when the sandbox reports a timeout", async () => {
+    const env = envWithReply({ timedOut: true, logs: ["waiting"] });
+    const result = await executeCode("return 1", env, stubCtx, 2_000);
+    expect(result.result).toBeNull();
+    expect(result.error).toBe("Execution timed out after 2s");
+    expect(result.errorClass).toBe("SandboxTimeoutError");
+    expect(result.logs).toEqual(["waiting"]);
+  });
+
   it("drops log entries that are not strings", async () => {
     const env = envWithReply({ hasValue: true, value: 1, logs: ["ok", 5, null] });
     const result = await executeCode("return 1", env, stubCtx);

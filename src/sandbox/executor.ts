@@ -54,6 +54,19 @@ const EXECUTION_TIMEOUT_MS = 30_000;
  */
 const MAX_RESULT_CHARS = 100_000;
 
+/**
+ * How far inside the parent's budget the sandbox stops waiting: a tenth of
+ * the budget, at most one second. The sandbox can then still reply with the
+ * console lines written so far, while the parent's own race stays a backstop
+ * for code that never yields, such as a busy loop.
+ *
+ * @param timeoutMs - The parent's wall-clock budget.
+ * @returns The sandbox's own budget in milliseconds.
+ */
+function sandboxBudgetMs(timeoutMs: number): number {
+  return Math.max(0, timeoutMs - Math.min(1_000, timeoutMs / 10));
+}
+
 /** Resource limits applied to the sandbox isolate itself. */
 const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
 
@@ -99,8 +112,16 @@ export async function executeCode(
           }
 ${CONSOLE_CAPTURE_SOURCE}
           const __headers = { "Content-Type": "application/json" }
+          const __timeoutMark = Symbol("timeout")
+          let __timer
+          const __timeout = new Promise((resolve) => {
+            __timer = setTimeout(() => resolve(__timeoutMark), ${sandboxBudgetMs(timeoutMs)})
+          })
           try {
-            const __result = await (async () => { ${normalizeCode(code)} })()
+            const __result = await Promise.race([(async () => { ${normalizeCode(code)} })(), __timeout])
+            if (__result === __timeoutMark) {
+              return new Response(JSON.stringify({ timedOut: true, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
+            }
             const __body = JSON.stringify({ hasValue: __result !== undefined, value: __result, logs: __logs, droppedLogs: __dropped })
             return new Response(__body, { headers: __headers })
           } catch (__error) {
@@ -108,6 +129,8 @@ ${CONSOLE_CAPTURE_SOURCE}
               ? { name: __error.name, message: __error.message }
               : { name: "NonError", message: String(__error) }
             return new Response(JSON.stringify({ error, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
+          } finally {
+            clearTimeout(__timer)
           }
         }
       }
@@ -124,10 +147,12 @@ ${CONSOLE_CAPTURE_SOURCE}
 
     const execution = (async (): Promise<RunOutcome> => {
       const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
-      return readReply(await response.text());
+      return readReply(await response.text(), timeoutMs);
     })();
-    // If the timeout wins the race, the abandoned execution promise may still
-    // reject later; swallow that so it never becomes an unhandled rejection.
+    // The sandbox races the code against a slightly shorter budget, so this
+    // race is a backstop for code that never yields. If it wins, the abandoned
+    // execution promise may still reject later; swallow that so it never
+    // becomes an unhandled rejection.
     execution.catch(() => undefined);
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -153,14 +178,17 @@ ${CONSOLE_CAPTURE_SOURCE}
  * threw, and its console output.
  *
  * @param text - Response body from the sandbox.
+ * @param timeoutMs - The run's wall-clock budget, reported when the sandbox
+ *   stopped waiting on the code.
  * @returns The run's outcome, with the result shortened to the cap.
  */
-function readReply(text: string): RunOutcome {
+function readReply(text: string, timeoutMs: number): RunOutcome {
   const reply = parseJson(text);
   if (!isJsonObject(reply)) return failure(new SandboxReplyError(), []);
   const lines = Array.isArray(reply["logs"]) ? reply["logs"].filter(Predicate.isString) : [];
   const dropped = Predicate.isNumber(reply["droppedLogs"]) ? reply["droppedLogs"] : 0;
   const logs = boundConsoleLines(lines, dropped);
+  if (reply["timedOut"] === true) return failure(new SandboxTimeoutError({ timeoutMs }), logs);
   const thrown = reply["error"];
   if (isJsonObject(thrown)) {
     const message = Predicate.isString(thrown["message"]) ? thrown["message"] : "";
