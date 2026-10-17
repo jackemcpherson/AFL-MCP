@@ -12,7 +12,7 @@ import type { Env } from "../../src/types";
 const stubCtx = testCtx();
 
 const ADMIN_TOKEN = "test-admin-token";
-const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };
+const authedEnv: Env = { ...env, ADMIN_TOKEN };
 
 function makeRequest(token: string | null = ADMIN_TOKEN): Request {
   const headers: Record<string, string> = {};
@@ -40,7 +40,7 @@ describe("POST /mcp/admin/sync — authentication", () => {
 describe("POST /mcp/admin/sync — response shape", () => {
   afterEach(async () => {
     // Reset the sync lease so other tests start with a clean slate.
-    await (env as Env).DB.prepare(
+    await env.DB.prepare(
       "UPDATE sync_lease SET holder = NULL, acquired_at = NULL WHERE id = 1",
     ).run();
   });
@@ -50,7 +50,7 @@ describe("POST /mcp/admin/sync — response shape", () => {
     // any outbound network requests. Migration 0012 inserts the row with
     // holder=NULL; this UPDATE holds it so acquireSyncLease() inside
     // sync() sees changes=0 and returns [] immediately.
-    await (env as Env).DB.prepare(
+    await env.DB.prepare(
       "UPDATE sync_lease SET holder = 'test', acquired_at = datetime('now') WHERE id = 1",
     ).run();
 
@@ -76,7 +76,7 @@ describe("POST /mcp/admin/sync request validation", () => {
       const response = await worker.fetch(request, authedEnv, stubCtx);
       expect(response.status).toBe(400);
       expect(
-        await (env as Env).DB.prepare("SELECT holder FROM sync_lease WHERE id = 1").first("holder"),
+        await env.DB.prepare("SELECT holder FROM sync_lease WHERE id = 1").first("holder"),
       ).toBeNull();
     },
   );

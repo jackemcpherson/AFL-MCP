@@ -1,4 +1,9 @@
+import { Schema } from "effect";
+import { batchRow } from "../lib/decode";
 import type { Env } from "../types";
+
+/** The public input revision marker. */
+const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Schema.Number });
 
 /**
  * Inspect one competition-season per hourly pass without changing public inputs.
@@ -23,7 +28,7 @@ export async function auditNextSeason(env: Env, now = new Date()): Promise<void>
     code: string;
   }>();
   if (!season) return;
-  const [marker, findings] = await env.DB.batch([
+  const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, in_progress FROM public_input_revision WHERE id=1"),
     env.DB.prepare(`SELECT 'completed-without-statistics' AS issue, CAST(m.id AS TEXT) AS record_id
       FROM matches m WHERE m.season_id=?1 AND m.status='Complete'
@@ -43,13 +48,13 @@ export async function auditNextSeason(env: Env, now = new Date()): Promise<void>
       FROM player_season_pav p WHERE p.season_id=?1 AND p.total_pav IS NULL
       LIMIT 101`).bind(season.id),
   ]);
-  const start = marker?.results[0] as { revision: number; in_progress: number } | undefined;
+  const start = batchRow(results, 0, MarkerRowSchema);
   const end = await env.DB.prepare(
     "SELECT revision, in_progress FROM public_input_revision WHERE id=1",
   ).first<{ revision: number; in_progress: number }>();
   if (!start || !end || start.in_progress || end.in_progress || start.revision !== end.revision)
     return;
-  const rows = findings?.results ?? [];
+  const rows = results[1]?.results ?? [];
   const report = {
     competition: season.code,
     season: season.season_key,

@@ -1,7 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { getSchemaInfo } from "../../src/mcp/tools/schema";
-import type { Env } from "../../src/types";
 
 /**
  * DOC-01: the `schema` tool's prose is maintained by hand and previously
@@ -38,7 +37,7 @@ describe("schema tool vs live D1 schema", () => {
   it("documents every analytics table and column", async () => {
     const doc = JSON.stringify(await getSchemaInfo());
 
-    const tables = await (env as Env).DB.prepare(
+    const tables = await env.DB.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'",
     ).all<{ name: string }>();
 
@@ -49,7 +48,7 @@ describe("schema tool vs live D1 schema", () => {
 
     for (const table of analyticsTables) {
       expect(doc, `schema tool is missing table ${table}`).toContain(table);
-      const columns = await (env as Env).DB.prepare(`PRAGMA table_info(${table})`).all<{
+      const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
       }>();
       for (const column of columns.results) {
@@ -61,14 +60,14 @@ describe("schema tool vs live D1 schema", () => {
   it("covers every live analytics table with a default and only real columns as exceptions", async () => {
     const schema = await getSchemaInfo();
     const contract = schema.database.coverage_contract.by_competition;
-    const tables = await (env as Env).DB.prepare(
+    const tables = await env.DB.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\'",
     ).all<{ name: string }>();
 
     for (const table of tables.results
       .map((row) => row.name)
       .filter((name) => !INTERNAL_TABLES.has(name))) {
-      const columns = await (env as Env).DB.prepare(`PRAGMA table_info(${table})`).all<{
+      const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
       }>();
       const liveColumns = new Set(columns.results.map((c) => c.name));

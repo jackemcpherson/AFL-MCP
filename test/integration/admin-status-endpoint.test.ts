@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +9,7 @@ import worker from "../../src/index";
 import type { Env } from "../../src/types";
 
 const ADMIN_TOKEN = "status-admin-token";
-const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };
+const authedEnv: Env = { ...env, ADMIN_TOKEN };
 const stubCtx = createExecutionContext();
 
 function request(token: string | null = ADMIN_TOKEN): Request {
@@ -176,6 +177,7 @@ describe("GET /mcp/admin/status", () => {
 
   it("uses exactly fourteen fixed statements", async () => {
     let statementCount = 0;
+    // SAFETY: getAdminStatus calls only `prepare` and `batch` on its binding.
     const countingDb = {
       prepare: authedEnv.DB.prepare.bind(authedEnv.DB),
       batch: async (statements: D1PreparedStatement[]) => {
@@ -198,7 +200,7 @@ describe("GET /mcp/admin/status", () => {
           };
         }
         const value = Reflect.get(target, property);
-        return typeof value === "function" ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
     const response = await worker.fetch(request(), { ...authedEnv, DB: failingDb }, stubCtx);

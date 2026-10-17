@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Unrecognized key: \"table\""
+          "text": "Expected no excess property at \"table\""
         }
       ],
       "isError": true

@@ -1,6 +1,6 @@
 import type { MatchCoachAssignment, MatchCoachFailure } from "fitzroy";
 import { fetchMatchCoaches } from "fitzroy";
-import { z } from "zod";
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -8,6 +8,7 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { runFitzroy } from "../lib/fitzroy";
+import { IsoDateSchema, NonEmptyStringSchema, UrlStringSchema } from "../lib/schemas";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
@@ -15,21 +16,26 @@ import type { Env } from "../types";
 
 type CoachProvider = "afl-tables" | "footywire";
 
-interface MatchCandidate {
-  readonly id: number;
-  readonly season_id: number;
-  readonly external_afltables_id: string | null;
-  readonly competition_id: number;
-  readonly date: string;
-  readonly home_team_id: number;
-  readonly away_team_id: number;
-  readonly home_name: string;
-  readonly away_name: string;
-  readonly home_competition_id: number;
-  readonly away_competition_id: number;
-  readonly home_points: number | null;
-  readonly away_points: number | null;
-}
+/** One row of {@link MATCH_PROJECTION}. */
+const MatchCandidateSchema = Schema.Struct({
+  id: Schema.Number,
+  season_id: Schema.Number,
+  external_afltables_id: Schema.NullOr(Schema.String),
+  competition_id: Schema.Number,
+  date: Schema.String,
+  home_team_id: Schema.Number,
+  away_team_id: Schema.Number,
+  home_name: Schema.String,
+  away_name: Schema.String,
+  home_competition_id: Schema.Number,
+  away_competition_id: Schema.Number,
+  home_points: Schema.NullOr(Schema.Number),
+  away_points: Schema.NullOr(Schema.Number),
+});
+
+type MatchCandidate = typeof MatchCandidateSchema.Type;
+
+const decodeMatchCandidates = Schema.decodeUnknownSync(Schema.Array(MatchCandidateSchema));
 
 export interface CoachingImportSummary {
   readonly season: number;
@@ -107,7 +113,7 @@ export async function ingestMatchCoachResult(
   ]);
   if (!matches || !crosswalks || !identities || !currentAssignments)
     throw new Error("Coaching reconciliation inputs are unavailable");
-  const seasonMatches = matches.results as unknown as MatchCandidate[];
+  const seasonMatches = decodeMatchCandidates(matches.results);
   const matchCrosswalk = new Map(
     crosswalks.results.map((row) => [String(row["external_match_id"]), Number(row["match_id"])]),
   );
@@ -528,9 +534,7 @@ async function runCoachBatch(
     if (!dryRun) await recordSourceFailure(env, season, source, now);
     throw new CoachingSourceError("coaching source fetch failed");
   }
-  const previous = progress?.cursor
-    ? CoachAssignmentsSchema.parse(JSON.parse(progress.assignments_json))
-    : [];
+  const previous = progress?.cursor ? decodeStoredCoachAssignments(progress.assignments_json) : [];
   const completed = new Set([
     ...(fetched.data.batch?.completedCoachIds ?? []),
     ...fetched.data.assignments.map((row) => row.coachId),
@@ -588,25 +592,34 @@ async function runCoachBatch(
   return summary;
 }
 
-const CoachAssignmentsSchema = z.array(
-  z.object({
-    competition: z.literal("AFLM"),
-    season: z.number().int().min(1990),
-    team: z.string().min(1),
-    coachId: z.string().min(1),
-    coachName: z.string().min(1),
-    coachUrl: z.url(),
-    matchId: z.string().min(1),
-    matchUrl: z.url(),
-    date: z.iso.date().nullable(),
-    homeTeam: z.string().min(1).nullable(),
-    awayTeam: z.string().min(1).nullable(),
-    homePoints: z.number().int().nonnegative().nullable(),
-    awayPoints: z.number().int().nonnegative().nullable(),
-    roundName: z.string().nullable(),
-    source: z.enum(["afl-tables", "footywire"]),
-  }),
+const NullableNonNegativeIntSchema = Schema.NullOr(
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 );
+
+/** Assignments saved in `coach_backfill_progress.assignments_json` by an earlier batch. */
+const StoredCoachAssignmentsSchema = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      competition: Schema.Literal("AFLM"),
+      season: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1990)),
+      team: NonEmptyStringSchema,
+      coachId: NonEmptyStringSchema,
+      coachName: NonEmptyStringSchema,
+      coachUrl: UrlStringSchema,
+      matchId: NonEmptyStringSchema,
+      matchUrl: UrlStringSchema,
+      date: Schema.NullOr(IsoDateSchema),
+      homeTeam: Schema.NullOr(NonEmptyStringSchema),
+      awayTeam: Schema.NullOr(NonEmptyStringSchema),
+      homePoints: NullableNonNegativeIntSchema,
+      awayPoints: NullableNonNegativeIntSchema,
+      roundName: Schema.NullOr(Schema.String),
+      source: Schema.Literals(["afl-tables", "footywire"]),
+    }),
+  ),
+);
+
+const decodeStoredCoachAssignments = Schema.decodeUnknownSync(StoredCoachAssignmentsSchema);
 
 const MATCH_PROJECTION = `SELECT m.id, m.season_id, m.external_afltables_id, s.competition_id, m.date, m.home_team_id, m.away_team_id,
   h.name AS home_name, a.name AS away_name,

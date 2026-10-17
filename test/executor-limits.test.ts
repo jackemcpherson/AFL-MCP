@@ -27,9 +27,9 @@ describe("executeCode limits", () => {
     const env = envWithLoaderFetch(async () => new Response(oversized));
     const result = await executeCode("return big", env, stubCtx);
     expect(result.error).toBeUndefined();
-    expect(typeof result.result).toBe("string");
-    expect(result.result as string).toMatch(/truncated/);
-    expect((result.result as string).length).toBeLessThan(1_100_000);
+    expect(result.result).toBeTypeOf("string");
+    expect(String(result.result)).toMatch(/truncated/);
+    expect(String(result.result).length).toBeLessThan(1_100_000);
   });
 
   it("returns parsed JSON results under the cap untouched", async () => {

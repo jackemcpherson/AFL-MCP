@@ -1,3 +1,4 @@
+import { Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { memoryCache, scriptedD1, testEnv } from "#test/fixtures";
 import {
@@ -8,7 +9,8 @@ import {
   observeCoverage,
 } from "../src/mcp/tools/coverage";
 import { getSchemaInfo } from "../src/mcp/tools/schema";
-import { SCHEMA_TOOL_CONTRACT, SchemaToolRequestSchema } from "../src/mcp/validation";
+import { describeIssue } from "../src/lib/decode";
+import { decodeSchemaToolRequest, SCHEMA_TOOL_CONTRACT } from "../src/mcp/validation";
 
 function observationEnv() {
   const rows = [
@@ -40,6 +42,7 @@ describe("coverage contract", () => {
         if (contract?.notes) expect(contract.notes.length).toBeGreaterThan(0);
         for (const [column, exception] of Object.entries(contract?.columns ?? {})) {
           // Every exception names a real declared column...
+          // SAFETY: widens the literal column tuple so any string can be looked up.
           expect(columns as readonly string[]).toContain(column);
           // ...and genuinely deviates from the table default.
           expect(
@@ -145,14 +148,16 @@ describe("coverage contract", () => {
   });
 
   it("validates observed bounds before database access", () => {
-    expect(SchemaToolRequestSchema.safeParse({}).success).toBe(true);
-    expect(SchemaToolRequestSchema.safeParse({ competition: "AFLM" }).success).toBe(true);
+    expect(Result.isSuccess(decodeSchemaToolRequest({}))).toBe(true);
+    expect(Result.isSuccess(decodeSchemaToolRequest({ competition: "AFLM" }))).toBe(true);
     expect(
-      SchemaToolRequestSchema.safeParse({
-        includeObserved: true,
-        competition: "AFLM",
-        season: 2026,
-      }).success,
+      Result.isSuccess(
+        decodeSchemaToolRequest({
+          includeObserved: true,
+          competition: "AFLM",
+          season: 2026,
+        }),
+      ),
     ).toBe(true);
     for (const invalid of [
       { includeObserved: true },
@@ -162,7 +167,7 @@ describe("coverage contract", () => {
       { includeObserved: false, competition: "AFLM", season: 2026 },
       { unknown: true },
     ])
-      expect(SchemaToolRequestSchema.safeParse(invalid).success).toBe(false);
+      expect(Result.isFailure(decodeSchemaToolRequest(invalid))).toBe(true);
   });
 
   it("returns the full parameter contract as the single message for every invalid combination", () => {
@@ -174,11 +179,11 @@ describe("coverage contract", () => {
       { includeObserved: true, competition: "AFLM" },
       { includeObserved: true, season: 2026 },
     ]) {
-      const result = SchemaToolRequestSchema.safeParse(invalid);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe(SCHEMA_TOOL_CONTRACT);
-      }
+      const message = Result.match(decodeSchemaToolRequest(invalid), {
+        onSuccess: () => "decoded",
+        onFailure: describeIssue,
+      });
+      expect(message).toBe(SCHEMA_TOOL_CONTRACT);
     }
   });
 

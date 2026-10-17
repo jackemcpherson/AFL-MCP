@@ -1,13 +1,20 @@
+import { Option, Predicate, Result } from "effect";
 import pkg from "../../package.json";
+import { COMPETITION_CODES } from "../lib/competitions";
+import { describeIssue } from "../lib/decode";
 import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
 import {
+  decodeCodeToolRequest,
+  decodeCompetitionHint,
+  decodeJsonRpcId,
+  decodeJsonRpcRequest,
+  decodeSchemaToolRequest,
+  decodeToolCallParams,
   type JsonRpcRequest,
-  JsonRpcRequestSchema,
   type SchemaToolRequest,
-  SchemaToolRequestSchema,
 } from "./validation";
 
 /**
@@ -31,8 +38,6 @@ const SERVER_INFO = {
   name: "afl-mcp",
   version: pkg.version,
 };
-
-const COMPETITION_CODES = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
 const PROTOCOL_VERSION = "2025-03-26";
 
@@ -112,7 +117,7 @@ function mcpContent(data: unknown) {
     content: [
       {
         type: "text",
-        text: typeof data === "string" ? data : JSON.stringify(data, null, 2),
+        text: Predicate.isString(data) ? data : JSON.stringify(data, null, 2),
       },
     ],
   };
@@ -127,17 +132,16 @@ function mcpError(message: string) {
 
 async function handleToolCall(
   name: string,
-  args: Record<string, unknown>,
+  args: unknown,
   env: Env,
   ctx: ExecutionContext,
   deps: McpDeps,
 ) {
   switch (name) {
     case "schema": {
-      const parsed = SchemaToolRequestSchema.safeParse(args);
-      if (!parsed.success)
-        return mcpError(parsed.error.issues[0]?.message ?? "invalid schema arguments");
-      return mcpContent(await deps.getSchemaInfo(parsed.data, env));
+      const parsed = decodeSchemaToolRequest(args);
+      if (Result.isFailure(parsed)) return mcpError(describeIssue(parsed.failure));
+      return mcpContent(await deps.getSchemaInfo(parsed.success, env));
     }
 
     case "code": {
@@ -146,16 +150,13 @@ async function handleToolCall(
           "The code tool is temporarily disabled by the operator. The schema endpoint remains available.",
         );
       }
-      const code = args["code"];
-      if (typeof code !== "string" || code.trim() === "") {
+      const parsed = decodeCodeToolRequest(args);
+      if (Result.isFailure(parsed)) {
         return mcpError("code parameter is required and must be a non-empty string");
       }
-      const rawCompetition = args["competition"];
-      const competition =
-        typeof rawCompetition === "string" &&
-        (COMPETITION_CODES as readonly string[]).includes(rawCompetition)
-          ? rawCompetition
-          : null;
+      const { code } = parsed.success;
+      // An unrecognised competition hint is logged as null, not rejected.
+      const competition = Option.getOrNull(decodeCompetitionHint(parsed.success.competition));
       console.log(JSON.stringify({ event: "tool:code", competition }));
       const result = await deps.executeCode(code, env, ctx);
       if (result.error) {
@@ -189,11 +190,12 @@ async function handleJsonRpc(
       return jsonRpcResponse(id, { tools: TOOLS });
 
     case "tools/call": {
-      const name = params?.["name"] as string;
-      const args = (params?.["arguments"] ?? {}) as Record<string, unknown>;
-      if (!name) {
+      const call = decodeToolCallParams(params ?? {});
+      if (Result.isFailure(call)) {
         return jsonRpcError(id, -32602, "Missing tool name");
       }
+      const { name } = call.success;
+      const args = call.success.arguments ?? {};
       const result = await handleToolCall(name, args, env, ctx, deps);
       return jsonRpcResponse(id, result);
     }
@@ -219,16 +221,17 @@ function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
   const header = (name: string) =>
     request.headers.get(name)?.slice(0, MAX_LOGGED_HEADER_LENGTH) ?? null;
   const requested = rpcRequest.params?.["protocolVersion"];
+  const initializeProtocolVersion =
+    rpcRequest.method === "initialize" && Predicate.isString(requested)
+      ? requested.slice(0, MAX_LOGGED_HEADER_LENGTH)
+      : null;
   console.log(
     JSON.stringify({
       event: "mcp:client",
       method: rpcRequest.method,
       origin: header("origin"),
       protocolVersionHeader: header("mcp-protocol-version"),
-      initializeProtocolVersion:
-        rpcRequest.method === "initialize" && typeof requested === "string"
-          ? requested.slice(0, MAX_LOGGED_HEADER_LENGTH)
-          : null,
+      initializeProtocolVersion,
     }),
   );
 }
@@ -286,31 +289,32 @@ export async function handleMcpRequest(
     return Response.json(jsonRpcError(0, -32700, "Parse error: invalid JSON"), { status: 400 });
   }
 
-  const rpcRequest = JsonRpcRequestSchema.safeParse(body);
-  if (!rpcRequest.success) {
-    const fallbackId =
-      typeof body === "object" && body !== null && "id" in body
-        ? (body as { id?: string | number }).id
-        : undefined;
-    return Response.json(jsonRpcError(fallbackId ?? 0, -32600, "Invalid JSON-RPC 2.0 request"), {
+  const decoded = decodeJsonRpcRequest(body);
+  if (Result.isFailure(decoded)) {
+    const fallbackId = Result.match(decodeJsonRpcId(body), {
+      onSuccess: (envelope) => envelope.id,
+      onFailure: () => 0,
+    });
+    return Response.json(jsonRpcError(fallbackId, -32600, "Invalid JSON-RPC 2.0 request"), {
       status: 400,
     });
   }
+  const rpcRequest = decoded.success;
 
-  logClientHeaders(request, rpcRequest.data);
+  logClientHeaders(request, rpcRequest);
 
   // JSON-RPC notifications (method "notifications/*") take no response.
   // Per the MCP streamable-HTTP transport, acknowledge with 202 and no body.
-  if (rpcRequest.data.method.startsWith("notifications/")) {
+  if (rpcRequest.method.startsWith("notifications/")) {
     return new Response(null, { status: 202 });
   }
 
   let response: JsonRpcResponse;
   try {
-    response = await handleJsonRpc(rpcRequest.data, env, ctx, deps);
+    response = await handleJsonRpc(rpcRequest, env, ctx, deps);
   } catch (err) {
     console.error("mcp handler error:", err);
-    response = jsonRpcError(rpcRequest.data.id, -32603, "Internal error");
+    response = jsonRpcError(rpcRequest.id, -32603, "Internal error");
   }
 
   return Response.json(response, {

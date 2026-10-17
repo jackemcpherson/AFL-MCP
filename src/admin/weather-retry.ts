@@ -1,20 +1,31 @@
-import { z } from "zod";
+import { Schema } from "effect";
 import { resolveStoredSeason } from "../db/seasons";
+import { CompetitionCodeSchema } from "../lib/competitions";
+import { strictDecoder } from "../lib/decode";
+import {
+  booleanDefault,
+  PositiveIntSchema,
+  SeasonSelectorSchema,
+  Sha256HexSchema,
+} from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** Targeted retry of an unavailable observation after reviewing its stored diagnostic. */
-export const WeatherRetryRequestSchema = z.strictObject({
-  competition: z.enum(["AFLM", "AFLW", "VFL", "VFLW"]),
-  season: z.union([z.number().int(), z.string()]),
-  matchId: z.number().int().positive(),
-  dryRun: z.boolean().default(true),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
+export const WeatherRetryRequestSchema = Schema.Struct({
+  competition: CompetitionCodeSchema,
+  season: SeasonSelectorSchema,
+  matchId: PositiveIntSchema,
+  dryRun: booleanDefault(true),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
 });
+
+/** A validated weather retry request. */
+export type WeatherRetryRequest = typeof WeatherRetryRequestSchema.Type;
+
+/** Decode a weather retry body, rejecting unknown keys. */
+export const decodeWeatherRetryRequest = strictDecoder(WeatherRetryRequestSchema);
 
 /**
  * Preview and queue one match's weather retry without fetching unrelated matches.
@@ -24,8 +35,8 @@ export const WeatherRetryRequestSchema = z.strictObject({
 
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await retryWeather(env, WeatherRetryRequestSchema.parse(request)); */
-export async function retryWeather(env: Env, request: z.infer<typeof WeatherRetryRequestSchema>) {
+ * await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(body))); */
+export async function retryWeather(env: Env, request: WeatherRetryRequest) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   try {

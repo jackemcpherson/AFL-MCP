@@ -1,7 +1,8 @@
+import { Result } from "effect";
 import { env } from "cloudflare:test";
 import { expect, it } from "vitest";
 import {
-  IdentityRepairRequestSchema,
+  decodeIdentityRepairRequest,
   repairPlayerIdentity,
 } from "../../src/admin/player-identities";
 import {
@@ -13,27 +14,29 @@ import {
 } from "../../src/sync/upserts";
 import { makeMatch } from "./_fixtures";
 
-const request = IdentityRepairRequestSchema.parse({
-  playerIds: [10974, 712],
-  providerIdentities: [
-    {
-      provider: "fryzigg",
-      providerId: "12527",
-      evidence: {
-        url: "https://example.org/captured-provider",
-        sha256: "b".repeat(64),
-        explanation: "Captured legacy provider ID evidence for this verified person",
+const request = Result.getOrThrow(
+  decodeIdentityRepairRequest({
+    playerIds: [10974, 712],
+    providerIdentities: [
+      {
+        provider: "fryzigg",
+        providerId: "12527",
+        evidence: {
+          url: "https://example.org/captured-provider",
+          sha256: "b".repeat(64),
+          explanation: "Captured legacy provider ID evidence for this verified person",
+        },
       },
-    },
-  ],
-  evidence: [
-    {
-      url: "https://www.afl.com.au/players/verified-fixture",
-      sha256: "a".repeat(64),
-      explanation: "Captured provider identity evidence for this test group",
-    },
-  ],
-});
+    ],
+    evidence: [
+      {
+        url: "https://www.afl.com.au/players/verified-fixture",
+        sha256: "a".repeat(64),
+        explanation: "Captured provider identity evidence for this test group",
+      },
+    ],
+  }),
+);
 async function seed() {
   const competition = await ensureCompetition(env, "AFLM");
   const season = await ensureSeason(env, competition, 2026);
@@ -211,13 +214,17 @@ it.each([712, 10974])(
         "INSERT INTO player_match_stats(match_id,player_id,team_id,kicks) SELECT id,?2,home_team_id,11 FROM matches WHERE season_id=?1",
       ).bind(oldSeason, historicalId),
     ]);
-    const scoped = IdentityRepairRequestSchema.parse({
-      ...request,
-      kind: "reassign-appearances",
-      canonicalId,
-      matchIds: [selected],
-      providerIdentities: [{ provider: "afl-api", providerId: "B", evidence: request.evidence[0] }],
-    });
+    const scoped = Result.getOrThrow(
+      decodeIdentityRepairRequest({
+        ...request,
+        kind: "reassign-appearances",
+        canonicalId,
+        matchIds: [selected],
+        providerIdentities: [
+          { provider: "afl-api", providerId: "B", evidence: request.evidence[0] },
+        ],
+      }),
+    );
     const preview = await repairPlayerIdentity(env, scoped);
     if (!("manifestDigest" in preview) || !preview.manifestDigest)
       throw new Error("Missing preview");
@@ -310,20 +317,22 @@ it("splits a verified new person atomically without changing the source person's
   if (!selected) throw new Error("Missing fixture");
   const evidence = request.evidence[0];
   if (!evidence) throw new Error("Missing evidence");
-  const split = IdentityRepairRequestSchema.parse({
-    ...request,
-    kind: "reassign-appearances",
-    playerIds: [10974, 12000],
-    canonicalId: 12000,
-    matchIds: [selected],
-    providerIdentities: [{ provider: "afl-api", providerId: "B", evidence }],
-    newPerson: {
-      firstName: "Verified",
-      surname: "Separate person",
-      dateOfBirth: "2001-05-20",
-      evidence,
-    },
-  });
+  const split = Result.getOrThrow(
+    decodeIdentityRepairRequest({
+      ...request,
+      kind: "reassign-appearances",
+      playerIds: [10974, 12000],
+      canonicalId: 12000,
+      matchIds: [selected],
+      providerIdentities: [{ provider: "afl-api", providerId: "B", evidence }],
+      newPerson: {
+        firstName: "Verified",
+        surname: "Separate person",
+        dateOfBirth: "2001-05-20",
+        evidence,
+      },
+    }),
+  );
   const preview = await repairPlayerIdentity(env, split);
   if (!("manifestDigest" in preview) || !preview.manifestDigest) throw new Error("Missing preview");
   expect(await env.DB.prepare("SELECT id FROM players WHERE id=12000").first("id")).toBeNull();

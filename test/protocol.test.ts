@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import pkg from "../package.json";
 
@@ -186,6 +187,7 @@ describe("handleMcpRequest", () => {
     const json = await parseJson(res);
     const toolNames = json.result?.tools?.map((t) => t.name);
     expect(toolNames).toEqual(["schema", "code"]);
+    // SAFETY: tools/list returns the TOOLS definitions, which all carry an inputSchema.
     const schemaTool = json.result?.tools?.find((tool) => tool.name === "schema") as
       | { inputSchema?: { properties?: Record<string, unknown> } }
       | undefined;
@@ -428,10 +430,10 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
+          (c) => Predicate.isString(c[0]) && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
-        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+        expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: "AFLW",
         });
@@ -456,10 +458,10 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
+          (c) => Predicate.isString(c[0]) && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
-        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+        expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: null,
         });
@@ -487,10 +489,10 @@ describe("handleMcpRequest", () => {
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
         const telemetryCall = logSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && c[0].includes("tool:code"),
+          (c) => Predicate.isString(c[0]) && c[0].includes("tool:code"),
         );
         expect(telemetryCall).toBeDefined();
-        expect(JSON.parse(telemetryCall?.[0] as string)).toEqual({
+        expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
           event: "tool:code",
           competition: null,
         });

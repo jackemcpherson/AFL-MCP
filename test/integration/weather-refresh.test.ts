@@ -1,6 +1,7 @@
+import { Result } from "effect";
 import { env } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
-import { refreshWeather, WeatherRefreshRequestSchema } from "../../src/admin/weather-refresh";
+import { refreshWeather, decodeWeatherRefreshRequest } from "../../src/admin/weather-refresh";
 
 const evidence = [
   {
@@ -51,12 +52,14 @@ function stubWeather() {
   return fetcher;
 }
 async function preview() {
-  const request = WeatherRefreshRequestSchema.parse({
-    competition: "AFLM",
-    season: 2026,
-    matchId: 804,
-    evidence,
-  });
+  const request = Result.getOrThrow(
+    decodeWeatherRefreshRequest({
+      competition: "AFLM",
+      season: 2026,
+      matchId: 804,
+      evidence,
+    }),
+  );
   const result = await refreshWeather(env, request);
   if (!("manifestDigest" in result) || !result.manifestDigest) throw new Error("Missing preview");
   return { ...request, dryRun: false, manifestDigest: result.manifestDigest };

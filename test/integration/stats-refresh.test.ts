@@ -141,6 +141,7 @@ it("recovers the captured 2026 Grand Final's 46 enriched appearances", async () 
   const now = new Date("2026-09-27T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
   let enriched = false;
+  // SAFETY: the grand final fixture is captured fitzroy `PlayerStats` output.
   const fetchStats: typeof fetchPlayerStats = () =>
     Effect.succeed({
       stats: (grandFinal as PlayerStats[]).map((row) =>

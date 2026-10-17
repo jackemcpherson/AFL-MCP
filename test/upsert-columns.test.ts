@@ -24,7 +24,8 @@ function stubRow<Row>(): Row {
       return new Proxy({}, handler);
     },
   };
-  return new Proxy({}, handler) as unknown as Row;
+  // `Object.create(null)` is `any`, so the stub needs no assertion to type as Row.
+  return new Proxy<Row & object>(Object.create(null), handler);
 }
 
 /**

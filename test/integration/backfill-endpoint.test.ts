@@ -12,13 +12,11 @@ import type { Env } from "../../src/types";
 const stubCtx = testCtx();
 
 const ADMIN_TOKEN = "test-admin-token";
-const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };
+const authedEnv: Env = { ...env, ADMIN_TOKEN };
 
 function makeRequest(body: unknown, token: string | null = ADMIN_TOKEN): Request {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token !== null) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token !== null) headers.set("Authorization", `Bearer ${token}`);
   return new Request("https://afl.test/mcp/admin/backfill", {
     method: "POST",
     headers,

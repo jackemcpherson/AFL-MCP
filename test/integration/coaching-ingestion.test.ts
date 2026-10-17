@@ -12,10 +12,9 @@ import {
   ensureVenues,
   upsertMatches,
 } from "../../src/sync/upserts";
-import type { Env } from "../../src/types";
 import { makeMatch } from "./_fixtures";
 
-const dbEnv = env as Env;
+const dbEnv = env;
 const date = "2024-03-16";
 
 function assignment(overrides: Partial<MatchCoachAssignment> = {}): MatchCoachAssignment {

@@ -7,7 +7,6 @@ vi.mock("cloudflare:workers", () => ({
 
 import { testCtx } from "#test/fixtures";
 import worker from "../../src/index";
-import type { Env } from "../../src/types";
 
 const stubCtx = testCtx();
 
@@ -20,7 +19,7 @@ async function seedSyncLog(
   error: string | null,
   type = "sync:AFLM",
 ): Promise<void> {
-  await (env as Env).DB.prepare(
+  await env.DB.prepare(
     "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, ?, 0, ?)",
   )
     .bind(timestamp, type, error)
@@ -93,7 +92,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     await seedSyncLog(new Date().toISOString(), "D1 import in progress", "sync:AFLW");
     await seedSyncLog(new Date().toISOString(), null, "sync:AFLW");
     expect((await getHealth()).status).toBe(200);
-    const failure = await (env as Env).DB.prepare(
+    const failure = await env.DB.prepare(
       "SELECT error FROM sync_log WHERE error IS NOT NULL",
     ).first<{ error: string }>();
     expect(failure?.error).toBe("D1 import in progress");

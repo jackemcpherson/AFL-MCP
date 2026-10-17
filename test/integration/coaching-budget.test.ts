@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { env } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vitest";
 import { requestUrl, testCtx } from "#test/fixtures";
@@ -14,7 +15,7 @@ function budgetDatabase(db: D1Database, limit: number) {
       get(target, key) {
         if (key === "bind") return (...values: unknown[]) => wrap(target.bind(...values));
         const method = Reflect.get(target, key);
-        if (typeof method !== "function") return method;
+        if (!Predicate.isFunction(method)) return method;
         return (...args: unknown[]) => {
           charge();
           return Reflect.apply(method, target, args);
@@ -27,7 +28,7 @@ function budgetDatabase(db: D1Database, limit: number) {
       get(target, key) {
         if (key === "prepare") return (sql: string) => wrap(target.prepare(sql));
         const method = Reflect.get(target, key);
-        if (typeof method !== "function") return method;
+        if (!Predicate.isFunction(method)) return method;
         return (...args: unknown[]) => {
           charge();
           return Reflect.apply(method, target, args);

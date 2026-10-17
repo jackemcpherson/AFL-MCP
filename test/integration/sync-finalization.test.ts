@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { env } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { sync } from "../../src/sync/sync";
@@ -21,13 +22,13 @@ it("reports finalization lease expiry, retains the marker and releases the lease
                     return inner.run();
                   };
                 const value = Reflect.get(inner, key);
-                return typeof value === "function" ? value.bind(inner) : value;
+                return Predicate.isFunction(value) ? value.bind(inner) : value;
               },
             });
           return wrap(statement);
         };
       const value = Reflect.get(target, property);
-      return typeof value === "function" ? value.bind(target) : value;
+      return Predicate.isFunction(value) ? value.bind(target) : value;
     },
   });
   await expect(sync({ ...env, DB }, [], { season: 2026, skipShouldRunNow: true })).rejects.toThrow(

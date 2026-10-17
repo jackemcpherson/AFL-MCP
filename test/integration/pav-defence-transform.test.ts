@@ -1,6 +1,5 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { Env } from "../../src/types";
 
 /**
  * COR-11: the defence transform was written as
@@ -13,7 +12,7 @@ import type { Env } from "../../src/types";
  */
 describe("PAV defence transform equivalence", () => {
   it("matches the original expression for dn in [0, 2]", async () => {
-    const { results } = await (env as Env).DB.prepare(
+    const { results } = await env.DB.prepare(
       `WITH dn_values(dn) AS (
          VALUES (0.0), (0.25), (0.5), (0.75), (1.0), (1.1), (1.5), (2.0)
        )
@@ -29,7 +28,7 @@ describe("PAV defence transform equivalence", () => {
         expect(row.simplified).toBeNull();
       } else {
         expect(row.simplified).not.toBeNull();
-        expect(row.simplified as number).toBeCloseTo(row.original, 10);
+        expect(row.simplified ?? Number.NaN).toBeCloseTo(row.original, 10);
       }
     }
   });

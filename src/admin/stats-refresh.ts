@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -6,24 +6,33 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
+import { CompetitionCodeSchema } from "../lib/competitions";
+import { strictDecoder } from "../lib/decode";
+import { booleanDefault, PositiveIntSchema, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { refreshDueStats } from "../sync/stats-refresh";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** Explicit scope and resumable operation identity for historical corrections. */
-export const StatsRefreshRequestSchema = z.strictObject({
-  competition: z.enum(["AFLM", "AFLW", "VFL", "VFLW"]),
-  season: z.union([z.number().int().min(1897).max(2100), z.string().regex(/^\d{4}(?:-S[67])?$/)]),
-  matchId: z.number().int().positive().optional(),
-  operationId: z.string().uuid(),
-  dryRun: z.boolean().default(true),
-  resume: z.boolean().default(false),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
+export const StatsRefreshRequestSchema = Schema.Struct({
+  competition: CompetitionCodeSchema,
+  season: Schema.Union([
+    Schema.Int.check(Schema.isBetween({ minimum: 1897, maximum: 2100 })),
+    Schema.String.check(Schema.isPattern(/^\d{4}(?:-S[67])?$/)),
+  ]),
+  matchId: Schema.optionalKey(PositiveIntSchema),
+  operationId: Schema.String.check(Schema.isUUID()),
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
 });
+
+/** A validated statistics refresh request. */
+export type StatsRefreshRequest = typeof StatsRefreshRequestSchema.Type;
+
+/** Decode a statistics refresh body, rejecting unknown keys. */
+export const decodeStatsRefreshRequest = strictDecoder(StatsRefreshRequestSchema);
 
 /**
  * Preview, start, or resume a bounded refresh without fetching unrelated seasons.
@@ -34,11 +43,8 @@ export const StatsRefreshRequestSchema = z.strictObject({
 
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await operateStatsRefresh(env, StatsRefreshRequestSchema.parse(request)); */
-export async function operateStatsRefresh(
-  env: Env,
-  request: z.infer<typeof StatsRefreshRequestSchema>,
-) {
+ * await operateStatsRefresh(env, Result.getOrThrow(decodeStatsRefreshRequest(body))); */
+export async function operateStatsRefresh(env: Env, request: StatsRefreshRequest) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;

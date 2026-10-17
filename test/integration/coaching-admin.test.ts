@@ -4,7 +4,7 @@ import { requestUrl, testCtx } from "#test/fixtures";
 import worker from "../../src/index";
 import type { Env } from "../../src/types";
 
-const adminEnv: Env = { ...(env as Env), ADMIN_TOKEN: "coaching-test-token" };
+const adminEnv: Env = { ...env, ADMIN_TOKEN: "coaching-test-token" };
 const context = testCtx();
 const profileUrl = "https://afltables.com/afl/stats/coaches/Coach_A.html";
 

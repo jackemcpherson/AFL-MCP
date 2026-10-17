@@ -91,8 +91,11 @@ This Worker deliberately deviates from TypeScript standard v4. Do not
   protocol 2026-07-28, or when a second transport feature (streaming,
   resources) is needed.
 
-Boundary validation is moving from Zod to `effect/Schema` during v5.
-Validate new boundaries with whichever library the module already uses.
+`effect/Schema` decodes every external input: MCP and admin request
+bodies (`src/mcp/validation.ts` and each `src/admin/*` module), Open-Meteo
+payloads, D1 rows and stored JSON. Shared field schemas live in
+`src/lib/schemas.ts`, decoders in `src/lib/decode.ts`, and competition
+codes in `src/lib/competitions.ts`.
 
 ## Key Constraints
 

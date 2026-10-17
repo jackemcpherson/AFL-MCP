@@ -1,32 +1,33 @@
-import type { CompetitionCode } from "fitzroy";
+import { Predicate, Result } from "effect";
 import { backfillBrownlow } from "./admin/brownlow";
 import { reconcileBearsIdentity } from "./admin/club-identities";
 import { backfillCoaches } from "./admin/coaching";
 import { OperationConflictError } from "./admin/errors";
-import { PavRepairRequestSchema, repairPav } from "./admin/pav";
-import { IdentityRepairRequestSchema, repairPlayerIdentity } from "./admin/player-identities";
-import { operateStatsRefresh, StatsRefreshRequestSchema } from "./admin/stats-refresh";
+import { decodePavRepairRequest, repairPav } from "./admin/pav";
+import { decodeIdentityRepairRequest, repairPlayerIdentity } from "./admin/player-identities";
+import { decodeStatsRefreshRequest, operateStatsRefresh } from "./admin/stats-refresh";
 import { getAdminStatus } from "./admin/status";
-import { refreshWeather, WeatherRefreshRequestSchema } from "./admin/weather-refresh";
-import { retryWeather, WeatherRetryRequestSchema } from "./admin/weather-retry";
+import { decodeWeatherRefreshRequest, refreshWeather } from "./admin/weather-refresh";
+import { decodeWeatherRetryRequest, retryWeather } from "./admin/weather-retry";
 import { SeasonSelectionError, seasonKey } from "./db/seasons";
+import { COMPETITION_CODES } from "./lib/competitions";
+import { toSeasonSelector } from "./lib/schemas";
 import { handleMcpRequest } from "./mcp/protocol";
 import {
   type BackfillRequest,
-  BackfillRequestSchema,
-  BearsRepairRequestSchema,
-  BrownlowBackfillRequestSchema,
-  CoachingBackfillRequestSchema,
+  decodeBackfillRequest,
+  decodeBearsRepairRequest,
+  decodeBrownlowBackfillRequest,
+  decodeCoachingBackfillRequest,
+  decodeExactSeasonBackfillRequest,
+  decodeSeasonKey,
+  decodeSyncRequest,
   describeBackfillIssue,
   describeBrownlowBackfillIssue,
-  ExactSeasonBackfillRequestSchema,
-  SyncRequestSchema,
 } from "./mcp/validation";
 import { auditNextSeason } from "./sync/audit";
 import { sync } from "./sync/sync";
 import type { Env } from "./types";
-
-const ALL_COMPETITIONS: readonly CompetitionCode[] = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
 
 /** Earliest season in the historical record. */
 const MIN_BACKFILL_YEAR = 1897;
@@ -90,14 +91,14 @@ export default {
       // synced competition writes a sync_log row, so a quiet log means the
       // cron itself is broken. Returning 503 lets any dumb uptime monitor
       // alert on status code alone (OPS-02).
-      const lastTimestamp =
-        typeof lastSync?.["timestamp"] === "string" ? lastSync["timestamp"] : null;
+      const lastSyncTimestamp = lastSync?.["timestamp"];
+      const lastTimestamp = Predicate.isString(lastSyncTimestamp) ? lastSyncTimestamp : null;
       const ageMs = lastTimestamp === null ? null : Date.now() - Date.parse(lastTimestamp);
       const isStale = ageMs === null || Number.isNaN(ageMs) || ageMs > SYNC_STALE_AFTER_MS;
-      const criticalTs =
-        typeof lastCritical?.["timestamp"] === "string"
-          ? Date.parse(lastCritical["timestamp"])
-          : null;
+      const criticalTimestamp = lastCritical?.["timestamp"];
+      const criticalTs = Predicate.isString(criticalTimestamp)
+        ? Date.parse(criticalTimestamp)
+        : null;
       const hasRecentCriticalError =
         criticalTs !== null &&
         !Number.isNaN(criticalTs) &&
@@ -174,7 +175,7 @@ export default {
     // shouldRunNow gate) was previously invisible — waitUntil swallowed
     // it. Record a sync:fatal row so /mcp/health turns unhealthy (OPS-02).
     ctx.waitUntil(
-      sync(env, ALL_COMPETITIONS)
+      sync(env, COMPETITION_CODES)
         .then(async () => {
           const now = new Date(event.scheduledTime);
           if (now.getUTCMinutes() === 0) await auditNextSeason(env, now);
@@ -232,34 +233,34 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
   if (path === "/mcp/admin/repair-player-identity" && request.method === "POST") {
-    const parsed = IdentityRepairRequestSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success)
+    const parsed = decodeIdentityRepairRequest(await request.json().catch(() => null));
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid identity repair request" }, { status: 400 });
-    const result = await repairPlayerIdentity(env, parsed.data);
+    const result = await repairPlayerIdentity(env, parsed.success);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
   if (path === "/mcp/admin/refresh-statistics" && request.method === "POST") {
-    const parsed = StatsRefreshRequestSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success)
+    const parsed = decodeStatsRefreshRequest(await request.json().catch(() => null));
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid statistics refresh request" }, { status: 400 });
-    const result = await operateStatsRefresh(env, parsed.data);
+    const result = await operateStatsRefresh(env, parsed.success);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
   if (path === "/mcp/admin/refresh-weather" && request.method === "POST") {
-    const parsed = WeatherRefreshRequestSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success)
+    const parsed = decodeWeatherRefreshRequest(await request.json().catch(() => null));
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid weather refresh request" }, { status: 400 });
-    const result = await refreshWeather(env, parsed.data);
+    const result = await refreshWeather(env, parsed.success);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
   if (path === "/mcp/admin/retry-weather" && request.method === "POST") {
-    const parsed = WeatherRetryRequestSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success)
+    const parsed = decodeWeatherRetryRequest(await request.json().catch(() => null));
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid weather retry request" }, { status: 400 });
-    const result = await retryWeather(env, parsed.data);
+    const result = await retryWeather(env, parsed.success);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
@@ -274,10 +275,10 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
-    const parsed = CoachingBackfillRequestSchema.safeParse(raw);
-    if (!parsed.success)
+    const parsed = decodeCoachingBackfillRequest(raw);
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid coaching backfill request" }, { status: 400 });
-    const { fromYear, toYear, source, dryRun } = parsed.data;
+    const { fromYear, toYear, source, dryRun } = parsed.success;
     const currentYear = new Date().getUTCFullYear();
     if (fromYear !== toYear || fromYear < 1990 || toYear > currentYear) {
       return Response.json(
@@ -287,7 +288,7 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
         { status: 400 },
       );
     }
-    const result = await backfillCoaches(env, fromYear, source, dryRun, parsed.data.resume);
+    const result = await backfillCoaches(env, fromYear, source, dryRun, parsed.success.resume);
     if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
     return Response.json({ status: "ok", ...result.summary });
   }
@@ -299,10 +300,10 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
-    const parsed = BearsRepairRequestSchema.safeParse(raw);
-    if (!parsed.success)
+    const parsed = decodeBearsRepairRequest(raw);
+    if (Result.isFailure(parsed))
       return Response.json({ error: "invalid Bears repair request" }, { status: 400 });
-    const result = await reconcileBearsIdentity(env, parsed.data.dryRun, parsed.data);
+    const result = await reconcileBearsIdentity(env, parsed.success.dryRun, parsed.success);
     if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
     return Response.json({
       status: "ok",
@@ -319,20 +320,23 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
-    const parsed = BrownlowBackfillRequestSchema.safeParse(raw);
-    if (!parsed.success) {
-      return Response.json({ error: describeBrownlowBackfillIssue(parsed.error) }, { status: 400 });
+    const parsed = decodeBrownlowBackfillRequest(raw);
+    if (Result.isFailure(parsed)) {
+      return Response.json(
+        { error: describeBrownlowBackfillIssue(parsed.failure) },
+        { status: 400 },
+      );
     }
-    const rangeError = validateBrownlowYearRange(parsed.data.fromYear, parsed.data.toYear);
+    const rangeError = validateBrownlowYearRange(parsed.success.fromYear, parsed.success.toYear);
     if (rangeError !== null) {
       return Response.json({ error: rangeError }, { status: 400 });
     }
     const result = await backfillBrownlow(
       env,
-      parsed.data.fromYear,
-      parsed.data.toYear,
-      parsed.data.dryRun,
-      parsed.data.resume,
+      parsed.success.fromYear,
+      parsed.success.toYear,
+      parsed.success.dryRun,
+      parsed.success.resume,
     );
     if (result.body.status === "blocked" && result.body.seasons.length === 0) {
       return Response.json({ error: "operation lease held" }, { status: 409 });
@@ -341,13 +345,13 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
-    const parsed = PavRepairRequestSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success)
+    const parsed = decodePavRepairRequest(await request.json().catch(() => null));
+    if (Result.isFailure(parsed))
       return Response.json(
         { error: "PAV requires competition, season and a reviewed preview" },
         { status: 400 },
       );
-    const result = await repairPav(env, parsed.data);
+    const result = await repairPav(env, parsed.success);
     return Response.json(result, { status: result.busy ? 409 : 200 });
   }
 
@@ -360,17 +364,18 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
 
   if (path === "/mcp/admin/sync" && request.method === "POST") {
     const text = await request.text();
-    let raw: unknown = {};
+    let raw: unknown;
     try {
-      if (text.trim()) raw = JSON.parse(text);
+      raw = text.trim() ? JSON.parse(text) : {};
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
-    const parsed = SyncRequestSchema.safeParse(raw);
-    if (!parsed.success) return Response.json({ error: "invalid sync request" }, { status: 400 });
-    const results = await sync(env, ALL_COMPETITIONS, {
+    const parsed = decodeSyncRequest(raw);
+    if (Result.isFailure(parsed))
+      return Response.json({ error: "invalid sync request" }, { status: 400 });
+    const results = await sync(env, COMPETITION_CODES, {
       skipShouldRunNow: true,
-      resume: parsed.data.resume,
+      resume: parsed.success.resume,
     });
     return Response.json({ status: "ok", results });
   }
@@ -383,31 +388,31 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
-    if (typeof raw === "object" && raw !== null && "season" in raw) {
-      const exact = ExactSeasonBackfillRequestSchema.safeParse(raw);
-      if (!exact.success)
+    if (Result.isSuccess(decodeSeasonKey(raw))) {
+      const exact = decodeExactSeasonBackfillRequest(raw);
+      if (Result.isFailure(exact))
         return Response.json({ error: "invalid exact-season backfill request" }, { status: 400 });
-      const key = seasonKey(exact.data.competition, exact.data.season);
+      const key = seasonKey(exact.success.competition, exact.success.season);
       const year = Number(key.slice(0, 4));
       if (year < MIN_BACKFILL_YEAR || year > new Date().getUTCFullYear())
         return Response.json(
           { error: "season is outside the historical backfill range" },
           { status: 400 },
         );
-      const results = await sync(env, [exact.data.competition], {
-        season: exact.data.season as import("fitzroy").SeasonSelector,
-        fixturesOnly: exact.data.fixturesOnly,
-        skipShouldRunNow: exact.data.skipShouldRunNow,
-        resume: exact.data.resume,
+      const results = await sync(env, [exact.success.competition], {
+        season: toSeasonSelector(exact.success.season),
+        fixturesOnly: exact.success.fixturesOnly,
+        skipShouldRunNow: exact.success.skipShouldRunNow,
+        resume: exact.success.resume,
       });
       return Response.json({ status: "ok", results });
     }
 
-    const parsed = BackfillRequestSchema.safeParse(raw);
-    if (!parsed.success) {
-      return Response.json({ error: describeBackfillIssue(parsed.error) }, { status: 400 });
+    const parsed = decodeBackfillRequest(raw);
+    if (Result.isFailure(parsed)) {
+      return Response.json({ error: describeBackfillIssue(parsed.failure) }, { status: 400 });
     }
-    const body = parsed.data;
+    const body = parsed.success;
 
     const rangeError = validateYearRange(body);
     if (rangeError !== null) {

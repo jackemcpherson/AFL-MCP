@@ -138,7 +138,11 @@ export function scriptedD1(rows: readonly unknown[]) {
     },
     async batch(statements: { first: () => Promise<unknown> }[]) {
       return Promise.all(
-        statements.map(async (statement) => ({ results: [await statement.first()] })),
+        // A null script entry is a statement that matched no rows, as in D1.
+        statements.map(async (statement) => {
+          const row = await statement.first();
+          return { results: row === null ? [] : [row] };
+        }),
       );
     },
   };

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { Effect, Predicate, Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -7,61 +7,87 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
+import { strictDecoder } from "../lib/decode";
+import {
+  booleanDefault,
+  evidenceSchema,
+  IsoDateSchema,
+  NonEmptyStringSchema,
+  PositiveIntSchema,
+  Sha256HexSchema,
+} from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
-const EvidenceSchema = z.strictObject({
-  url: z.url(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  explanation: z.string().min(20),
-});
+const EvidenceSchema = evidenceSchema(20);
+
 /** Evidence and explicit field decisions required for one verified identity group. */
-export const IdentityRepairRequestSchema = z.strictObject({
-  kind: z.enum(["merge", "reassign-appearances"]).default("merge"),
-  canonicalId: z.number().int().positive().optional(),
-  newPerson: z
-    .strictObject({
-      firstName: z.string().min(1),
-      surname: z.string().min(1),
-      dateOfBirth: z.iso.date(),
+export const IdentityRepairRequestSchema = Schema.Struct({
+  kind: Schema.Literals(["merge", "reassign-appearances"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("merge" as const)),
+  ),
+  canonicalId: Schema.optionalKey(PositiveIntSchema),
+  newPerson: Schema.optionalKey(
+    Schema.Struct({
+      firstName: NonEmptyStringSchema,
+      surname: NonEmptyStringSchema,
+      dateOfBirth: IsoDateSchema,
       evidence: EvidenceSchema,
-    })
-    .optional(),
-  matchIds: z.array(z.number().int().positive()).max(500).default([]),
-  playerIds: z.array(z.number().int().positive()).min(2).max(10),
-  evidence: z.array(EvidenceSchema).min(1),
-  providerIdentities: z
-    .array(
-      z.strictObject({
-        provider: z.enum(["afl-api", "afl-tables", "fryzigg"]),
-        providerId: z.string().min(1),
-        evidence: EvidenceSchema,
-      }),
-    )
-    .max(20)
-    .default([]),
-  resolutions: z
-    .array(
-      z.strictObject({
-        table: z.enum(["player_match_stats", "match_lineups"]),
-        matchId: z.number().int().positive(),
-        field: z.string(),
-        value: z.union([z.number(), z.string()]),
-        evidence: EvidenceSchema,
-      }),
-    )
-    .default([]),
-  dryRun: z.boolean().default(true),
-  resume: z.boolean().default(false),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
+    }),
+  ),
+  matchIds: Schema.Array(PositiveIntSchema)
+    .check(Schema.isMaxLength(500))
+    .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  playerIds: Schema.Array(PositiveIntSchema).check(Schema.isMinLength(2), Schema.isMaxLength(10)),
+  evidence: Schema.Array(EvidenceSchema).check(Schema.isMinLength(1)),
+  providerIdentities: Schema.Array(
+    Schema.Struct({
+      provider: Schema.Literals(["afl-api", "afl-tables", "fryzigg"]),
+      providerId: NonEmptyStringSchema,
+      evidence: EvidenceSchema,
+    }),
+  )
+    .check(Schema.isMaxLength(20))
+    .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  resolutions: Schema.Array(
+    Schema.Struct({
+      table: Schema.Literals(["player_match_stats", "match_lineups"]),
+      matchId: PositiveIntSchema,
+      field: Schema.String,
+      value: Schema.Union([Schema.Number, Schema.String]),
+      evidence: EvidenceSchema,
+    }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
 });
-type RepairRequest = z.infer<typeof IdentityRepairRequestSchema>;
-type Row = Record<string, string | number | null>;
+
+/** Decode an identity repair body, rejecting unknown keys. */
+export const decodeIdentityRepairRequest = strictDecoder(IdentityRepairRequestSchema);
+
+type RepairRequest = typeof IdentityRepairRequestSchema.Type;
+/** One captured D1 row of an identity snapshot table. */
+const RowSchema = Schema.Record(
+  Schema.String,
+  Schema.NullOr(Schema.Union([Schema.String, Schema.Number])),
+);
+type Row = typeof RowSchema.Type;
+const decodeRows = Schema.decodeUnknownSync(Schema.Array(RowSchema));
+
+/** The identity group recorded with an earlier approved repair digest. */
+const RecordedManifestSchema = Schema.fromJsonString(
+  Schema.Struct({
+    ids: Schema.Array(Schema.Number),
+    canonicalId: Schema.optionalKey(Schema.Number),
+    newPerson: Schema.optionalKey(Schema.Unknown),
+    kind: Schema.optionalKey(Schema.String),
+    matchIds: Schema.optionalKey(Schema.Array(Schema.Number)),
+  }),
+);
+const decodeRecordedManifest = Schema.decodeUnknownSync(RecordedManifestSchema);
 type AppearanceTable = "player_match_stats" | "match_lineups";
 interface Conflict {
   readonly table: AppearanceTable;
@@ -99,30 +125,35 @@ export function mergeIdentityAppearances(
     group.sort((a, b) => Number(a["id"]) - Number(b["id"]));
     const retained = group.find((row) => row["player_id"] === canonicalId) ?? group[0];
     if (!retained) continue;
-    const row: Row = { ...retained, player_id: canonicalId };
+    const row = new Map(Object.entries(retained));
+    row.set("player_id", canonicalId);
     for (const field of Object.keys(retained)) {
       if (["id", "player_id", "match_id"].includes(field)) continue;
       const values = [
         ...new Set(group.flatMap((entry) => (entry[field] == null ? [] : [entry[field]]))),
       ];
-      if (values.length <= 1) row[field] = values[0] ?? null;
+      if (values.length <= 1) row.set(field, values[0] ?? null);
       else {
         const resolution = resolutions.find(
           (entry) => entry.table === table && entry.matchId === matchId && entry.field === field,
         );
         if (resolution) {
-          const expectedType =
-            table === "match_lineups" && field === "position" ? "string" : "number";
-          if (typeof resolution.value !== expectedType)
+          const expectsString = table === "match_lineups" && field === "position";
+          const expectedType = expectsString ? "string" : "number";
+          if (
+            expectsString
+              ? !Predicate.isString(resolution.value)
+              : !Predicate.isNumber(resolution.value)
+          )
             throw new OperationConflictError(
               `Resolution for ${table}.${field} must be ${expectedType}`,
             );
           used.add(resolution);
-          row[field] = resolution.value;
+          row.set(field, resolution.value);
         } else conflicts.push({ table, matchId, field, values });
       }
     }
-    merged.push(row);
+    merged.push(Object.fromEntries(row));
   }
   if (resolutions.some((entry) => entry.table === table && !used.has(entry)))
     throw new OperationConflictError(
@@ -131,7 +162,7 @@ export function mergeIdentityAppearances(
   return { rows: merged, conflicts };
 }
 
-async function hash(value: unknown): Promise<string> {
+async function hash(value: object): Promise<string> {
   return Array.from(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
@@ -149,7 +180,7 @@ async function hash(value: unknown): Promise<string> {
  * @returns Preview, completed repair report or lease contention result.
  * @throws {OperationConflictError} If scope, evidence, conflicts or approval prevent a repair.
  * @example
- * await repairPlayerIdentity(env, IdentityRepairRequestSchema.parse(request));
+ * await repairPlayerIdentity(env, Result.getOrThrow(decodeIdentityRepairRequest(body)));
  */
 export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
   const ids = [...new Set(request.playerIds)].sort((a, b) => a - b);
@@ -195,13 +226,7 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         prepared = true;
       }
       if (prior && !prepared) {
-        const recorded = JSON.parse(prior.manifest_json) as {
-          ids: number[];
-          canonicalId?: number;
-          newPerson?: RepairRequest["newPerson"];
-          kind?: string;
-          matchIds?: number[];
-        };
+        const recorded = decodeRecordedManifest(prior.manifest_json);
         if (
           JSON.stringify(recorded.ids) !== JSON.stringify(ids) ||
           (recorded.canonicalId ?? ids[0]) !== canonicalId ||
@@ -336,13 +361,13 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
     }
     const stats = mergeIdentityAppearances(
       "player_match_stats",
-      (snapshots[2]?.results as Row[]) ?? [],
+      decodeRows(snapshots[2]?.results ?? []),
       canonicalId,
       request.resolutions,
     );
     const lineups = mergeIdentityAppearances(
       "match_lineups",
-      (snapshots[3]?.results as Row[]) ?? [],
+      decodeRows(snapshots[3]?.results ?? []),
       canonicalId,
       request.resolutions,
     );

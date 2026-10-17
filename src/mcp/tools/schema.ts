@@ -24,6 +24,7 @@ interface CompetitionSummary {
 function competitionSummaries<C extends CoverageCompetition>(
   competitions: readonly C[],
 ): Record<C, CompetitionSummary> {
+  // SAFETY: the loop below assigns every competition in `competitions` before return.
   const summaries = {} as Record<C, CompetitionSummary>;
   for (const code of competitions) {
     summaries[code] = {

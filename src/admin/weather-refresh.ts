@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -6,29 +6,41 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
+import { CompetitionCodeSchema } from "../lib/competitions";
+import { strictDecoder } from "../lib/decode";
+import {
+  booleanDefault,
+  evidenceSchema,
+  PositiveIntSchema,
+  SeasonSelectorSchema,
+  Sha256HexSchema,
+} from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
 import { OperationConflictError } from "./errors";
 
-const EvidenceSchema = z.strictObject({
-  url: z.url(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  explanation: z.string().min(1),
-});
+/** The reviewed context and evidence recorded with an earlier approved digest. */
+const decodeRecordedManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ context: Schema.Unknown, evidence: Schema.Unknown })),
+);
+
 /** Exact weather recomputation after reviewing a fixture or venue correction. */
-export const WeatherRefreshRequestSchema = z.strictObject({
-  competition: z.enum(["AFLM", "AFLW", "VFL", "VFLW"]),
-  season: z.union([z.number().int(), z.string()]),
-  matchId: z.number().int().positive(),
-  evidence: z.array(EvidenceSchema).min(1),
-  dryRun: z.boolean().default(true),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
-  resume: z.boolean().default(false),
+export const WeatherRefreshRequestSchema = Schema.Struct({
+  competition: CompetitionCodeSchema,
+  season: SeasonSelectorSchema,
+  matchId: PositiveIntSchema,
+  evidence: Schema.Array(evidenceSchema(1)).check(Schema.isMinLength(1)),
+  dryRun: booleanDefault(true),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
+  resume: booleanDefault(false),
 });
+
+/** A validated weather refresh request. */
+export type WeatherRefreshRequest = typeof WeatherRefreshRequestSchema.Type;
+
+/** Decode a weather refresh body, rejecting unknown keys. */
+export const decodeWeatherRefreshRequest = strictDecoder(WeatherRefreshRequestSchema);
 
 /**
  * Recompute one reviewed fixture's weather under the public input fence.
@@ -37,12 +49,9 @@ export const WeatherRefreshRequestSchema = z.strictObject({
  * @returns Preview, completed operation or lease contention.
  * @throws If the preview is stale, recovery scope differs or a DB write fails.
  * @example
- * await refreshWeather(env, WeatherRefreshRequestSchema.parse(request));
+ * await refreshWeather(env, Result.getOrThrow(decodeWeatherRefreshRequest(body)));
  */
-export async function refreshWeather(
-  env: Env,
-  request: z.infer<typeof WeatherRefreshRequestSchema>,
-) {
+export async function refreshWeather(env: Env, request: WeatherRefreshRequest) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;
@@ -66,10 +75,7 @@ export async function refreshWeather(
             .first<{ manifest_json: string; status: string }>()
         : null;
     if (prior) {
-      const recorded = JSON.parse(prior.manifest_json) as {
-        context: unknown;
-        evidence: unknown;
-      };
+      const recorded = decodeRecordedManifest(prior.manifest_json);
       if (
         JSON.stringify(recorded.context) !== JSON.stringify(context) ||
         JSON.stringify(recorded.evidence) !== JSON.stringify(request.evidence)

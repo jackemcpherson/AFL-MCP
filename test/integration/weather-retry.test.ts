@@ -1,6 +1,7 @@
+import { Result } from "effect";
 import { env } from "cloudflare:test";
 import { expect, it } from "vitest";
-import { retryWeather, WeatherRetryRequestSchema } from "../../src/admin/weather-retry";
+import { retryWeather, decodeWeatherRetryRequest } from "../../src/admin/weather-retry";
 
 it("retries only the reviewed match and rejects a stale diagnostic preview", async () => {
   await env.DB.batch([
@@ -18,7 +19,7 @@ it("retries only the reviewed match and rejects a stale diagnostic preview", asy
     ),
   ]);
   const scope = { competition: "AFLM", season: 2026, matchId: 1 };
-  const preview = await retryWeather(env, WeatherRetryRequestSchema.parse(scope));
+  const preview = await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(scope)));
   if (!("manifestDigest" in preview)) throw new Error("Expected preview");
   await env.DB.prepare(
     "UPDATE weather_refresh_state SET diagnostic='corrected diagnostic' WHERE match_id=1",
@@ -26,23 +27,27 @@ it("retries only the reviewed match and rejects a stale diagnostic preview", asy
   await expect(
     retryWeather(
       env,
-      WeatherRetryRequestSchema.parse({
-        ...scope,
-        dryRun: false,
-        manifestDigest: preview.manifestDigest,
-      }),
+      Result.getOrThrow(
+        decodeWeatherRetryRequest({
+          ...scope,
+          dryRun: false,
+          manifestDigest: preview.manifestDigest,
+        }),
+      ),
     ),
   ).rejects.toThrow("stale");
-  const fresh = await retryWeather(env, WeatherRetryRequestSchema.parse(scope));
+  const fresh = await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(scope)));
   if (!("manifestDigest" in fresh)) throw new Error("Expected preview");
   expect(
     await retryWeather(
       env,
-      WeatherRetryRequestSchema.parse({
-        ...scope,
-        dryRun: false,
-        manifestDigest: fresh.manifestDigest,
-      }),
+      Result.getOrThrow(
+        decodeWeatherRetryRequest({
+          ...scope,
+          dryRun: false,
+          manifestDigest: fresh.manifestDigest,
+        }),
+      ),
     ),
   ).toMatchObject({ queued: 1 });
   expect(

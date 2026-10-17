@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { Predicate } from "effect";
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Lineup } from "fitzroy";
@@ -16,7 +17,7 @@ const MIN_LINEUP_YEAR = 2015;
 
 function escapeSQL(value: string | number | null | undefined): string {
   if (value == null) return "NULL";
-  if (typeof value === "number") return String(value);
+  if (Predicate.isNumber(value)) return String(value);
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 

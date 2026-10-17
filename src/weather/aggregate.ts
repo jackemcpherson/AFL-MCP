@@ -10,7 +10,7 @@
  * saving changes.
  */
 
-import { z } from "zod";
+import { Schema } from "effect";
 
 /**
  * Open-Meteo hourly payload: UTC epochs or a legacy local axis, plus arrays per
@@ -18,27 +18,39 @@ import { z } from "zod";
  * keys like `temperature_2m_era5_land` on dual-model archive responses).
  * Non-hourly top-level fields (latitude, elevation, ...) are ignored.
  */
-export const OpenMeteoPayloadSchema = z.object({
-  hourly: z
-    .object({
-      time: z
-        .array(z.union([z.string(), z.number().int()]))
-        .refine(
-          (time) =>
-            time.every((value) => typeof value === "string") ||
-            time.every((value) => typeof value === "number"),
-        ),
-    })
-    .catchall(z.array(z.number().nullable())),
+export const OpenMeteoPayloadSchema = Schema.Struct({
+  hourly: Schema.StructWithRest(
+    Schema.Struct({
+      time: Schema.Union([Schema.Array(Schema.String), Schema.Array(Schema.Int)]),
+    }),
+    [
+      Schema.Record(
+        // Every key except the time axis is one hourly variable series.
+        Schema.String.check(Schema.makeFilter((key) => key !== "time")),
+        Schema.Array(Schema.NullOr(Schema.Number)),
+      ),
+    ],
+  ),
 });
 
 /** Parsed Open-Meteo hourly payload (the external API boundary). */
-export type OpenMeteoPayload = z.infer<typeof OpenMeteoPayloadSchema>;
+export type OpenMeteoPayload = typeof OpenMeteoPayloadSchema.Type;
+
+/**
+ * Decode a raw Open-Meteo JSON body, ignoring non-hourly fields.
+ *
+ * @throws When the body is not an hourly payload (for example an API error
+ *   body, or a variable that is not a nullable-number array).
+ */
+export const decodeOpenMeteoPayload = Schema.decodeUnknownSync(OpenMeteoPayloadSchema);
+
+/** True for a UTC epoch-seconds axis, false for a legacy local-string axis. */
+const isEpochAxis = Schema.is(Schema.Array(Schema.Number));
 
 /** One hourly variable series extracted from an Open-Meteo response. */
 export interface HourlySeries {
   /** UTC epoch seconds, or legacy local timestamps such as "2026-07-18T19:00". */
-  readonly time: readonly (string | number)[];
+  readonly time: readonly string[] | readonly number[];
   readonly temperatureC: readonly (number | null)[];
   readonly precipitationMm: readonly (number | null)[];
   readonly humidityPct: readonly (number | null)[];
@@ -89,17 +101,11 @@ const WIND_GUST_KEYS = ["wind_gusts_10m", "wind_gusts_10m_era5_land", "wind_gust
  * payload (or present but all-null) yields an all-null series so partial
  * responses are written as-is.
  *
- * @param payload - Parsed JSON body from an Open-Meteo hourly endpoint.
+ * @param payload - Body decoded with {@link decodeOpenMeteoPayload}.
  * @returns The five variable series aligned to the `hourly.time` axis.
- * @throws When the payload does not match {@link OpenMeteoPayloadSchema}
- *   (e.g. an API error body or a variable that is not a nullable-number array).
  */
-export function extractHourlySeries(payload: unknown): HourlySeries {
-  const parsed = OpenMeteoPayloadSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new Error(`Unexpected Open-Meteo payload: ${parsed.error.message}`);
-  }
-  const { time, ...variables } = parsed.data.hourly;
+export function extractHourlySeries(payload: OpenMeteoPayload): HourlySeries {
+  const { time, ...variables } = payload.hourly;
   return {
     time,
     temperatureC: readSeries(variables, TEMPERATURE_KEYS, time.length),
@@ -130,12 +136,12 @@ export function aggregateWeatherWindow(
   series: HourlySeries,
   scheduledStart: string,
 ): WeatherMetrics {
-  const absolute = series.time.every((time) => typeof time === "number");
-  if (!absolute && series.time.some((time) => typeof time === "number"))
-    throw new Error("Mixed provider hourly timestamp formats");
+  const absolute = isEpochAxis(series.time);
+  const keys: readonly (string | number)[] = absolute
+    ? series.time.map((seconds) => seconds * 1000)
+    : series.time;
   const index = new Map<string | number, number>();
-  for (const [i, time] of series.time.entries()) {
-    const key = typeof time === "number" ? time * 1000 : time;
+  for (const [i, key] of keys.entries()) {
     index.set(key, index.has(key) ? -1 : i);
   }
 

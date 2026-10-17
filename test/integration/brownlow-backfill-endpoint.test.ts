@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makePlayerStats } from "./_fixtures";
@@ -10,7 +11,7 @@ import { acquireOperationLease, releaseOperationLease } from "../../src/sync/lea
 import type { Env } from "../../src/types";
 
 const ADMIN_TOKEN = "brownlow-admin-token";
-const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };
+const authedEnv: Env = { ...env, ADMIN_TOKEN };
 const stubCtx = createExecutionContext();
 const fetchRoutes = new Map<string, { body: string; status: number }[]>();
 let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -27,7 +28,7 @@ function request(body: unknown, token: string | null = ADMIN_TOKEN): Request {
   return new Request("https://afl.test/mcp/admin/backfill-brownlow", {
     method: "POST",
     headers,
-    body: typeof body === "string" ? body : JSON.stringify(body),
+    body: Predicate.isString(body) ? body : JSON.stringify(body),
   });
 }
 
@@ -229,7 +230,7 @@ describe("bounded Brownlow writes", () => {
           };
         }
         const value = Reflect.get(target, property);
-        return typeof value === "function" ? value.bind(target) : value;
+        return Predicate.isFunction(value) ? value.bind(target) : value;
       },
     });
 

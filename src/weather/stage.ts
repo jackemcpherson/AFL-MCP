@@ -19,7 +19,7 @@
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
-import { aggregateWeatherWindow, extractHourlySeries } from "./aggregate";
+import { aggregateWeatherWindow, decodeOpenMeteoPayload, extractHourlySeries } from "./aggregate";
 import {
   ARCHIVE_API,
   FORECAST_API,
@@ -318,7 +318,7 @@ async function fetchAndStore(
     if (!response.ok) {
       throw new Error(`Open-Meteo ${response.status} for match ${job.candidate.match_id}`);
     }
-    const series = extractHourlySeries(await response.json());
+    const series = extractHourlySeries(decodeOpenMeteoPayload(await response.json()));
     const scheduledStart = `${job.candidate.date}T${job.candidate.local_time}`;
     metrics = aggregateWeatherWindow(series, scheduledStart);
   } catch (error) {

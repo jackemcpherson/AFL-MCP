@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
@@ -6,23 +6,29 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
+import { PavCompetitionSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
+import { strictDecoder } from "../lib/decode";
+import { booleanDefault, SeasonSelectorSchema, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
 /** One reviewed competition-season replacement; no implicit calendar-year scope. */
-export const PavRepairRequestSchema = z.strictObject({
-  competition: z.enum(["AFLM", "AFLW"]),
-  season: z.union([z.number().int(), z.string()]),
-  dryRun: z.boolean().default(true),
-  resume: z.boolean().default(false),
-  manifestDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
+export const PavRepairRequestSchema = Schema.Struct({
+  competition: PavCompetitionSchema,
+  season: SeasonSelectorSchema,
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
 });
+
+/** A validated PAV repair request. */
+export type PavRepairRequest = typeof PavRepairRequestSchema.Type;
+
+/** Decode a PAV repair body, rejecting unknown keys. */
+export const decodePavRepairRequest = strictDecoder(PavRepairRequestSchema);
 
 /**
  * Preview or atomically replace one season's PAV while readers remain blocked.
@@ -33,8 +39,8 @@ export const PavRepairRequestSchema = z.strictObject({
  * @throws When the preview is stale, recovery scope differs, or D1 fails.
 
  * @example
- * await repairPav(env, PavRepairRequestSchema.parse(request)); */
-export async function repairPav(env: Env, request: z.infer<typeof PavRepairRequestSchema>) {
+ * await repairPav(env, Result.getOrThrow(decodePavRepairRequest(body))); */
+export async function repairPav(env: Env, request: PavRepairRequest) {
   const holder = crypto.randomUUID();
   if (!(await acquireOperationLease(env, holder))) return { busy: true };
   let marked = false;

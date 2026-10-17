@@ -550,10 +550,20 @@ function computeExpectedPav(
     const awayI50 = teamMatchI50.get(`${m.matchId}|${m.awayTeam}`) ?? 0;
 
     if (!teamSeason.has(m.homeTeam)) {
-      teamSeason.set(m.homeTeam, { pts_for: 0, pts_against: 0, i50_for: 0, i50_against: 0 });
+      teamSeason.set(m.homeTeam, {
+        pts_for: 0,
+        pts_against: 0,
+        i50_for: 0,
+        i50_against: 0,
+      });
     }
     if (!teamSeason.has(m.awayTeam)) {
-      teamSeason.set(m.awayTeam, { pts_for: 0, pts_against: 0, i50_for: 0, i50_against: 0 });
+      teamSeason.set(m.awayTeam, {
+        pts_for: 0,
+        pts_against: 0,
+        i50_for: 0,
+        i50_against: 0,
+      });
     }
 
     const home = mustGet(teamSeason, m.homeTeam);
@@ -856,16 +866,18 @@ describe("PAV golden values", () => {
      */
     // Frozen 2026-07-03 against commit e6b5e77. If PAV_SELECT_SQL or
     // FIXTURE_STATS change, update these literals in the same PR.
-    const GOLDEN_TOTAL_PAV: Record<string, number> = {
-      "GOLDEN-P-1": 89.41, // Adelaide [normalised], mid
-      "GOLDEN-P-2": 73.16, // Adelaide [normalised], forward
-      "GOLDEN-P-3": 87.43, // Adelaide [normalised], defender
-      "GOLDEN-P-4": 68.83, // Adelaide [normalised], ruck
-      "GOLDEN-P-5": 72.67, // Brisbane Lions, mid
-      "GOLDEN-P-6": 63.88, // Brisbane Lions, forward
-      "GOLDEN-P-7": 97.04, // Brisbane Lions, defender
-      "GOLDEN-P-8": 47.57, // Brisbane Lions, ruck
-    };
+    const GOLDEN_TOTAL_PAV = new Map(
+      Object.entries({
+        "GOLDEN-P-1": 89.41, // Adelaide [normalised], mid
+        "GOLDEN-P-2": 73.16, // Adelaide [normalised], forward
+        "GOLDEN-P-3": 87.43, // Adelaide [normalised], defender
+        "GOLDEN-P-4": 68.83, // Adelaide [normalised], ruck
+        "GOLDEN-P-5": 72.67, // Brisbane Lions, mid
+        "GOLDEN-P-6": 63.88, // Brisbane Lions, forward
+        "GOLDEN-P-7": 97.04, // Brisbane Lions, defender
+        "GOLDEN-P-8": 47.57, // Brisbane Lions, ruck
+      }),
+    );
 
     // Reverse-map DB player_id → fixture playerId
     const dbIdToFixtureId = new Map<number, string>();
@@ -877,7 +889,7 @@ describe("PAV golden values", () => {
       const fixtureId = dbIdToFixtureId.get(row.player_id);
       expect(fixtureId).toBeDefined();
       if (!fixtureId) continue;
-      const golden = GOLDEN_TOTAL_PAV[fixtureId];
+      const golden = GOLDEN_TOTAL_PAV.get(fixtureId);
       expect(golden).toBeDefined();
       if (golden === undefined) continue;
       expect(row.total_pav).toBeCloseTo(golden, 2);

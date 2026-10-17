@@ -8,6 +8,7 @@
  * Only the sandbox executor is faked: the schema goldens run the real
  * `getSchemaInfo`, because faking it would pin nothing.
  */
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 import { testCtx, testEnv } from "#test/fixtures";
 import pkg from "../package.json";
@@ -42,7 +43,7 @@ function rpc(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("https://afl.test/mcp", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
+    body: Predicate.isString(body) ? body : JSON.stringify(body),
   });
 }
 
@@ -66,6 +67,7 @@ async function capture(res: Response): Promise<GoldenResponse> {
     if (value !== null) headers[name] = value;
   }
   const text = await res.text();
+  // SAFETY: widens JSON.parse's `any` to `unknown`; goldens compare it as data.
   return {
     status: res.status,
     headers,
@@ -89,6 +91,7 @@ async function serve(
 describe("MCP contract: lifecycle", () => {
   it("initialize returns the pinned server capabilities and protocol version", async () => {
     const golden = await serve(rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    // SAFETY: an initialize reply always carries result.serverInfo.version.
     const body = golden.body as { result: { serverInfo: { version: string } } };
     expect(body.result.serverInfo.version).toBe(pkg.version);
     body.result.serverInfo.version = VERSION_PLACEHOLDER;

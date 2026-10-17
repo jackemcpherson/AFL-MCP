@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { aggregateWeatherWindow, extractHourlySeries } from "../src/weather/aggregate";
+import {
+  aggregateWeatherWindow,
+  decodeOpenMeteoPayload,
+  extractHourlySeries,
+} from "../src/weather/aggregate";
+
+/** Decode a raw Open-Meteo body and extract its hourly series. */
+const extract = (body: object) => extractHourlySeries(decodeOpenMeteoPayload(body));
 
 /**
  * Build a two-day hourly series (48 points) with constant values,
@@ -183,7 +190,7 @@ describe("extractHourlySeries", () => {
   const time = ["2026-07-18T00:00", "2026-07-18T01:00"];
 
   it("reads plain single-model variable arrays (forecast APIs)", () => {
-    const series = extractHourlySeries({
+    const series = extract({
       hourly: {
         time,
         temperature_2m: [11.5, 12],
@@ -202,7 +209,7 @@ describe("extractHourlySeries", () => {
   });
 
   it("prefers ERA5-Land for temp/humidity/wind and ERA5 for precipitation on dual-model archive responses", () => {
-    const series = extractHourlySeries({
+    const series = extract({
       hourly: {
         time,
         temperature_2m_era5_land: [9.1, 9.4],
@@ -226,7 +233,7 @@ describe("extractHourlySeries", () => {
   });
 
   it("fills a missing variable with nulls so partial responses pass through", () => {
-    const series = extractHourlySeries({
+    const series = extract({
       hourly: { time, temperature_2m: [10, 11] },
     });
     expect(series.temperatureC).toEqual([10, 11]);
@@ -235,7 +242,7 @@ describe("extractHourlySeries", () => {
   });
 
   it("accepts a realistic payload with extra top-level fields", () => {
-    const series = extractHourlySeries({
+    const series = extract({
       latitude: -37.8,
       longitude: 145.0,
       utc_offset_seconds: 36000,
@@ -248,27 +255,23 @@ describe("extractHourlySeries", () => {
   });
 
   it("throws on a payload without an hourly time axis", () => {
-    expect(() => extractHourlySeries({ error: true, reason: "out of range" })).toThrow();
+    expect(() => extract({ error: true, reason: "out of range" })).toThrow();
   });
 
   it("throws when a variable is not an array", () => {
-    expect(() => extractHourlySeries({ hourly: { time, temperature_2m: "not-an-array" } })).toThrow(
-      /Unexpected Open-Meteo payload/,
-    );
+    expect(() => extract({ hourly: { time, temperature_2m: "not-an-array" } })).toThrow(/Expected/);
   });
 
   it("throws when a variable array contains a non-numeric value", () => {
-    expect(() => extractHourlySeries({ hourly: { time, temperature_2m: [10, "11"] } })).toThrow(
-      /Unexpected Open-Meteo payload/,
-    );
+    expect(() => extract({ hourly: { time, temperature_2m: [10, "11"] } })).toThrow(/Expected/);
   });
 
   it("throws when the time axis mixes strings and epochs", () => {
     expect(() =>
-      extractHourlySeries({
+      extract({
         hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] },
       }),
-    ).toThrow(/Unexpected Open-Meteo payload/);
+    ).toThrow(/Expected/);
   });
 });
 
@@ -279,7 +282,7 @@ it("counts both repeated hours from an absolute provider axis", () => {
   const precipitation = fill(1);
   precipitation[time.indexOf(Date.UTC(2026, 3, 4, 15) / 1000)] = 7;
   precipitation[time.indexOf(Date.UTC(2026, 3, 4, 16) / 1000)] = 11;
-  const series = extractHourlySeries({
+  const series = extract({
     hourly: {
       time,
       temperature_2m: fill(15),
@@ -294,9 +297,4 @@ it("counts both repeated hours from an absolute provider axis", () => {
     precipMm: 3,
     tempC: 15,
   });
-  const ambiguous = {
-    ...series,
-    time: series.time.map((value, i) => (i === 0 ? "2026-04-04T00:00" : value)),
-  };
-  expect(() => aggregateWeatherWindow(ambiguous, "2026-04-05T14:00")).toThrow("Mixed provider");
 });

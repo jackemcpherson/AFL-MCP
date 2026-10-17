@@ -1,10 +1,6 @@
-import {
-  type CompetitionCode,
-  fetchPlayerStats,
-  type PlayerStats,
-  type SeasonSelector,
-} from "fitzroy";
+import { type CompetitionCode, fetchPlayerStats, type PlayerStats } from "fitzroy";
 import { runFitzroy } from "../lib/fitzroy";
+import { toSeasonSelector } from "../lib/schemas";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import type { Env } from "../types";
 import { calculatePav } from "./pav";
@@ -129,7 +125,7 @@ export async function refreshDueStats(
         fetchStats({
           source: "afl-api",
           competition: match.code,
-          season: match.season_key as SeasonSelector,
+          season: toSeasonSelector(match.season_key),
           matchId: match.external_afl_id,
         }),
       );

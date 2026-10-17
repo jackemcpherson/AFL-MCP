@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DataFrame } from "@jackemcpherson/rds-js";
+import { Option, Predicate, Schema } from "effect";
 import { AflTables, Fryzigg, normaliseTeamName } from "fitzroy";
 import { runFitzroy } from "../src/lib/fitzroy";
 
@@ -94,6 +95,9 @@ function dobIsSane(isoDob: string, firstSeasonYear: number): boolean {
 
 // ── DataFrame helpers (enrich-fryzigg pattern) ──────────────────────
 
+/** A frame cell's text, when the cell holds a string. */
+const textCell = Schema.decodeUnknownOption(Schema.String);
+
 function getColumn(frame: DataFrame, name: string): unknown[] | undefined {
   const idx = frame.names.indexOf(name);
   return idx >= 0 ? frame.columns[idx] : undefined;
@@ -151,11 +155,11 @@ function probe(frame: DataFrame): void {
   const nRows = frame.columns[0]?.length ?? 0;
   for (let i = 0; i < nRows; i++) {
     const dateStr = colDate?.[i];
-    if (typeof dateStr !== "string") continue;
+    if (!Predicate.isString(dateStr)) continue;
     const year = Number(dateStr.slice(0, 4));
     const s = bySeason.get(year) ?? { n: 0, withDob: 0 };
     s.n++;
-    if (toIsoDob(col?.[i] as string | null) !== null) s.withDob++;
+    if (toIsoDob(Option.getOrNull(textCell(col?.[i]))) !== null) s.withDob++;
     bySeason.set(year, s);
   }
   console.log("Row-level DOB coverage by season:");
@@ -182,7 +186,7 @@ function stageFryzigg(frame: DataFrame, players: DbPlayer[]): string[] {
   for (let i = 0; i < nRows; i++) {
     const fid = colPlayerId?.[i] == null ? "" : String(colPlayerId[i]);
     if (!fid || conflicted.has(fid)) continue;
-    const iso = toIsoDob(colDob?.[i] as string | null);
+    const iso = toIsoDob(Option.getOrNull(textCell(colDob?.[i])));
     if (!iso) continue;
     const existing = dobByFryziggId.get(fid);
     if (existing && existing !== iso) {

@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Invalid input: expected boolean, received string"
+          "text": "Expected boolean at \"includeObserved\""
         }
       ],
       "isError": true

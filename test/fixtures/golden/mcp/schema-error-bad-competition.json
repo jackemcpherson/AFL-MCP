@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Invalid option: expected one of \"AFLM\"|\"AFLW\"|\"VFL\"|\"VFLW\""
+          "text": "Expected \"AFLM\" | \"AFLW\" | \"VFL\" | \"VFLW\" at \"competition\""
         }
       ],
       "isError": true

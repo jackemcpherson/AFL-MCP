@@ -1,4 +1,7 @@
+import { Schema } from "effect";
 import { resolveStoredSeason } from "../../db/seasons";
+import { COMPETITION_CODES, type CompetitionCode } from "../../lib/competitions";
+import { batchRow } from "../../lib/decode";
 import { statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
@@ -15,9 +18,9 @@ export const COVERAGE_CONTRACT_VERSION = 4;
 /** Date on which static source expectations were last reviewed. */
 export const COVERAGE_REVIEW_DATE = "2026-10-04";
 /** Competition codes supported by the typed contract. */
-export const COVERAGE_COMPETITIONS = ["AFLM", "AFLW", "VFL", "VFLW"] as const;
+export const COVERAGE_COMPETITIONS: readonly CompetitionCode[] = COMPETITION_CODES;
 /** Supported competition code for a coverage request. */
-export type CoverageCompetition = (typeof COVERAGE_COMPETITIONS)[number];
+export type CoverageCompetition = CompetitionCode;
 
 type TableName = keyof typeof ANALYTICS_COLUMNS;
 
@@ -658,9 +661,11 @@ function ratio(numerator: number, denominator: number): number | null {
  * carries only deviations (see {@link COVERAGE_HOW_TO_READ}).
  */
 export function contractCoverage(): Record<CoverageCompetition, ContractCoverage> {
+  // SAFETY: the loop below assigns every key of COVERAGE_COMPETITIONS before return.
   const output = {} as Record<CoverageCompetition, ContractCoverage>;
   for (const competition of COVERAGE_COMPETITIONS) {
     const tables: ContractCoverage = {};
+    // SAFETY: ANALYTICS_COLUMNS is a constant whose keys are exactly TableName.
     for (const table of Object.keys(ANALYTICS_COLUMNS) as TableName[]) {
       const spec: CoverageTableExpectation = COVERAGE_EXPECTATIONS[competition][table];
       const columns: Record<string, ColumnException> = {};
@@ -781,6 +786,15 @@ async function queryCoachingObservation(
 
 type NumericRow = Record<string, number>;
 
+/** An aggregate row of named counts; SUM over no rows reads as NULL. */
+const CountRowSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.Number));
+
+/** The stored provider inventory for one season. */
+const InventoryRowSchema = Schema.Struct({
+  provider_matches: Schema.Number,
+  observed_at: Schema.String,
+});
+
 async function queryObservation(
   env: Env,
   competition: CoverageCompetition,
@@ -816,15 +830,13 @@ async function queryObservation(
     ),
     env.DB.prepare("SELECT revision,in_progress FROM public_input_revision WHERE id=1"),
   ]);
-  const statRow = results[0]?.results[0] as NumericRow | undefined;
-  const pav = results[1]?.results[0] as NumericRow | undefined;
-  const lineups = results[2]?.results[0] as NumericRow | undefined;
-  const matches = results[3]?.results[0] as NumericRow | undefined;
-  const inventory = results[4]?.results[0] as
-    | { provider_matches: number; observed_at: string }
-    | undefined;
-  const refresh = results[5]?.results[0] as NumericRow | undefined;
-  const marker = results[6]?.results[0] as NumericRow | undefined;
+  const statRow = batchRow(results, 0, CountRowSchema);
+  const pav = batchRow(results, 1, CountRowSchema);
+  const lineups = batchRow(results, 2, CountRowSchema);
+  const matches = batchRow(results, 3, CountRowSchema);
+  const inventory = batchRow(results, 4, InventoryRowSchema);
+  const refresh = batchRow(results, 5, CountRowSchema);
+  const marker = batchRow(results, 6, CountRowSchema);
   if (marker?.["in_progress"] !== 0)
     throw new Error("Coverage observation blocked by an unfinished input write");
   const coaches = await queryCoachingObservation(env, competition, seasonRow.year);

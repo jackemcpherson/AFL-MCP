@@ -140,12 +140,11 @@ export function makePlayerStats(overrides: Partial<PlayerStats> = {}): PlayerSta
     jumperNumber: 9,
     position: "MID",
     source: "afl-api" as const,
-  } as Partial<PlayerStats>;
+    ...Object.fromEntries(numericNulls.map((field) => [field, 0])),
+  };
 
-  for (const field of numericNulls) {
-    (stats as Record<string, number | null>)[field] = 0;
-  }
-
+  // SAFETY: the identity fields above plus a zero for every numeric field in
+  // `numericNulls` populate every `PlayerStats` field.
   return { ...(stats as PlayerStats), ...overrides };
 }
 
@@ -180,12 +179,24 @@ export function makeLineup(overrides: Partial<Lineup> = {}): Lineup {
   };
 }
 
+/** fitzroy's success Result. */
+export interface Ok<T> {
+  readonly success: true;
+  readonly data: T;
+}
+
+/** fitzroy's failure Result. */
+export interface Err {
+  readonly success: false;
+  readonly error: Error;
+}
+
 /** Wrap a value in fitzroy's success Result. */
-export function ok<T>(data: T): { success: true; data: T } {
+export function ok<T>(data: T): Ok<T> {
   return { success: true, data };
 }
 
 /** Wrap an error string in fitzroy's failure Result. */
-export function err(message: string): { success: false; error: Error } {
+export function err(message: string): Err {
   return { success: false, error: new Error(message) };
 }

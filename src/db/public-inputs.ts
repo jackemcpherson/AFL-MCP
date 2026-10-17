@@ -157,6 +157,8 @@ export function protectOperationWrites(env: Env, holder: string): Env {
         if (property === "all") return async () => read(target, readOnly);
         if (property === "first")
           return async (column?: string) => {
+            // SAFETY: D1 returns each row as a plain column-name record, which is what
+            // `first()` hands back to callers that asked for a typed row.
             const row = (await read(target, readOnly))?.results[0] as
               | Record<string, unknown>
               | undefined;

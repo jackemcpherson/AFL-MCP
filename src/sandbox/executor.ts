@@ -65,6 +65,8 @@ export async function executeCode(
       if (text.length > MAX_RESULT_CHARS) {
         return `${text.slice(0, MAX_RESULT_CHARS)}\n… [result truncated at ${MAX_RESULT_CHARS} characters — narrow your query with LIMIT or aggregation]`;
       }
+      // SAFETY: widens `any` to `unknown`. The sandbox result is arbitrary JSON
+      // passed back to the caller unchanged.
       return JSON.parse(text) as unknown;
     })();
     // If the timeout wins the race, the abandoned execution promise may still

@@ -29,13 +29,12 @@ export default defineConfig({
       "typescript/no-misused-promises": "error",
       "typescript/no-unnecessary-type-assertion": "error",
       "anti-slop-effect/no-manual-tag-comparison": "error",
-      // Turned on by #221 (C7, effect/Schema).
-      "typescript/no-unnecessary-condition": "off",
-      "anti-slop/no-chained-type-assertions": "off",
-      "anti-slop/no-known-value-widening": "off",
-      "anti-slop/no-runtime-typeof": "off",
-      "anti-slop/no-unknown-parameters": "off",
-      "anti-slop/require-safety-comment-for-type-assertion": "off",
+      "typescript/no-unnecessary-condition": "error",
+      "anti-slop/no-chained-type-assertions": "error",
+      "anti-slop/no-known-value-widening": "error",
+      "anti-slop/no-runtime-typeof": "error",
+      "anti-slop/no-unknown-parameters": "error",
+      "anti-slop/require-safety-comment-for-type-assertion": "error",
       // Turned on by #227 (C13, remove module mocks).
       "anti-slop/no-module-mocking": "off",
       // Not part of the style guide.
@@ -43,8 +42,9 @@ export default defineConfig({
     },
     overrides: [
       {
-        // Worker entry and MCP boundary files receive raw external input.
-        files: ["src/index.ts", "src/mcp/**", "test/**"],
+        // The Worker entry and MCP protocol module decode raw external input, and
+        // tests build deliberately invalid request bodies.
+        files: ["src/index.ts", "src/mcp/protocol.ts", "test/**"],
         rules: {
           "anti-slop/no-unknown-parameters": "off",
         },
