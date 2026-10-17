@@ -450,6 +450,8 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
         ].join("\n"),
         ladder: [
           "-- Home-and-away ladder: played Regular rounds, including Opening Round, excluding VFL's Wildcard.",
+          "-- Derived from played results only. It applies no administrative adjustments, so it can differ from the official ladder:",
+          "-- in AFLM 2015 Adelaide and Geelong each got 2 points for their cancelled match, and in AFLM 2013 Essendon was officially ranked 9th.",
           "-- Bind: competition, canonical season key",
           "SELECT t.name AS team,",
           "  COUNT(*) AS played,",

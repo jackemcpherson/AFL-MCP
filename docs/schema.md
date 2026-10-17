@@ -101,6 +101,11 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   `Cancelled`. `VERIFIED_MATCH_CORRECTIONS` in `src/sync/source-corrections.ts`
   also cancels one AFLM 2015 fixture that the provider reports as a 0-0 draw.
   Count played matches with `status = 'Complete'`, not by non-null scores.
+- Matches hold played results only. No table records administrative ladder
+  decisions, so a ladder derived from results, like the `schema` tool's
+  `ladder` example, can differ from the official one. In AFLM 2015 Adelaide
+  and Geelong each received 2 premiership points for their cancelled match.
+  In AFLM 2013 Essendon kept its points but was officially ranked 9th.
 - Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy `weather_temp_c` / `weather_type` columns.
   These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
   Use `match_weather` for all weather analysis.
