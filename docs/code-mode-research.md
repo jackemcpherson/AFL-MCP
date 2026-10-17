@@ -297,6 +297,10 @@ Official approach: override the console methods inside the sandbox and return
 the lines with the result and with errors ([S1] `executor.ts`, `run-code.ts`).
 [B1] describes the same behaviour.
 
+Status: closed in v5.0.0. The sandbox captures the console methods. It
+returns up to 100 lines and 10,000 characters in a separate text block, both
+with results and with errors.
+
 ### 5. The Result Cap Allows Very Large Outputs
 
 AFL-MCP returns up to 1,000,000 characters, roughly 250,000 tokens. Past the
@@ -307,6 +311,10 @@ Official approach: cap near 6,000 tokens and truncate structurally, with
 markers ([S1] `truncate.ts`, [S2] `src/truncate.ts`). Analytic queries return wide
 tables, so AFL-MCP may want a larger cap than 6,000 tokens. Structural
 truncation still applies at any size and keeps the output valid JSON.
+
+Status: closed in v5.0.0. The cap is 100,000 characters, about 25,000
+tokens, so a wide analytic table still returns a few hundred rows. Results
+past it shrink structurally, with notices that give the full counts.
 
 ### 6. Errors Carry Little Context
 
@@ -393,8 +401,8 @@ types. Options C, D and E cost too much for this Worker.
 - How large is a full `schema` response in tokens? Cloudflare keeps discovery
   output small or moves it into the sandbox. A measurement would show whether
   the `schema` tool needs the same treatment.
-- Should the result cap drop from 1,000,000 characters? Analytic queries
-  return wide tables, so the right figure depends on observed result sizes.
+- Is 100,000 characters the right result cap? v5.0.0 dropped it from
+  1,000,000. Observed result sizes would show whether to move it.
 - Should AFL-MCP attach a Tail Worker for sandbox logs, or rely on returned
   console output only? Returned output helps the model. A Tail Worker helps
   the operator.

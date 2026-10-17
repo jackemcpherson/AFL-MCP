@@ -79,8 +79,8 @@ closed-world. The title repeats in `annotations.title` for 2025-03-26
 clients.
 
 `schema` results and object `code` results add `structuredContent` next to
-the unchanged text block. Array, scalar and truncated `code` results stay
-text only, and error results never carry it. `tools/call` naming an unknown
+the unchanged text block. Array and scalar `code` results stay text only,
+and error results never carry it. `tools/call` naming an unknown
 tool returns JSON-RPC error `-32602`. A call without a string tool name
 returns `-32602` with `Missing tool name`. Both tools reject undeclared
 arguments with an `isError` result that names the key and lists the valid
@@ -136,6 +136,19 @@ that holds TypeScript syntax gets a hint to remove type annotations.
 Each run logs one `tool:code` event with `competition`, `outcome` (`ok` or
 `error`) and, on failure, `errorClass`, such as `SyntaxError` or
 `ReadOnlySqlError`. The event never records the code or the error message.
+
+The sandbox replies with an envelope that holds the value or the thrown
+error, plus captured console lines. `src/sandbox/console.ts` replaces the
+console methods inside the sandbox and bounds the lines to 100 and 10,000
+characters, on both sides of the reply. The lines come back as a second
+`Console output:` text block, after the result or the error. They never
+reach the server logs.
+
+`src/sandbox/truncate.ts` shortens a result whose text form passes 100,000
+characters, about 25,000 tokens. Each pass cuts the largest array or string
+and adds a `--- TRUNCATED ---` notice with the full count, so the result
+stays valid JSON. An object result keeps its keys and its
+`structuredContent`.
 
 The parent Worker exports `DbProxy` as a `WorkerEntrypoint`. The sandbox
 receives only a small, read-only database interface that supports prepared

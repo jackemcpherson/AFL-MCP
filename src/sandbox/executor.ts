@@ -1,7 +1,9 @@
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import type { Env } from "../types";
 import type { TaggedErrorBase } from "../lib/errors";
+import { boundConsoleLines, CONSOLE_CAPTURE_SOURCE } from "./console";
 import { normalizeCode } from "./normalize";
+import { isJsonObject, type JsonValue, truncateResult } from "./truncate";
 
 const SandboxTimeoutErrorBase: TaggedErrorBase<
   SandboxTimeoutError,
@@ -23,15 +25,20 @@ export class SandboxTimeoutError extends SandboxTimeoutErrorBase {
 
 /**
  * Outcome of one sandbox run: the result, or an error message and the
- * error's class name, and the elapsed time.
+ * error's class name, any console output, and the elapsed time.
  */
 export interface ExecuteResult {
-  result: unknown;
+  result: JsonValue;
   error?: string;
   /** Class name of the failure, such as `SyntaxError`. Safe to log: it carries no user text. */
   errorClass?: string;
+  /** Bounded console lines the code wrote, present only when it wrote any. User text: never log it. */
+  logs?: readonly string[];
   execution_time_ms: number;
 }
+
+/** A sandbox run before its elapsed time is added. */
+type RunOutcome = Omit<ExecuteResult, "execution_time_ms">;
 
 /** Message for code that finished without returning anything. */
 const NO_RETURN_VALUE_MESSAGE =
@@ -40,8 +47,12 @@ const NO_RETURN_VALUE_MESSAGE =
 /** Wall-clock execution budget, matching the limit documented by the `tools` tool. */
 const EXECUTION_TIMEOUT_MS = 30_000;
 
-/** Serialized results larger than this are truncated rather than returned whole. */
-const MAX_RESULT_CHARS = 1_000_000;
+/**
+ * Results whose text form is longer than this are shortened structurally.
+ * About 25,000 tokens: room for a few hundred wide rows, inside the default
+ * MCP output budget of common clients.
+ */
+const MAX_RESULT_CHARS = 100_000;
 
 /** Resource limits applied to the sandbox isolate itself. */
 const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
@@ -54,8 +65,8 @@ const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
  * @param env - Worker bindings, including the Worker loader.
  * @param ctx - Execution context that exposes the `DbProxy` entrypoint.
  * @param timeoutMs - Wall-clock budget before the run is abandoned.
- * @returns The serialised result, truncated when too large, or an error
- *   message with its class name.
+ * @returns The result, shortened when too large, or an error message with
+ *   its class name, plus any console output.
  * @example
  * await executeCode("return (await db.prepare('SELECT 1').all()).results", env, ctx);
  */
@@ -86,10 +97,18 @@ export async function executeCode(
               }
             }
           }
-          const __result = await (async () => { ${normalizeCode(code)} })()
-          return new Response(JSON.stringify(__result), {
-            headers: { "Content-Type": "application/json" },
-          })
+${CONSOLE_CAPTURE_SOURCE}
+          const __headers = { "Content-Type": "application/json" }
+          try {
+            const __result = await (async () => { ${normalizeCode(code)} })()
+            const __body = JSON.stringify({ hasValue: __result !== undefined, value: __result, logs: __logs, droppedLogs: __dropped })
+            return new Response(__body, { headers: __headers })
+          } catch (__error) {
+            const error = __error instanceof Error
+              ? { name: __error.name, message: __error.message }
+              : { name: "NonError", message: String(__error) }
+            return new Response(JSON.stringify({ error, logs: __logs, droppedLogs: __dropped }), { headers: __headers })
+          }
         }
       }
     `;
@@ -103,20 +122,9 @@ export async function executeCode(
       limits: SANDBOX_LIMITS,
     });
 
-    const execution = (async (): Promise<unknown> => {
+    const execution = (async (): Promise<RunOutcome> => {
       const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
-      const text = await response.text();
-      // `JSON.stringify(undefined)` is not a string, so a missing return value
-      // arrives as an empty body.
-      if (text === "") {
-        throw new NoReturnValueError();
-      }
-      if (text.length > MAX_RESULT_CHARS) {
-        return `${text.slice(0, MAX_RESULT_CHARS)}\n… [result truncated at ${MAX_RESULT_CHARS} characters — narrow your query with LIMIT or aggregation]`;
-      }
-      // SAFETY: widens `any` to `unknown`. The sandbox result is arbitrary JSON
-      // passed back to the caller unchanged.
-      return JSON.parse(text) as unknown;
+      return readReply(await response.text());
     })();
     // If the timeout wins the race, the abandoned execution promise may still
     // reject later; swallow that so it never becomes an unhandled rejection.
@@ -128,23 +136,84 @@ export async function executeCode(
     });
 
     try {
-      const result = await Promise.race([execution, timeout]);
-      return {
-        result,
-        execution_time_ms: Date.now() - start,
-      };
+      const outcome = await Promise.race([execution, timeout]);
+      return { ...outcome, execution_time_ms: Date.now() - start };
     } finally {
       if (timeoutHandle !== undefined) {
         clearTimeout(timeoutHandle);
       }
     }
   } catch (err) {
-    return {
-      result: null,
-      error: sanitizeErrorMessage(err),
-      errorClass: errorClassOf(err),
-      execution_time_ms: Date.now() - start,
-    };
+    return { ...failure(err, []), execution_time_ms: Date.now() - start };
+  }
+}
+
+/**
+ * Decode the sandbox's reply envelope: the value or the error the code
+ * threw, and its console output.
+ *
+ * @param text - Response body from the sandbox.
+ * @returns The run's outcome, with the result shortened to the cap.
+ */
+function readReply(text: string): RunOutcome {
+  const reply = parseJson(text);
+  if (!isJsonObject(reply)) return failure(new SandboxReplyError(), []);
+  const lines = Array.isArray(reply["logs"]) ? reply["logs"].filter(Predicate.isString) : [];
+  const dropped = Predicate.isNumber(reply["droppedLogs"]) ? reply["droppedLogs"] : 0;
+  const logs = boundConsoleLines(lines, dropped);
+  const thrown = reply["error"];
+  if (isJsonObject(thrown)) {
+    const message = Predicate.isString(thrown["message"]) ? thrown["message"] : "";
+    const name = Predicate.isString(thrown["name"]) ? thrown["name"] : "Error";
+    return failure(Object.assign(new Error(message), { name }), logs);
+  }
+  // A returned `undefined` or function has no JSON form, so `value` is absent.
+  const value = reply["value"];
+  if (reply["hasValue"] !== true || value === undefined) {
+    return failure(new NoReturnValueError(), logs);
+  }
+  return withLogs({ result: truncateResult(value, MAX_RESULT_CHARS) }, logs);
+}
+
+/**
+ * Parse a reply body.
+ *
+ * @param text - Response body from the sandbox.
+ * @returns The parsed JSON, or `null` when the body is not JSON.
+ */
+function parseJson(text: string): JsonValue {
+  try {
+    // SAFETY: JSON.parse returns only JSON values; the reply checks narrow it.
+    return JSON.parse(text) as JsonValue;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A failed run's outcome.
+ *
+ * @param cause - The thrown value.
+ * @param logs - Console lines written before the failure.
+ * @returns The sanitised message, the error class and the lines.
+ */
+function failure(cause: unknown, logs: readonly string[]): RunOutcome {
+  return withLogs(
+    { result: null, error: sanitizeErrorMessage(cause), errorClass: errorClassOf(cause) },
+    logs,
+  );
+}
+
+function withLogs(outcome: RunOutcome, logs: readonly string[]): RunOutcome {
+  return logs.length > 0 ? { ...outcome, logs } : outcome;
+}
+
+/** The sandbox answered with something other than its reply envelope. */
+class SandboxReplyError extends Error {
+  override readonly name = "SandboxReplyError";
+
+  constructor() {
+    super("The sandbox returned an unreadable reply.");
   }
 }
 

@@ -15,6 +15,7 @@ import pkg from "../../package.json";
 import { defaultDeps, handleMcpRequest, type McpDeps } from "../../src/mcp/protocol";
 import type { ExecuteResult } from "../../src/sandbox/executor";
 import { assertReadOnlySql } from "../../src/sandbox/sql-guard";
+import { truncateResult } from "../../src/sandbox/truncate";
 import type { Env } from "../../src/types";
 
 const GOLDEN_DIR = "../fixtures/golden/mcp";
@@ -228,6 +229,44 @@ describe("MCP contract: code tool", () => {
     await expectGolden(
       "code-execution-error",
       await serve(toolCall("code", { code: "while(true){}" }), { deps }),
+    );
+  });
+
+  it("returns console output in a second text block after the result", async () => {
+    const deps = withExecutor({
+      result: { results: [{ team: "Carlton", wins: 12 }], success: true },
+      logs: ["rows: 1", "[warn] slow query"],
+      execution_time_ms: 5,
+    });
+    await expectGolden(
+      "code-console-output",
+      await serve(toolCall("code", { code: "console.log('rows: 1'); return r" }), { deps }),
+    );
+  });
+
+  it("returns console output with an execution error", async () => {
+    const deps = withExecutor({
+      result: null,
+      error: "x is not a function",
+      errorClass: "TypeError",
+      logs: ["before the failure"],
+      execution_time_ms: 3,
+    });
+    await expectGolden(
+      "code-console-error",
+      await serve(toolCall("code", { code: "console.log('before the failure'); x()" }), { deps }),
+    );
+  });
+
+  it("returns a structurally truncated result as valid structured content", async () => {
+    const results = Array.from({ length: 50 }, (_, id) => ({ id, team: `Team ${id}` }));
+    const deps = withExecutor({
+      result: truncateResult({ results, success: true }, 400),
+      execution_time_ms: 5,
+    });
+    await expectGolden(
+      "code-truncated-result",
+      await serve(toolCall("code", { code: "return big" }), { deps }),
     );
   });
 

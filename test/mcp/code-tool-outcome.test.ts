@@ -127,3 +127,44 @@ describe("code tool outcome logging", () => {
     ]);
   });
 });
+
+describe("code tool console output", () => {
+  it("follows a result with a Console output block", async () => {
+    const body = await callCode("return 1", {
+      result: 1,
+      logs: ["a", "[warn] b"],
+      execution_time_ms: 1,
+    });
+    expect(body.result?.content).toEqual([
+      { type: "text", text: "1" },
+      { type: "text", text: "Console output:\na\n[warn] b" },
+    ]);
+  });
+
+  it("follows an error with a Console output block", async () => {
+    const body = await callCode("x()", {
+      result: null,
+      error: "boom",
+      errorClass: "Error",
+      logs: ["before"],
+      execution_time_ms: 1,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content).toEqual([
+      { type: "text", text: "Execution error (1ms): boom" },
+      { type: "text", text: "Console output:\nbefore" },
+    ]);
+  });
+
+  it("adds no block when the code wrote nothing", async () => {
+    const body = await callCode("return 1", { result: 1, execution_time_ms: 1 });
+    expect(body.result?.content).toHaveLength(1);
+  });
+
+  it("never writes console lines to the server log", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await callCode("return 1", { result: 1, logs: ["user secret"], execution_time_ms: 1 });
+    expect(spy.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain("user secret");
+    spy.mockRestore();
+  });
+});

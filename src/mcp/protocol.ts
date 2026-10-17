@@ -121,7 +121,8 @@ const CODE_TOOL_DESCRIPTION = [
   "Do NOT use TypeScript syntax: no type annotations, interfaces, `as` casts or generics. The sandbox does not compile TypeScript, so that code fails to parse.",
   `The \`db\` API, declared in TypeScript for reference:\n${DB_DECLARATION}`,
   "Filter every SQL query by competition with JOIN competitions c ... WHERE c.code = ?, as the schema notes show.",
-  "Sandbox constraints: no network access, no npm imports, 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
+  "console.log, info, warn, error and debug output comes back in a separate Console output block, up to 100 lines and 10,000 characters.",
+  "Sandbox constraints: no network access, no npm imports, 30-second timeout, write/DDL statements rejected, rate limited at 60 requests/minute per IP. Results over 100,000 characters come back shortened but still valid JSON: long arrays keep their first items and end with a --- TRUNCATED --- notice giving the full count, so narrow the query with LIMIT, WHERE or aggregation.",
 ].join("\n\n");
 
 const TOOLS: ToolDefinition[] = [
@@ -220,6 +221,25 @@ function mcpError(message: string) {
   };
 }
 
+/**
+ * Add the code's console output as a second text block. It stays out of
+ * the first block, so that block still holds exactly the result (or the
+ * error), and out of `structuredContent`, which is the result itself.
+ * @param result - A `tools/call` result.
+ * @param logs - Bounded console lines from the sandbox, if any.
+ * @returns The result, with a `Console output:` block when there are lines.
+ */
+function withConsole<T extends { readonly content: ReadonlyArray<{ type: string; text: string }> }>(
+  result: T,
+  logs: readonly string[] | undefined,
+): T {
+  if (logs === undefined || logs.length === 0) return result;
+  return {
+    ...result,
+    content: [...result.content, { type: "text", text: `Console output:\n${logs.join("\n")}` }],
+  };
+}
+
 /** Appended to a syntax error in code that carries TypeScript syntax. */
 const TYPESCRIPT_HINT = "The sandbox runs JavaScript. Remove type annotations.";
 
@@ -299,9 +319,12 @@ async function handleToolCall(
       logCodeOutcome(competition, result);
       if (result.error !== undefined) {
         const message = withTypeScriptHint(result, code);
-        return mcpError(`Execution error (${result.execution_time_ms}ms): ${message}`);
+        return withConsole(
+          mcpError(`Execution error (${result.execution_time_ms}ms): ${message}`),
+          result.logs,
+        );
       }
-      return mcpContent(result.result);
+      return withConsole(mcpContent(result.result), result.logs);
     }
 
     default:

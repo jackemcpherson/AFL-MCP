@@ -48,8 +48,10 @@ Any other value returns an `isError` result that lists the valid codes. The
 argument never changes the submitted SQL. Both tools reject arguments they
 do not declare.
 
-Sandbox constraints (no network, no npm, 30-second timeout, 1 MB result cap,
-60 requests per minute per IP) travel in the `code` tool's description.
+The `code` tool's description lists the sandbox constraints: no network,
+no npm, a 30-second timeout and 60 requests per minute per IP. Results
+over 100,000 characters come back shortened but still valid JSON. Console
+output comes back in its own text block.
 
 **Endpoint:** `https://afl.jackemcpherson.com/mcp`
 

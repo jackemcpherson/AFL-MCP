@@ -82,6 +82,16 @@ the repository to TypeScript standard v4.
   parser message, plus a JavaScript hint when the code holds TypeScript
   syntax. The `tool:code` log event adds `outcome` and, on failure,
   `errorClass`.
+- Breaking: `code` results over 100,000 characters come back shortened
+  but still valid JSON, instead of as a string cut at 1,000,000
+  characters. A long array keeps its first items and ends with a
+  `--- TRUNCATED ---` notice that gives the full count. A long string keeps
+  its start and states its full length. Shortened object results keep
+  `structuredContent`.
+- The `code` tool returns what the code writes with `console.log`,
+  `info`, `warn`, `error` and `debug`, after a result or an error, in a
+  separate `Console output:` text block. It keeps 100 lines and 10,000
+  characters at most. The lines never reach the server logs.
 
 ### Fixed in 5.0.0
 

@@ -1,0 +1,28 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"results\": [\n    {\n      \"id\": 0,\n      \"team\": \"Team 0\"\n    },\n    \"--- TRUNCATED: showing 1 of 50 items. Narrow the query with LIMIT, WHERE or aggregation. ---\"\n  ],\n  \"success\": true\n}"
+        }
+      ],
+      "structuredContent": {
+        "results": [
+          {
+            "id": 0,
+            "team": "Team 0"
+          },
+          "--- TRUNCATED: showing 1 of 50 items. Narrow the query with LIMIT, WHERE or aggregation. ---"
+        ],
+        "success": true
+      }
+    }
+  }
+}
