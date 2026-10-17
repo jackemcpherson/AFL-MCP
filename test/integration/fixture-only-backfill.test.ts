@@ -38,7 +38,9 @@ it("corrects fixtures at the hour without fetching or altering player inputs or 
     const url = requestUrl(input);
     if (url.endsWith("/WMCTok")) return Response.json({ token: "fixture-token" });
     if (url.includes("/competitions/1/compseasons"))
-      return Response.json({ compSeasons: [{ id: 85, name: "2026 Toyota AFL Premiership" }] });
+      return Response.json({
+        compSeasons: [{ id: 85, name: "2026 Toyota AFL Premiership" }],
+      });
     if (url.includes("/compseasons/85/rounds"))
       return Response.json({
         rounds: [{ id: 1, providerId: "TEST-R1", name: "Round 1", roundNumber: 1 }],
@@ -62,7 +64,9 @@ it("corrects fixtures at the hour without fetching or altering player inputs or 
     testCtx(),
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ results: [{ matches: 1, stats: 0, lineups: 0 }] });
+  expect(await response.json()).toMatchObject({
+    results: [{ matches: 1, stats: 0, lineups: 0 }],
+  });
   expect(await env.DB.prepare("SELECT kickoff_at FROM matches").first("kickoff_at")).toBe(
     "2026-03-19T08:30:00.000Z",
   );

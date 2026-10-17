@@ -66,7 +66,11 @@ async function capture(res: Response): Promise<GoldenResponse> {
     if (value !== null) headers[name] = value;
   }
   const text = await res.text();
-  return { status: res.status, headers, body: text === "" ? null : (JSON.parse(text) as unknown) };
+  return {
+    status: res.status,
+    headers,
+    body: text === "" ? null : (JSON.parse(text) as unknown),
+  };
 }
 
 async function expectGolden(name: string, value: unknown): Promise<void> {

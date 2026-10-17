@@ -38,7 +38,7 @@ interface JsonRpcTestResponse {
 }
 
 async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
-  return (await res.json()) as JsonRpcTestResponse;
+  return await res.json<JsonRpcTestResponse>();
 }
 
 // Minimal env stub — tools that don't touch DB don't need it
@@ -252,7 +252,10 @@ describe("handleMcpRequest", () => {
         jsonrpc: "2.0",
         id: 51,
         method: "tools/call",
-        params: { name: "schema", arguments: { includeObserved: true, competition: "AFLM" } },
+        params: {
+          name: "schema",
+          arguments: { includeObserved: true, competition: "AFLM" },
+        },
       }),
       stubEnv,
       stubCtx,
@@ -414,7 +417,10 @@ describe("handleMcpRequest", () => {
             jsonrpc: "2.0",
             id: 20,
             method: "tools/call",
-            params: { name: "code", arguments: { code: "return 1", competition: "AFLW" } },
+            params: {
+              name: "code",
+              arguments: { code: "return 1", competition: "AFLW" },
+            },
           }),
           stubEnv,
           stubCtx,
@@ -470,7 +476,10 @@ describe("handleMcpRequest", () => {
             jsonrpc: "2.0",
             id: 22,
             method: "tools/call",
-            params: { name: "code", arguments: { code: "return 1", competition: "NRL" } },
+            params: {
+              name: "code",
+              arguments: { code: "return 1", competition: "NRL" },
+            },
           }),
           stubEnv,
           stubCtx,

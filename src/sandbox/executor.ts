@@ -24,7 +24,9 @@ export async function executeCode(
   const start = Date.now();
 
   try {
-    // biome-ignore lint/suspicious/noExplicitAny: Dynamic Worker ctx.exports has no public type defs
+    // SAFETY: Dynamic Worker `ctx.exports` has no public type definitions. `DbProxy` is
+    // exported from `src/index.ts`, so the runtime always provides it here.
+    // oxlint-disable-next-line typescript/no-explicit-any
     const dbProxy = (ctx as any).exports.DbProxy({ props: {} });
 
     const wrappedCode = `

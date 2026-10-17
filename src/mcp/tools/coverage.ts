@@ -455,7 +455,11 @@ export const COVERAGE_EXPECTATIONS = {
       ...CORE,
       range: "2017..current",
       expected: "partial",
-      overrides: { brownlow_votes: "not-applicable", supercoach_score: "absent", subbed: "absent" },
+      overrides: {
+        brownlow_votes: "not-applicable",
+        supercoach_score: "absent",
+        subbed: "absent",
+      },
     },
     player_season_pav: {
       ...CORE,
@@ -885,7 +889,7 @@ export async function observeCoverage(
     `https://coverage.internal/v${COVERAGE_CONTRACT_VERSION}/${competition}/${season}`,
   );
   const cached = await cache?.match(key);
-  if (cached) return (await cached.json()) as Awaited<ReturnType<typeof queryObservation>>;
+  if (cached) return await cached.json<Awaited<ReturnType<typeof queryObservation>>>();
   const result = await queryObservation(env, competition, season);
   await cache?.put(
     key,

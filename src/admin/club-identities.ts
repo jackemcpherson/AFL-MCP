@@ -69,7 +69,12 @@ export async function reconcileBearsIdentity(
         await crypto.subtle.digest(
           "SHA-256",
           new TextEncoder().encode(
-            JSON.stringify({ ids: previewIds, report, matchIds, revision: revision.revision }),
+            JSON.stringify({
+              ids: previewIds,
+              report,
+              matchIds,
+              revision: revision.revision,
+            }),
           ),
         ),
       ),

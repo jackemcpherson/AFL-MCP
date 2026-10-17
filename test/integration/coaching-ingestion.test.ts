@@ -184,7 +184,10 @@ describe("coaching ingestion on local D1", () => {
       dbEnv,
       2024,
       "afl-tables",
-      { assignments: [correctedCoach], completeness: { complete: false, failures: [failure] } },
+      {
+        assignments: [correctedCoach],
+        completeness: { complete: false, failures: [failure] },
+      },
       false,
       "2026-10-06T00:00:00Z",
     );

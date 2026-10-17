@@ -133,7 +133,12 @@ it("records provider failure as unknown weather with a real daily retry deadline
   ).toBe(0);
   const retry = await env.DB.prepare(
     "SELECT failures,diagnostic,attempted_at,next_retry_at FROM weather_refresh_state WHERE match_id=804",
-  ).first<{ failures: number; diagnostic: string; attempted_at: string; next_retry_at: string }>();
+  ).first<{
+    failures: number;
+    diagnostic: string;
+    attempted_at: string;
+    next_retry_at: string;
+  }>();
   expect(retry?.failures).toBe(1);
   expect(retry?.diagnostic).toContain("503");
   if (!retry) throw new Error("Missing retry checkpoint");

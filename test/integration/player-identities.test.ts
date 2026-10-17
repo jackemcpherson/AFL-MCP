@@ -173,7 +173,11 @@ it("blocks conflicting birth dates without reparenting appearances", async () =>
   });
   if (!("manifestDigest" in result)) throw new Error("Expected preview");
   await expect(
-    repairPlayerIdentity(env, { ...request, dryRun: false, manifestDigest: result.manifestDigest }),
+    repairPlayerIdentity(env, {
+      ...request,
+      dryRun: false,
+      manifestDigest: result.manifestDigest,
+    }),
   ).rejects.toThrow("dates of birth");
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM player_match_stats").first("n")).toBe(2);
 });

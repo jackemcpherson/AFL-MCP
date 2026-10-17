@@ -193,7 +193,12 @@ describe("coverage contract", () => {
       null: 0,
       ratio: 1,
     });
-    expect(first.pav).toEqual({ unit: "table_rows", rows: 4, known_totals: 3, unknown_totals: 1 });
+    expect(first.pav).toEqual({
+      unit: "table_rows",
+      rows: 4,
+      known_totals: 3,
+      unknown_totals: 1,
+    });
     expect(first.lineups).toEqual({
       unit: "match_presence",
       total_matches: 3,

@@ -20,7 +20,7 @@ async function callCodeTool(code: string): Promise<McpToolResponse> {
     }),
   });
   expect(res.status).toBe(200);
-  return (await res.json()) as McpToolResponse;
+  return await res.json<McpToolResponse>();
 }
 
 describe("sandbox security (end-to-end through the MCP endpoint)", () => {

@@ -85,7 +85,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
     });
     const res = await worker.fetch(req, authedEnv, stubCtx);
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/invalid JSON/i);
   });
 
@@ -96,7 +96,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/competitions/);
   });
 
@@ -107,7 +107,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/competitions/);
   });
 
@@ -118,7 +118,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/invalid competition/i);
   });
 
@@ -129,7 +129,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/fromYear/);
   });
 
@@ -140,7 +140,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/toYear/);
   });
 
@@ -155,7 +155,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
         stubCtx,
       );
       expect(res.status).toBe(400);
-      const body = (await res.json()) as ErrorResponse;
+      const body = await res.json<ErrorResponse>();
       expect(body.error).toMatch(/years must be between/i);
     }
   });
@@ -167,7 +167,7 @@ describe("POST /mcp/admin/backfill — input validation", () => {
       stubCtx,
     );
     expect(res.status).toBe(400);
-    const body = (await res.json()) as ErrorResponse;
+    const body = await res.json<ErrorResponse>();
     expect(body.error).toMatch(/year range too large/i);
   });
 

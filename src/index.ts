@@ -122,7 +122,11 @@ export default {
       } catch (error) {
         if (error instanceof SeasonSelectionError)
           return Response.json(
-            { error: error.message, code: error.code, validSelectors: error.validSelectors },
+            {
+              error: error.message,
+              code: error.code,
+              validSelectors: error.validSelectors,
+            },
             { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
           );
         if (error instanceof OperationConflictError)
@@ -274,7 +278,9 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     const currentYear = new Date().getUTCFullYear();
     if (fromYear !== toYear || fromYear < 1990 || toYear > currentYear) {
       return Response.json(
-        { error: `fromYear and toYear must be the same year between 1990 and ${currentYear}` },
+        {
+          error: `fromYear and toYear must be the same year between 1990 and ${currentYear}`,
+        },
         { status: 400 },
       );
     }

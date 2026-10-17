@@ -505,7 +505,13 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       .bind(digest)
       .run();
     consistent = true;
-    return { busy: false, applied: true, idempotent: false, canonicalId, manifestDigest: digest };
+    return {
+      busy: false,
+      applied: true,
+      idempotent: false,
+      canonicalId,
+      manifestDigest: digest,
+    };
   } finally {
     try {
       if (marked && consistent) await finishPublicInputWrite(env, holder);

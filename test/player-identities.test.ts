@@ -31,7 +31,13 @@ describe("verified identity appearance merging", () => {
   it("rejects text resolutions for numeric statistics", () => {
     expect(() =>
       mergeIdentityAppearances("player_match_stats", rows, 712, [
-        { table: "player_match_stats", matchId: 1, field: "handballs", value: "4", evidence },
+        {
+          table: "player_match_stats",
+          matchId: 1,
+          field: "handballs",
+          value: "4",
+          evidence,
+        },
       ]),
     ).toThrow("must be number");
   });

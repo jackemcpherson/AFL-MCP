@@ -34,7 +34,7 @@ describe("GET /mcp/admin/status", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const response = await worker.fetch(request(), authedEnv, stubCtx);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as AdminStatusResponse;
+    const body = await response.json<AdminStatusResponse>();
     expect(Object.keys(body)).toEqual([
       "status",
       "asOf",

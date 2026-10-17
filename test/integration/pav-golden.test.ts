@@ -618,7 +618,12 @@ function computeExpectedPav(
     if (s.timeOnGroundPercentage <= 0 && s.disposals <= 0) continue;
 
     if (!playerScores.has(s.playerId)) {
-      playerScores.set(s.playerId, { team: s.team, off_score: 0, def_score: 0, mid_score: 0 });
+      playerScores.set(s.playerId, {
+        team: s.team,
+        off_score: 0,
+        def_score: 0,
+        mid_score: 0,
+      });
     }
 
     const ps = mustGet(playerScores, s.playerId);

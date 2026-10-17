@@ -34,7 +34,7 @@ interface JsonRpcTestResponse {
 }
 
 async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
-  return (await res.json()) as JsonRpcTestResponse;
+  return await res.json<JsonRpcTestResponse>();
 }
 
 // Minimal env stub — tools that don't touch DB don't need it

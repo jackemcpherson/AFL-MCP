@@ -179,7 +179,7 @@ function cannedPayload(
  */
 function stubFetch(options: { modelSuffixes?: boolean; temp?: number; status?: number } = {}) {
   const calls: URL[] = [];
-  const impl = (async (input: RequestInfo | URL) => {
+  const impl = async (input: RequestInfo | URL) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     calls.push(url);
     if (options.status !== undefined && options.status !== 200) {
@@ -190,7 +190,7 @@ function stubFetch(options: { modelSuffixes?: boolean; temp?: number; status?: n
     const dayMs = 24 * 60 * 60 * 1000;
     const days = Math.round((Date.parse(endDate) - Date.parse(startDate)) / dayMs) + 1;
     return Response.json(cannedPayload(startDate, days, options));
-  }) as typeof fetch;
+  };
   return { impl, calls };
 }
 
@@ -319,7 +319,11 @@ describe("runWeatherStage — forecasts", () => {
 
     const rows = await weatherRows(match);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ kind: "forecast", temp_c: 18, fetched_at: NOW.toISOString() });
+    expect(rows[0]).toMatchObject({
+      kind: "forecast",
+      temp_c: 18,
+      fetched_at: NOW.toISOString(),
+    });
   });
 
   it("still fetches ambient weather for a roofed venue", async () => {
@@ -343,7 +347,13 @@ describe("runWeatherStage — forecasts", () => {
   it("resolves coordinates through canonical_venue_id for alias venues", async () => {
     const seasonId = await seedSeason();
     await seedVenue({ id: 166, name: "Ninja Stadium", lat: -42.8772, lon: 147.3736 });
-    await seedVenue({ id: 2, name: "Blundstone Arena", lat: null, lon: null, canonicalId: 166 });
+    await seedVenue({
+      id: 2,
+      name: "Blundstone Arena",
+      lat: null,
+      lon: null,
+      canonicalId: 166,
+    });
     const match = await seedMatch({ seasonId, date: "2026-07-16", venueId: 2 });
 
     const { impl, calls } = stubFetch();

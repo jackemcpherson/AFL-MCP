@@ -32,7 +32,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     await seedSyncLog(new Date().toISOString(), null);
     const res = await getHealth();
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string; stale: boolean };
+    const body = await res.json<{ status: string; stale: boolean }>();
     expect(body.status).toBe("ok");
     expect(body.stale).toBe(false);
   });
@@ -41,7 +41,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     await seedSyncLog(new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), null);
     const res = await getHealth();
     expect(res.status).toBe(503);
-    const body = (await res.json()) as { status: string; stale: boolean };
+    const body = await res.json<{ status: string; stale: boolean }>();
     expect(body.status).toBe("unhealthy");
     expect(body.stale).toBe(true);
   });
@@ -55,7 +55,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     await seedSyncLog(new Date().toISOString(), "fetchMatches failed: boom");
     const res = await getHealth();
     expect(res.status).toBe(503);
-    const body = (await res.json()) as { status: string; stale: boolean };
+    const body = await res.json<{ status: string; stale: boolean }>();
     expect(body.status).toBe("unhealthy");
     expect(body.stale).toBe(false);
   });
@@ -76,7 +76,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     );
     const res = await getHealth();
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string };
+    const body = await res.json<{ status: string }>();
     expect(body.status).toBe("ok");
   });
 
@@ -85,7 +85,7 @@ describe("GET /mcp/health (OPS-02)", () => {
     await seedSyncLog(new Date().toISOString(), null, "admin:brownlow-backfill");
     const res = await getHealth();
     expect(res.status).toBe(503);
-    const body = (await res.json()) as { stale: boolean };
+    const body = await res.json<{ stale: boolean }>();
     expect(body.stale).toBe(true);
   });
 
@@ -142,7 +142,7 @@ describe("GET /mcp/health (OPS-02)", () => {
   it("response payload contains exactly the trimmed set of keys", async () => {
     await seedSyncLog(new Date().toISOString(), null);
     const res = await getHealth();
-    const body = (await res.json()) as Record<string, unknown>;
+    const body = await res.json<Record<string, unknown>>();
     expect(Object.keys(body).sort()).toEqual([
       "has_recent_critical_error",
       "last_sync_age_ms",

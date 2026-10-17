@@ -363,9 +363,10 @@ export async function selectCompletedRoundsWithoutLineups(
      ORDER BY m.round_number DESC
      LIMIT ?`,
   );
-  const { results } = await (maxAgeDays === null
-    ? stmt.bind(seasonId, limit)
-    : stmt.bind(seasonId, `-${maxAgeDays} days`, limit)
+  const { results } = await (
+    maxAgeDays === null
+      ? stmt.bind(seasonId, limit)
+      : stmt.bind(seasonId, `-${maxAgeDays} days`, limit)
   ).all<{ round_number: number }>();
   return results.map((r) => r.round_number);
 }

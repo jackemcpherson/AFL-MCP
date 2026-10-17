@@ -39,7 +39,14 @@ describe("upsertStats", () => {
 
     await upsertStats(
       env,
-      [makePlayerStats({ playerId: "P-1", disposals: 25, kicks: 15, timeOnGroundPercentage: 90 })],
+      [
+        makePlayerStats({
+          playerId: "P-1",
+          disposals: 25,
+          kicks: 15,
+          timeOnGroundPercentage: 90,
+        }),
+      ],
       matchMap,
       playerMap,
       teamMap,
@@ -263,7 +270,11 @@ it("applies partial tackle corrections and retains known participation fields", 
     playerMap,
     teamMap,
   );
-  const correction = makePlayerStats({ disposals: null, timeOnGroundPercentage: null, tackles: 7 });
+  const correction = makePlayerStats({
+    disposals: null,
+    timeOnGroundPercentage: null,
+    tackles: 7,
+  });
   expect(await upsertStats(env, [correction], matchMap, playerMap, teamMap)).toBe(1);
   expect(
     await env.DB.prepare(

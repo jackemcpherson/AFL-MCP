@@ -36,7 +36,9 @@ describe("upsertPlayers", () => {
     await upsertPlayers(env, [player]);
     await upsertPlayers(env, [player]);
 
-    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM players").first<{ n: number }>();
+    const count = await env.DB.prepare("SELECT COUNT(*) as n FROM players").first<{
+      n: number;
+    }>();
     expect(count?.n).toBe(1);
   });
 

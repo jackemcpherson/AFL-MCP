@@ -153,7 +153,11 @@ describe("upsertMatches", () => {
     const venueMap = await ensureVenues(env, [initial]);
 
     for (const completedQuarter of [0, 1, 2, 3, 4] as const) {
-      await upsertMatches(env, [{ ...initial, completedQuarter }], { seasonId, teamMap, venueMap });
+      await upsertMatches(env, [{ ...initial, completedQuarter }], {
+        seasonId,
+        teamMap,
+        venueMap,
+      });
       const row = await env.DB.prepare(
         "SELECT completed_quarter FROM matches WHERE external_afl_id = ?",
       )
@@ -274,7 +278,11 @@ describe("upsertMatches", () => {
     const firstChanges = await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
     expect(firstChanges).toBe(1);
 
-    const idempotentChanges = await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
+    const idempotentChanges = await upsertMatches(env, [match], {
+      seasonId,
+      teamMap,
+      venueMap,
+    });
     expect(idempotentChanges).toBe(0);
 
     const corrected = makeMatch({ homePoints: 84, awayPoints: 70 });
@@ -424,7 +432,11 @@ describe("selectCompletedCount", () => {
       upcoming,
     ]);
     const venueMap = await ensureVenues(env, [completed, alsoCompleted, upcoming]);
-    await upsertMatches(env, [completed, alsoCompleted, upcoming], { seasonId, teamMap, venueMap });
+    await upsertMatches(env, [completed, alsoCompleted, upcoming], {
+      seasonId,
+      teamMap,
+      venueMap,
+    });
 
     expect(await selectCompletedCount(env, seasonId)).toBe(2);
   });

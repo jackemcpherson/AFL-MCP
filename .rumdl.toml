@@ -6,6 +6,7 @@ respect-gitignore = true
 # plans, immutable source snapshots, and generated artefacts.
 exclude = [
   "vendor/**",
+  "tools/oxlint/anti-slop/**",
   "generated/**",
   ".venv/**",
   "venv/**",

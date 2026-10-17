@@ -151,9 +151,7 @@ describe("authenticated coaching backfill on local D1", () => {
       await (
         await repair(
           false,
-          (
-            await (await repair(true)).json<{ manifestDigest: string }>()
-          ).manifestDigest,
+          (await (await repair(true)).json<{ manifestDigest: string }>()).manifestDigest,
         )
       ).json(),
     ).toMatchObject({ affectedMatches: 1 });
@@ -222,9 +220,7 @@ describe("authenticated coaching backfill on local D1", () => {
       await (
         await repair(
           false,
-          (
-            await (await repair(true)).json<{ manifestDigest: string }>()
-          ).manifestDigest,
+          (await (await repair(true)).json<{ manifestDigest: string }>()).manifestDigest,
         )
       ).json(),
     ).toMatchObject({

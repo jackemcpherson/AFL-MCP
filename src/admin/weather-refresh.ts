@@ -66,7 +66,10 @@ export async function refreshWeather(
             .first<{ manifest_json: string; status: string }>()
         : null;
     if (prior) {
-      const recorded = JSON.parse(prior.manifest_json) as { context: unknown; evidence: unknown };
+      const recorded = JSON.parse(prior.manifest_json) as {
+        context: unknown;
+        evidence: unknown;
+      };
       if (
         JSON.stringify(recorded.context) !== JSON.stringify(context) ||
         JSON.stringify(recorded.evidence) !== JSON.stringify(request.evidence)

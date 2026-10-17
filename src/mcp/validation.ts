@@ -71,9 +71,10 @@ export const SchemaToolRequestSchema = z
       return;
     }
     const currentMelbourneYear = Number(
-      new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", year: "numeric" }).format(
-        new Date(),
-      ),
+      new Intl.DateTimeFormat("en-AU", {
+        timeZone: "Australia/Melbourne",
+        year: "numeric",
+      }).format(new Date()),
     );
     if (
       Number(String(value.season).slice(0, 4)) < COVERAGE_START_YEAR[value.competition] ||

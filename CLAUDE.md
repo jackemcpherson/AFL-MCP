@@ -20,10 +20,10 @@ For deeper context, read the appropriate doc:
 bun install              # Install dependencies
 bun run dev              # Start local worker (wrangler dev)
 bun run check:schema     # Compare migrated and consolidated schemas
-bun run typecheck        # Type-check without emitting (tsc --noEmit)
-bun run check            # Lint + format check (biome check .)
-bun run format           # Auto-format (biome format --write .)
-bun run test             # Run all tests (vitest)
+bun run check            # Format, lint and type check (vp check)
+bun run format           # Auto-format and apply lint fixes (vp check --fix)
+bun run test             # Run all tests once (vp test --run)
+bunx wrangler deploy --dry-run  # Build the bundle and report its size
 ```
 
 Deploy (GitOps — this repo does NOT self-deploy):
@@ -98,11 +98,12 @@ Validate new boundaries with whichever library the module already uses.
 
 - **Strict TypeScript** — `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
   `noUnusedLocals`, `noUnusedParameters` are all enabled.
-- **No `any`** — Biome enforces `noExplicitAny: "error"`. Use `unknown` and narrow.
+- **No `any`** — Oxlint enforces `typescript/no-explicit-any`. Use `unknown` and narrow.
 - **No `enum`** — use union types instead.
-- **No default exports** — Biome enforces `noDefaultExport: "error"`, with overrides
-  only for `*.config.ts`.
-- **Bun** as package manager, **Biome** for lint+format, **Vitest** for tests.
+- **No default exports** — Oxlint enforces `import/no-default-export`, with overrides
+  only for `*.config.ts`, `*.config.mts` and `src/index.ts`.
+- **Bun** as package manager, **Vite+** (`vp`: Oxlint, Oxfmt, tsgo, Vitest) for
+  checks and tests. Lint and format config lives in `vite.config.ts`.
 - Use Web Standard APIs only (no Bun-specific) — code runs on Cloudflare Workers V8.
 
 ## Documentation (TSDoc)

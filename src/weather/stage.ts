@@ -151,33 +151,27 @@ async function selectNeedsWork(env: Env, now: Date, matchId: number | null): Pro
     selectFinalObservedCandidates(env, now, matchId),
   ]);
   return [
-    ...forecast.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "forecast",
-        source: "best_match",
-        apiBase: FORECAST_API,
-        isDualModel: false,
-      }),
-    ),
-    ...fastObserved.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "observed",
-        source: "historical_forecast",
-        apiBase: HISTORICAL_FORECAST_API,
-        isDualModel: false,
-      }),
-    ),
-    ...finalObserved.map(
-      (candidate): WeatherJob => ({
-        candidate,
-        kind: "observed",
-        source: OBSERVED_FINAL_SOURCE,
-        apiBase: ARCHIVE_API,
-        isDualModel: true,
-      }),
-    ),
+    ...forecast.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "forecast",
+      source: "best_match",
+      apiBase: FORECAST_API,
+      isDualModel: false,
+    })),
+    ...fastObserved.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "observed",
+      source: "historical_forecast",
+      apiBase: HISTORICAL_FORECAST_API,
+      isDualModel: false,
+    })),
+    ...finalObserved.map((candidate): WeatherJob => ({
+      candidate,
+      kind: "observed",
+      source: OBSERVED_FINAL_SOURCE,
+      apiBase: ARCHIVE_API,
+      isDualModel: true,
+    })),
   ];
 }
 

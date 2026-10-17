@@ -76,7 +76,12 @@ it("imports a complete season inside the production D1 request budget", async ()
     new Request("https://afl.test/mcp/admin/backfill-coaches", {
       method: "POST",
       headers: { Authorization: "Bearer budget-test", "Content-Type": "application/json" },
-      body: JSON.stringify({ fromYear: 2024, toYear: 2024, source: "afl-tables", dryRun: false }),
+      body: JSON.stringify({
+        fromYear: 2024,
+        toYear: 2024,
+        source: "afl-tables",
+        dryRun: false,
+      }),
     }),
     { ...env, DB: budget.db, ADMIN_TOKEN: "budget-test" },
     testCtx(),

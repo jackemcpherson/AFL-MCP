@@ -56,7 +56,7 @@ describe("POST /mcp/admin/sync — response shape", () => {
 
     const res = await worker.fetch(makeRequest(), authedEnv, stubCtx);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string; results: unknown };
+    const body = await res.json<{ status: string; results: unknown }>();
     expect(body.status).toBe("ok");
     // Regression guard: the pre-fix code returned { status: "ok" } with
     // no results key, so Array.isArray(undefined) would have been false.

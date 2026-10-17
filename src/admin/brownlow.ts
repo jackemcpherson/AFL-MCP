@@ -260,7 +260,11 @@ export async function backfillBrownlow(
       }
       return {
         httpStatus: 409,
-        body: { status: "blocked", dryRun, seasons: resolved.map(({ summary }) => summary) },
+        body: {
+          status: "blocked",
+          dryRun,
+          seasons: resolved.map(({ summary }) => summary),
+        },
       };
     }
 

@@ -265,7 +265,9 @@ describe("extractHourlySeries", () => {
 
   it("throws when the time axis mixes strings and epochs", () => {
     expect(() =>
-      extractHourlySeries({ hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] } }),
+      extractHourlySeries({
+        hourly: { time: ["2026-07-18T00:00", 42], temperature_2m: [1, 2] },
+      }),
     ).toThrow(/Unexpected Open-Meteo payload/);
   });
 });
