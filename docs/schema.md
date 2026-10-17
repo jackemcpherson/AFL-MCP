@@ -1,15 +1,19 @@
 # Schema Reference
 
-Authoritative source: [`src/db/schema.sql`](../src/db/schema.sql) plus
-migrations in [`src/db/migrations/`](../src/db/migrations). The `schema` MCP
-tool exposes the client contract from `src/mcp/tools/schema.ts`. Update both
-sources when adding columns.
+Two sources of truth sit behind this page:
 
-The D1 database (`afl-stats`) covers four competitions:
-**AFLM**, **AFLW**, **VFL**, **VFLW**. Always filter queries by competition
-(join `seasons` to `competitions`, then use `WHERE c.code = ?`). Without the
-filter, results mix competitions silently because team rows with the same name
-use distinct `team_id` values across competitions.
+- [`src/db/schema.sql`](../src/db/schema.sql) plus the migrations in
+  [`src/db/migrations/`](../src/db/migrations) define tables, columns, types,
+  constraints and indexes.
+- The `schema` MCP tool, built in `src/mcp/tools/schema.ts`, is the client
+  contract. It carries the query rules, per-column value meanings, example
+  joins and the coverage contract. Update it with `schema.sql` when adding
+  columns. The drift test fails CI when a live column is missing from it.
+
+This page keeps the reasons, gotchas and conventions that neither source
+states. The D1 database (`afl-stats`) covers four competitions: **AFLM**,
+**AFLW**, **VFL**, **VFLW**. Filter every query by competition, as the
+`schema` tool's first note describes.
 
 ## Reference Data
 
@@ -25,15 +29,17 @@ sync.
 
 ### `seasons`
 
-One row per `(competition, year)`.
+One row per `(competition, season_key)`, the unique key. `season_key` is the
+year, except AFLW 2022, which has two seasons, `2022-S6` and `2022-S7`, sharing
+`year = 2022`. A `CHECK` constraint allows only those two split keys.
 
-- `(competition_id, year)` UNIQUE.
-- `is_complete` (0/1) - set when every match in the season has finished.
+- `is_complete` is 1 when the season has matches and every match has
+  `home_points`.
 
 ### `teams`
 
-- `(name, competition_id)` UNIQUE - same team across competitions counts as
-  separate rows. Carlton AFLM and Carlton VFL have different `team_id`s.
+- `(name, competition_id)` is unique, so the same club in two competitions is
+  two rows. Carlton AFLM and Carlton VFL have different `team_id`s.
 
 ### `venues`
 
@@ -41,8 +47,9 @@ One row per `(competition, year)`.
 - Geodata (migration [0014](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0014_weather.sql), seeded from `data/venue-geodata.csv`): `latitude`,
   `longitude`, `timezone` (IANA), `roof` (`'retractable'` - Marvel Stadium
   only - or `'none'`), and `canonical_venue_id` pointing sponsor-renamed aliases
-  at the physical ground (self-referencing for canonical rows). All NULL (except
-  `canonical_venue_id`) for the `To Be Confirmed` placeholder venue (id 17748).
+  at the physical ground (self-referencing for canonical rows). Venues the sync
+  inserts later stay `NULL` until classified. The `To Be Confirmed` placeholder
+  venue has `NULL` geodata and points at itself.
 
 ### `players`
 
@@ -67,20 +74,11 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
 - Identity: `(date, home_team_id, away_team_id)` UNIQUE, plus three external IDs
   (`external_afltables_id`, `external_fryzigg_id`, `external_afl_id`).
   Team-id scoping prevents cross-competition collisions.
-- Round columns mirror R fitzRoy's design - store the AFL API's labels directly,
-  no cross-competition normalisation:
-  - `round` - long form (`Round 1`, `Opening Round`, `Wildcard`,
-    `Finals Week 1`, `Grand Final`, plus historical `Elimination Final` /
-    `Qualifying Final` for pre-2020 AFLM, and the AFLM 2026 finals labels
-    `Wildcard Finals` / `Qualifying & Elimination Finals`).
-  - `round_abbreviation` - AFL standard short codes (`Rd N`, `OR`, `WC`,
-    `FW1`, `SF`, `PF`, `GF`, plus `EF`/`QF` for pre-2020 AFLM). Finals round
-    names without a mapped short form fall back to `F<round_number>` (AFLM
-    2026: `F25`, `F26`).
-  - `round_number` - per-season ordinal, continuous through finals.
-  - `round_type` - `'Regular'`, including Opening Round and Wildcard, or
-    `'Finals'`. Round numbers do not align across competitions. Use
-    `round_abbreviation` for cross-competition filters.
+- Round columns mirror R fitzRoy's design: they store the AFL API's labels
+  directly, with no cross-competition normalisation. The `schema` tool's rounds
+  note lists the labels and how to query them. fitzroy's `roundAbbreviation`
+  maps only known names, so a finals name it does not know, such as the 2026
+  `Wildcard Finals`, gets `F<round_number>`.
 - Indexed on `date`, `season_id`, `home_team_id`, `away_team_id`, `venue_id`,
   and conditionally on `external_afl_id`.
 - See [`sync.md`](./sync.md#round-labels) for the full label rules.
@@ -99,8 +97,10 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   five-minute sync does not make it a live siren signal.
 - Every row has a `status` (`Upcoming`, `Live`, `Complete`,
   `Postponed`, `Cancelled`). Migration [0017](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0017_backfill_match_status.sql) backfilled played matches as
-  `Complete`. It marked the 38 score-less VFL/VFLW 2021 COVID-era matches
-  `Cancelled`. NULL scores on a `Cancelled` row indicate cancellation.
+  `Complete` and marked score-less VFL/VFLW 2021 COVID-era matches
+  `Cancelled`. `VERIFIED_MATCH_CORRECTIONS` in `src/sync/source-corrections.ts`
+  also cancels one AFLM 2015 fixture that the provider reports as a 0-0 draw.
+  Count played matches with `status = 'Complete'`, not by non-null scores.
 - Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy `weather_temp_c` / `weather_type` columns.
   These held frozen fryzigg daily maxima for AFLM 2010 - 2025.
   Use `match_weather` for all weather analysis.
@@ -124,7 +124,8 @@ Current selected squads, observed before player statistics exist and refreshed
 when late team changes arrive.
 
 - `(match_id, player_id)` UNIQUE.
-- `is_emergency`, `is_substitute` flags.
+- `is_emergency` marks `EMERG` rows. `is_substitute` marks only the medical
+  substitute (`SUB`). Interchange (`INT`) rows have both flags 0.
 - AFLM and AFLW replacements require both complete team selections, unique
   players, resolved player identities, and matching fixture ownership.
   Non-emergency sizes are 23 for AFLM and 21 for AFLW, including interchange and
@@ -144,19 +145,16 @@ when late team changes arrive.
 ### `match_weather`
 
 Match-window weather from Open-Meteo (CC-BY 4.0), keyed `(match_id, kind)` - at
-most two rows per match.
+most two rows per match. The `schema` tool's `match_weather` entry defines
+`kind`, the window and aggregate for every metric, and the `source` values.
 
-- `kind` is `'forecast'` (fetched ≤7 days out, overwritten in place per refresh,
-  kept after the match for forecast-error analysis) or `'observed'`.
-- Metrics cover the 3 hours from scheduled start: `temp_c` and `humidity_pct`
-  are means, `precip_mm` a total, `wind_speed_kmh` and `wind_gust_kmh` maxima.
-  `precip_24h_prior_mm` totals the 24 hours before the window (ground
-  condition).
-- `source` records provenance. `'era5_land+era5'` provides final reanalysis,
-  with temperature, humidity, and wind from ERA5-Land and precipitation from ERA5.
-  `'historical_forecast'` provides interim observations until six days after the
-  match. `'best_match'` identifies forecast rows.
-- Cancelled matches and the placeholder venue (17748) never get rows.
+- The sync fetches a forecast once a match is at most 7 days out
+  (`FORECAST_HORIZON_DAYS`) and refreshes it daily, then hourly on match day.
+- An interim `historical_forecast` observation becomes final `era5_land+era5`
+  reanalysis 6 days after the match (`ERA5_LAG_DAYS`).
+- The sync skips cancelled matches and venues without geodata, such as the
+  `To Be Confirmed` placeholder. A few unclassified venues still hold observed
+  rows from the historical backfill.
 - This table is the only weather source. Migration [0020](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0020_drop_legacy_weather_columns.sql) dropped the legacy
   fryzigg `matches.weather_temp_c` / `weather_type` columns.
 
@@ -174,8 +172,9 @@ mid-season has separate rows per club.
 - Recalculated from `player_match_stats` by `recalculatePav` whenever the sync
   writes new stats.
 - Available for **AFLM 1998+ and AFLW 2017+ only**. VFL/VFLW have no PAV rows
-  because the AFL API does not populate the formula's inputs. Use `LEFT JOIN`
-  when combining with `player_match_stats`.
+  because the AFL API does not populate the formula's inputs. The `schema`
+  tool's `player_season_pav` entry covers rounding, zones, the rating scale and
+  the `LEFT JOIN` rule.
 
 ### `match_predictions`
 
@@ -268,8 +267,10 @@ coach remain present.
   timestamps, secondary-only observations and diagnostics do not change it.
   `in_progress` and `write_started_at` let a publisher reject reads during a
   shared-lease write. Read the marker before and after a snapshot. Retry when
-  revisions differ or when a write is active. A marker older than the
-  ten-minute lease window still requires operator recovery before publication.
+  revisions differ or when a write is active. The scheduled sync resumes a
+  marker left by its own interrupted run on the next tick. Any other marker
+  older than the ten-minute lease window requires operator recovery before
+  publication.
 
 Join `match_coaches` on the home team and again on the away team.
 Left join `coaches` for the names. Always filter via
@@ -286,12 +287,13 @@ Historical AFLM identities are Brisbane Bears through 1996, Fitzroy, and
 Brisbane Lions. The authenticated `/mcp/admin/reconcile-bears` operation first
 returns a dry-run reference-count report. Write mode moves the bounded
 pre-1997 Bears match sides and dependent team references while preserving match
-IDs and provider mappings. Separate club IDs do not reset ELO ratings.
+IDs and provider mappings. Separate club IDs need not reset ratings: an ELO
+model may carry ratings across the Bears-to-Lions transition.
 
 ## Coverage Contract
 
 The no-argument `schema` call returns deterministic static expectations in
-`database.coverage_contract` (version 3) and performs no D1 reads. Each table
+`database.coverage_contract` (version 4) and performs no D1 reads. Each table
 declares a default (`range`, `expected`, `source`) that applies to every
 column. `columns` lists only exceptions that deviate from that default. A
 `how_to_read` key in the response explains the encoding, and a single
@@ -299,12 +301,15 @@ column. `columns` lists only exceptions that deviate from that default. A
 
 Call `schema` with one `competition` and nothing else to get the same static
 schema filtered to that competition (its `competitions` entry and
-`coverage_contract` subtree). Tables and notes are competition-agnostic and
-unchanged).
+`coverage_contract.by_competition` subtree). Tables, notes and joins are
+competition-agnostic and unchanged.
 
-Call `schema` with `includeObserved: true`, one `competition`, and one integer
-`season` to attach a bounded measurement as a sibling `observed` block beside
-the static contract (measurements never mutate expectations). Stats, PAV,
+Call `schema` with `includeObserved: true`, one `competition`, and one `season`
+to attach a bounded measurement as a sibling `observed` block. The `season` is
+a year, or `2022-S6` / `2022-S7` for AFLW 2022. Measurements sit beside the
+static contract and never change its expectations.
+
+Stats, PAV,
 lineup presence, and coaching use bounded aggregates. The Worker caches successful
 results for 15 minutes. A zero-row observation does not prove absence. Invalid
 or broad requests fail before D1 access with a single error stating the full
@@ -318,7 +323,7 @@ Operational tables record sync outcomes and coordinate exclusive work.
 ### `sync_log`
 
 Append-only log of sync ticks that did work or errored. Columns: `timestamp`,
-`type`, such as `sync:AFLM`, `sync:VFL`, `pav_recalculation:AFLW`,
+`type` (such as `sync:AFLM`, `sync:VFL`, `pav_recalculation:AFLW`,
 `backfill:AFLM:2024`, `admin:brownlow-backfill`), `rows_affected`, `error`.
 Brownlow operations record bounded error codes instead of upstream rows or IDs.
 Successful no-op ticks are not logged.
