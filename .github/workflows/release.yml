@@ -36,6 +36,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bash scripts/resolve-release.sh
 
+  # Kept on purpose. deploy.yml only checks main commits that touch its
+  # paths, so the tagged SHA may have no check run of its own to verify.
   check:
     needs: resolve
     name: CI checks

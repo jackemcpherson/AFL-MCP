@@ -144,7 +144,8 @@ Vitest 5.
 ### Deployment
 
 The repository does not deploy itself. Merging to `main` publishes the
-bundle and D1 migrations to R2. The cloudflare-infra GitOps pipeline
+bundle and D1 migrations to R2. CI builds the bundle once and the publish
+job uploads those exact bytes. The cloudflare-infra GitOps pipeline
 promotes a commit, applies its migrations, then uploads the Worker. To
 check the bundle locally:
 

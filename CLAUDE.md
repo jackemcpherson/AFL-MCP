@@ -37,6 +37,14 @@ BEFORE uploading the Worker, so migrations must be backwards-compatible
 with the previous Worker version (expand-contract). `wrangler deploy` by
 hand is break-glass only.
 
+CI (`ci.yml`) runs once per PR head, not on branch pushes. The main
+ruleset requires its `check` job with an up-to-date branch. On merge,
+`deploy.yml` calls `ci.yml`, which bundles the Worker once and hands that
+bundle to the publish job, so R2 gets the bytes CI checked. `release.yml`
+re-runs `ci.yml` on the tagged SHA because a main commit outside
+`deploy.yml`'s paths has no check run. CI needs Node 24 for `vp` (unit
+tests differ under Bun's node shim) and Bun for install and scripts.
+
 ## AFL Season Structure (footgun)
 
 Never filter or group match data by round name or `round_number` alone — use
