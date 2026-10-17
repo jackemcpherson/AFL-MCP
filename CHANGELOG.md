@@ -5,6 +5,30 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1] - 2026-10-17
+
+This patch corrects `schema` tool examples and notes from an external v5
+test report. The `code` sandbox, the views and the data do not change.
+
+### Fixed in 5.0.1
+
+- `lineup_round_comparison` compares two matches by id instead of two
+  round numbers. It binds competition, team name, current match id and
+  previous match id. Each row gives the player id and the match id and date
+  it came from. Double-game weeks and the 2010 Grand Final replay no longer
+  repeat players or hide changes inside a round.
+- `player_career_arc` selects `season_key` and groups by season, so AFLW
+  2022-S6 and 2022-S7 come back as separate, labelled rows.
+- The `ladder` example says it derives standings from played results only
+  and applies no administrative adjustments. AFLM 2015 Adelaide and Geelong
+  and AFLM 2013 Essendon are the examples given.
+- The integrity note says `v_integrity_quarter_scores` also lists matches
+  decided in extra time, such as match 409, because extra-time periods are
+  not stored.
+- The 5.0.0 entry and the docs now say a `code` syntax error carries a line
+  and column only when the runtime reports a position. Production errors
+  give the message and hint without one.
+
 ## [5.0.0] - 2026-10-17
 
 This release has breaking changes to the MCP tool contract. It also moves
