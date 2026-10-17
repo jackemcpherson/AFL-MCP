@@ -13,9 +13,7 @@ const ignorePatterns = [
 
 export default defineConfig({
   lint: {
-    // Scripts and the Vitest config sit outside tsconfig.json, so `typeCheck` would check them
-    // without Node types. #218 adds tsconfig.node.json and removes these two entries.
-    ignorePatterns: [...ignorePatterns, "scripts/**", "vitest.config.mts"],
+    ignorePatterns,
     plugins: ["typescript", "import"],
     options: {
       typeAware: true,
