@@ -1,6 +1,7 @@
 import { Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { memoryCache, scriptedD1, testEnv } from "#test/fixtures";
+import { describeIssue } from "../../../src/lib/decode";
 import {
   ANALYTICS_COLUMNS,
   COVERAGE_COMPETITIONS,
@@ -9,7 +10,6 @@ import {
   observeCoverage,
 } from "../../../src/mcp/tools/coverage";
 import { getSchemaInfo } from "../../../src/mcp/tools/schema";
-import { describeIssue } from "../../../src/lib/decode";
 import { decodeSchemaToolRequest, SCHEMA_TOOL_CONTRACT } from "../../../src/mcp/validation";
 
 function observationEnv() {
@@ -111,6 +111,9 @@ describe("coverage contract", () => {
 
     expect(Object.keys(filtered.database.competitions)).toEqual(["AFLW"]);
     expect(Object.keys(filtered.database.coverage_contract.by_competition)).toEqual(["AFLW"]);
+    expect(filtered.database.coverage_contract.coaching_contract.by_competition).toEqual({
+      AFLW: { range: "all", expected: "not-applicable", source: [] },
+    });
     expect(filtered.database.coverage_contract.version).toBe(4);
     // The reading key survives the filter path.
     expect(filtered.database.coverage_contract.how_to_read).toContain("exceptions");

@@ -64,8 +64,14 @@ function negotiateProtocolVersion(requested: unknown): string {
     : LATEST_PROTOCOL_VERSION;
 }
 
-/** Server-level guidance returned from `initialize`. */
-const INSTRUCTIONS = `Call the schema tool first to learn the tables, per-competition coverage and query API before writing code. The database holds four competitions (${COMPETITION_CODES.join(", ")}), so always filter SQL by competition (JOIN competitions c WHERE c.code = ?).`;
+/**
+ * Session-wide guidance returned from `initialize`. Each rule has one home:
+ * tool descriptions say only what triggers the tool and what its arguments
+ * mean, and the competition-filter guardrail sits on the `code` tool, where
+ * the model writes SQL.
+ */
+const INSTRUCTIONS =
+  "Call the schema tool before your first code call. It returns the tables, query rules, per-competition coverage and query API that code-tool queries depend on.";
 
 /**
  * Both tools only read the database and touch no outside system.
@@ -91,8 +97,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "schema",
     title: "Database schema",
-    description:
-      "Get the database schema for the multi-competition Australian football database (AFLM, AFLW, VFL, VFLW): table definitions, column details, per-competition coverage, join patterns, and query API reference. Call this first to understand what data is available before writing code. Valid calls: no params (full schema); competition alone (schema filtered to that competition); competition + season + includeObserved:true (measured coverage for that competition-season). Any other combination is an error.",
+    description: `Get the schema of the Australian football database: table definitions, column details, query rules, per-competition coverage, join patterns and query API. ${SCHEMA_TOOL_CONTRACT}`,
     inputSchema: {
       type: "object",
       properties: {
@@ -124,20 +129,19 @@ const TOOLS: ToolDefinition[] = [
     name: "code",
     title: "Run query code",
     description:
-      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database (AFLM, AFLW, VFL, VFLW) via the `db` variable. The code must return a JSON-serialisable value. Always filter your SQL by competition (JOIN competitions c WHERE c.code = ?); the optional `competition` argument is a hint indicating which competition the query is about, but does NOT auto-inject SQL — you must still write the filter. Call schema first to understand the database structure. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
+      "Execute TypeScript code in an isolated sandbox with read-only access to the Australian football D1 database via the `db` variable. The code must return a JSON-serialisable value. Filter every SQL query by competition with JOIN competitions c ... WHERE c.code = ?, as the schema notes show. Sandbox constraints: no network access, no npm imports (standard TypeScript/JavaScript only), 30-second timeout, write/DDL statements rejected, results over 1 MB truncated (narrow with LIMIT or aggregation), rate limited at 60 requests/minute per IP.",
     inputSchema: {
       type: "object",
       properties: {
         code: {
           type: "string",
-          description:
-            "TypeScript code to execute. Has access to `db` (D1Database). Must return a value.",
+          description: "TypeScript code to execute, with `db` (D1Database) in scope.",
         },
         competition: {
           type: "string",
           enum: [...COMPETITION_CODES],
           description:
-            "Optional. Hint indicating which competition the query is about (AFLM, AFLW, VFL, VFLW). Does NOT auto-inject SQL — you are still responsible for filtering via JOIN competitions c WHERE c.code = ?.",
+            "Optional hint naming the competition the query is about. It adds no SQL filter.",
         },
       },
       required: ["code"],

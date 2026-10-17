@@ -57,6 +57,11 @@ describe("schema tool vs live D1 schema", () => {
     }
   });
 
+  it("documents no internal table", async () => {
+    const documented = Object.keys((await getSchemaInfo()).database.tables);
+    expect(documented.filter((name) => INTERNAL_TABLES.has(name))).toEqual([]);
+  });
+
   it("covers every live analytics table with a default and only real columns as exceptions", async () => {
     const schema = await getSchemaInfo();
     const contract = schema.database.coverage_contract.by_competition;

@@ -32,8 +32,11 @@ the repository to TypeScript standard v4.
   unknown carry `id: null` instead of `0`.
 - Both tools carry a `title` and annotations that mark them read-only,
   non-destructive, idempotent and closed-world. `initialize` returns
-  server instructions to call `schema` first and always filter by
-  competition.
+  server instructions to call `schema` before the first `code` call.
+- Agent guidance has one home per rule. The `code` tool description holds
+  the competition-filter rule, and tool descriptions no longer repeat the
+  call-`schema`-first rule. The `schema` description lists the same valid
+  calls as its argument errors.
 - `schema` results and object `code` results add `structuredContent`
   next to the unchanged text block. Other `code` results stay text only.
 - Breaking: `tools/call` naming an unknown tool returns JSON-RPC error
@@ -64,6 +67,11 @@ the repository to TypeScript standard v4.
   first. It corrects stale notes. The `ladder` example counts only
   completed home-and-away matches, and `lineup_round_comparison` stays
   within one season.
+- `schema` with `competition` alone also filters
+  `coverage_contract.coaching_contract` to that competition.
+- `schema` no longer documents the internal coach import tables
+  `coach_backfill_progress`, `coach_import_pages` and
+  `coach_import_diagnostics`.
 
 ### Fixed in 5.0.0
 

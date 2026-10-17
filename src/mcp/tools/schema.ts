@@ -27,9 +27,16 @@ export interface CompetitionSummary {
 
 /**
  * The coverage contract as the schema tool returns it. A competition filter
- * keeps only that competition's `by_competition` entry.
+ * keeps only that competition's `by_competition` entries, in both the
+ * coverage and the coaching contract.
  */
-export type SchemaCoverageContract = Omit<CoverageContract, "by_competition"> & {
+export type SchemaCoverageContract = Omit<
+  CoverageContract,
+  "by_competition" | "coaching_contract"
+> & {
+  readonly coaching_contract: {
+    readonly by_competition: Partial<CoverageContract["coaching_contract"]["by_competition"]>;
+  };
   readonly by_competition: Partial<Record<CoverageCompetition, ContractCoverage>>;
 };
 
@@ -49,14 +56,11 @@ export type SchemaTable =
   | "match_lineups"
   | "match_weather"
   | "match_predictions"
-  | "coach_backfill_progress"
   | "coaches"
   | "coach_external_ids"
   | "coach_external_match_ids"
   | "coach_observations"
   | "match_coaches"
-  | "coach_import_pages"
-  | "coach_import_diagnostics"
   | "public_input_revision";
 
 /** A named example query in the `schema` tool response. */
@@ -114,8 +118,9 @@ function competitionSummaries<C extends CoverageCompetition>(
  * Three shapes, matching the schema tool's parameter contract:
  * - No options: the full schema for all four competitions.
  * - `competition` alone: the base schema filtered to that competition —
- *   `database.competitions` and `coverage_contract.by_competition` contain
- *   only that competition; tables, notes, and join examples are unchanged.
+ *   `database.competitions`, `coverage_contract.by_competition` and
+ *   `coverage_contract.coaching_contract.by_competition` contain only that
+ *   competition; tables, notes, and join examples are unchanged.
  * - `competition` + `season` + `includeObserved: true`: the full schema with
  *   one bounded competition-season observation overlaid.
  *
@@ -132,6 +137,11 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
   const coverageResponse = baseFilter
     ? {
         ...coverage,
+        coaching_contract: {
+          by_competition: {
+            [baseFilter]: coverage.coaching_contract.by_competition[baseFilter],
+          },
+        },
         by_competition: { [baseFilter]: coverage.by_competition[baseFilter] },
       }
     : coverage;
@@ -150,7 +160,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
       // Cross-cutting rules every query needs. Table-specific caveats sit with
       // their table in `tables`.
       notes: [
-        "Filter every query by competition: JOIN seasons s ON m.season_id = s.id JOIN competitions c ON s.competition_id = c.id WHERE c.code = ?. Each competition has its own team rows (Carlton AFLM and Carlton VFL have distinct team_id values), so an unfiltered query silently mixes competitions and double-counts aggregates. One player_id can play in two competitions in one season (an AFLM-listed player in VFL), so resolve a stat row's competition through match → season → competition.",
+        "Competition filter path: JOIN seasons s ON m.season_id = s.id JOIN competitions c ON s.competition_id = c.id WHERE c.code = ?. Each competition has its own team rows (Carlton AFLM and Carlton VFL have distinct team_id values), so an unfiltered query silently mixes competitions and double-counts aggregates. One player_id can play in two competitions in one season (an AFLM-listed player in VFL), so resolve a stat row's competition through match → season → competition.",
         "Select seasons by seasons.season_key: 'YYYY', except AFLW 2022, which has two seasons, '2022-S6' and '2022-S7'. A year filter merges them.",
         "Rounds: `round` is the AFL API's long label, `round_abbreviation` its short form ('Rd N', 'OR', 'WC', 'FW1', 'QF', 'EF', 'SF', 'PF', 'GF'; unmapped finals names become 'F<round_number>'), `round_type` is 'Regular' or 'Finals', and `round_number` is a per-season ordinal continuous through finals. Opening Round (AFLM 2024+, round_number 0) precedes Round 1 and is a Regular round: include it. VFL's 'Wildcard' round before finals is also Regular. Finals names vary by competition and era ('Finals Week 1', 'Qualifying Final', 'Elimination Final', 'Semi Finals', 'Preliminary Finals', 'Grand Final', and from 2026 'Wildcard Finals' and 'Qualifying & Elimination Finals'), so select finals with round_type = 'Finals' and a specific final with `round`. round_number differs across competitions and seasons (AFLM 2024 finals are 25-28, AFLW 2025 finals 13-16, VFL 2025 Wildcard 22 then finals 23-26; AFLM R1 is March, AFLW R1 August, VFL R1 April): compare rounds within one season, or by date.",
         "Played matches have status = 'Complete'. 'Live' rows carry partial scores. 'Cancelled' rows (COVID-era VFL/VFLW 2021 and one AFLM 2015 match) were not played: their NULL scores mean cancelled, not missing, and a recorded score there is not a result.",
@@ -291,8 +301,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "generated_at TEXT (UTC ISO 8601, actual generation time).",
           "One retained row per match, combining chronological season backfill with real-time Tipper predictions: read both together for season performance, and LEFT JOIN to report missing predictions. Both values take the HOME team's perspective. The tipped winner is home when home_win_prob >= 0.5, else away (not the rounded margin).",
         ].join(" "),
-        coach_backfill_progress:
-          "provider TEXT, season INTEGER, cursor TEXT, assignments_json TEXT, updated_at TEXT, PRIMARY KEY (provider, season)",
         coaches:
           "id TEXT PRIMARY KEY, display_name TEXT, profile_url TEXT, created_at TEXT. Coach IDs are provider-qualified unless a cross-provider match has been explicitly verified.",
         coach_external_ids:
@@ -303,10 +311,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "id INTEGER PRIMARY KEY, provider TEXT ('afl-tables' | 'footywire'), external_coach_id TEXT, external_match_id TEXT, coach_id TEXT, match_id INTEGER, team_id INTEGER, season INTEGER, source_url TEXT, retrieved_at TEXT, match_date TEXT, display_name TEXT, raw_team TEXT, home_points INTEGER, away_points INTEGER. Keeps each provider's evidence independently. FootyWire is comparison-only and never replaces the canonical AFL Tables assignment; source disagreements stay queryable here.",
         match_coaches:
           "match_id INTEGER REFERENCES matches(id), team_id INTEGER REFERENCES teams(id), coach_id TEXT REFERENCES coaches(id), observation_id INTEGER REFERENCES coach_observations(id), updated_at TEXT, PRIMARY KEY (match_id, team_id). Canonical AFL Tables assignments: at most one credited coach per match and participant club. LEFT JOIN it to keep unknown assignments.",
-        coach_import_pages:
-          "provider TEXT, season INTEGER, scope TEXT, status TEXT, last_checked_at TEXT, last_success_at TEXT, failure_count INTEGER",
-        coach_import_diagnostics:
-          "id INTEGER PRIMARY KEY, provider TEXT, season INTEGER, scope TEXT, source_url TEXT, reason TEXT, created_at TEXT, resolved_at TEXT",
         public_input_revision:
           "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT, write_holder TEXT (opaque operation ownership), write_operation TEXT (resumable operation identity). A monotonic input-change marker: revision changes for meaningful match result or canonical coach changes. Read revision, in_progress and write_started_at before and after a native snapshot; retry on a revision difference or any active write. The scheduled sync resumes a marker left by its own interrupted run on the next tick; any other stale marker requires operator recovery after checking the shared lease and incomplete work. Last-check timestamps, secondary observations, diagnostics and coverage checks do not change the revision.",
       },

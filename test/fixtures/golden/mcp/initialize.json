@@ -15,7 +15,7 @@
         "name": "afl-mcp",
         "version": "<package.json version>"
       },
-      "instructions": "Call the schema tool first to learn the tables, per-competition coverage and query API before writing code. The database holds four competitions (AFLM, AFLW, VFL, VFLW), so always filter SQL by competition (JOIN competitions c WHERE c.code = ?)."
+      "instructions": "Call the schema tool before your first code call. It returns the tables, query rules, per-competition coverage and query API that code-tool queries depend on."
     }
   }
 }

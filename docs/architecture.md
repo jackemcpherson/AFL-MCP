@@ -18,8 +18,14 @@ up as a reviewed test diff.
 
 `initialize` negotiates revisions 2025-11-25, 2025-06-18 and 2025-03-26. It
 echoes a supported requested revision and otherwise answers 2025-11-25. The
-result carries server `instructions`: call `schema` first, and always filter
-SQL by competition.
+result carries server `instructions` to call `schema` before the first `code`
+call.
+
+Each piece of agent guidance has one home. The instructions hold the
+session-wide rules, and each tool description holds what triggers the tool
+and what its arguments mean. The competition-filter guardrail sits in the
+`code` tool description, where the model writes SQL. The `schema` description
+and its argument errors share `SCHEMA_TOOL_CONTRACT`.
 
 ### Transport
 
