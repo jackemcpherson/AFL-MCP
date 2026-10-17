@@ -195,7 +195,9 @@ Two round-string columns on `matches`:
 
 - `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024+,
   `round_number = 0`), `Wildcard` (VFL before finals, through 2025), and a
-  finals name that varies by competition and era. AFLM used
+  finals name that varies by competition and era. AFLW 2024 is the
+  exception for numbered rounds: the API labels them `Week 1` to `Week 10`,
+  with `round_abbreviation` `Rd N` and `round_number` 1 to 10. AFLM used
   `Qualifying Final` and `Elimination Final` through 2014 and
   `Finals Week 1` from 2015. Later weeks are `Semi Finals`,
   `Preliminary Finals` and `Grand Final`. From 2026 AFLM and VFL open the

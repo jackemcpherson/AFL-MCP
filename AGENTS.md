@@ -55,6 +55,9 @@ rounds outside standard numeric ordering:
   `round = 'Opening Round'`, `round_abbreviation = 'OR'`, `round_number = 0`.
   The 2026 Opening Round had 5 games.
 - Numbered rounds: `round = 'Round N'`, `round_abbreviation = 'Rd N'`.
+  Exception: AFLW 2024 stores its home-and-away rounds as
+  `round = 'Week N'` (`Week 1` to `Week 10`), with `round_abbreviation =
+  'Rd N'`, `round_number` 1 to 10 and `round_type = 'Regular'`.
 - VFL `Wildcard` (`WC`) before finals is a Regular round. From 2026 the
   finals open with `Wildcard Finals` instead.
 - Finals: `round` names vary by competition and era, for example
@@ -65,7 +68,9 @@ rounds outside standard numeric ordering:
   `F<round_number>`. Select finals with `round_type = 'Finals'` (the other
   value is `'Regular'`). The `schema` tool's rounds note holds the full rule.
 
-This rule applies to freshness checks, ETL logic, and any match query.
+Labels change by competition and season, so a round-name filter silently
+misses whole seasons. Filter by date or match count instead. This rule
+applies to freshness checks, ETL logic, and any match query.
 
 ## Sync Cadence
 
