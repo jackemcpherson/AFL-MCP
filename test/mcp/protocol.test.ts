@@ -1,19 +1,8 @@
 import { Predicate } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import pkg from "../../package.json";
-
-// Mock the cloudflare:workers module that executor.ts imports
-vi.mock("cloudflare:workers", () => ({
-  WorkerEntrypoint: class {},
-}));
-
-// Mock the executor so code-tool tests don't need a live sandbox
-vi.mock("../../src/sandbox/executor", () => ({
-  executeCode: vi.fn().mockResolvedValue({ result: "ok", execution_time_ms: 5 }),
-}));
-
 import { scriptedD1, testCtx, testEnv } from "#test/fixtures";
-import { defaultDeps, handleMcpRequest } from "../../src/mcp/protocol";
+import pkg from "../../package.json";
+import { defaultDeps, handleMcpRequest, type McpDeps } from "../../src/mcp/protocol";
 import type { Env } from "../../src/types";
 
 function makeRequest(body: unknown, method = "POST"): Request {
@@ -45,6 +34,12 @@ async function parseJson(res: Response): Promise<JsonRpcTestResponse> {
 // Minimal env stub — tools that don't touch DB don't need it
 const stubEnv = testEnv();
 const stubCtx = testCtx();
+
+// Code-tool tests run against a canned executor instead of a live sandbox.
+const okDeps: McpDeps = {
+  ...defaultDeps,
+  executeCode: async () => ({ result: "ok", execution_time_ms: 5 }),
+};
 
 function observedSchemaEnv(): Env {
   const rows = [
@@ -426,6 +421,7 @@ describe("handleMcpRequest", () => {
           }),
           stubEnv,
           stubCtx,
+          okDeps,
         );
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();
@@ -454,6 +450,7 @@ describe("handleMcpRequest", () => {
           }),
           stubEnv,
           stubCtx,
+          okDeps,
         );
         const json = await parseJson(res);
         expect(json.result?.isError).toBeFalsy();

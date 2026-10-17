@@ -2,8 +2,6 @@ import { Predicate } from "effect";
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
-
 import { type AdminStatusResponse, getAdminStatus } from "../../src/admin/status";
 import worker from "../../src/index";
 import type { Env } from "../../src/types";

@@ -1,21 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { testCtx, testEnv } from "#test/fixtures";
+import { defaultDeps, handleMcpRequest, type McpDeps } from "../../src/mcp/protocol";
 
-// Mock the cloudflare:workers module that executor.ts imports
-vi.mock("cloudflare:workers", () => ({
-  WorkerEntrypoint: class {},
-}));
-
-// Force the schema tool handler to throw so we can exercise the top-level
-// error boundary in handleMcpRequest. Isolated in this file to avoid bleeding
-// the mock into the main protocol suite.
-vi.mock("../../src/mcp/tools/schema", () => ({
+// A schema tool that throws exercises the top-level error boundary.
+const throwingDeps: McpDeps = {
+  ...defaultDeps,
   getSchemaInfo: () => {
     throw new Error("boom");
   },
-}));
-
-import { testCtx, testEnv } from "#test/fixtures";
-import { handleMcpRequest } from "../../src/mcp/protocol";
+};
 
 function makeRequest(body: unknown, method = "POST"): Request {
   return new Request("https://afl.test/mcp", {
@@ -52,6 +45,7 @@ describe("handleMcpRequest error boundary", () => {
       }),
       stubEnv,
       stubCtx,
+      throwingDeps,
     );
 
     expect(res.status).toBe(200);

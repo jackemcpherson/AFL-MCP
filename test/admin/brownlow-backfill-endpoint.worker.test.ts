@@ -3,8 +3,6 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makePlayerStats } from "#test/factories";
 
-vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
-
 import { applyBrownlowUpdates, type BrownlowVoteUpdate } from "../../src/admin/brownlow";
 import worker from "../../src/index";
 import { acquireOperationLease, releaseOperationLease } from "../../src/sync/lease";

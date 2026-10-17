@@ -1,9 +1,5 @@
 import { env } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("cloudflare:workers", () => ({
-  WorkerEntrypoint: class {},
-}));
+import { describe, expect, it } from "vitest";
 
 import { testCtx } from "#test/fixtures";
 import worker from "../src/index";

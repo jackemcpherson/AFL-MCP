@@ -36,8 +36,7 @@ const config: UserConfig = defineConfig({
       "anti-slop/no-runtime-typeof": "error",
       "anti-slop/no-unknown-parameters": "error",
       "anti-slop/require-safety-comment-for-type-assertion": "error",
-      // Turned on by #227 (C13, remove module mocks).
-      "anti-slop/no-module-mocking": "off",
+      "anti-slop/no-module-mocking": "error",
       // Not part of the style guide.
       "anti-slop-effect/prefer-effect-match": "off",
     },
