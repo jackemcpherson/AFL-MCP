@@ -41,13 +41,15 @@ const SERVER_INFO = {
   version: pkg.version,
 };
 
-/**
- * Legacy-era (initialize handshake) protocol revisions this server speaks,
- * newest first. The first entry answers any request for another revision.
- */
-const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18", "2025-03-26"];
-
+/** Newest protocol revision, answered to any request for an unsupported one. */
 const LATEST_PROTOCOL_VERSION = "2025-11-25";
+
+/** Legacy-era (initialize handshake) protocol revisions this server speaks, newest first. */
+const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = [
+  LATEST_PROTOCOL_VERSION,
+  "2025-06-18",
+  "2025-03-26",
+];
 
 /**
  * Pick the revision to answer an `initialize` with: the requested one when
@@ -62,8 +64,7 @@ function negotiateProtocolVersion(requested: unknown): string {
 }
 
 /** Server-level guidance returned from `initialize`. */
-const INSTRUCTIONS =
-  "Call the schema tool first to learn the tables, per-competition coverage and query API before writing code. The database holds four competitions (AFLM, AFLW, VFL, VFLW), so always filter SQL by competition (JOIN competitions c WHERE c.code = ?).";
+const INSTRUCTIONS = `Call the schema tool first to learn the tables, per-competition coverage and query API before writing code. The database holds four competitions (${COMPETITION_CODES.join(", ")}), so always filter SQL by competition (JOIN competitions c WHERE c.code = ?).`;
 
 /**
  * Both tools only read the database and touch no outside system.
@@ -107,6 +108,8 @@ const TOOLS: ToolDefinition[] = [
             "Alone: filter the schema response to this competition. With season + includeObserved:true: the competition to measure.",
         },
         season: {
+          // Mirrors SEASON_KEY_PATTERN. Both spellings are on the wire (this one in
+          // tools/list, the other in schema error text), so each stays literal.
           oneOf: [{ type: "integer" }, { type: "string", pattern: "^[0-9]{4}(-S[67])?$" }],
           description:
             "Canonical season key or unambiguous year. AFLW 2022 requires 2022-S6 or 2022-S7. Requires competition and includeObserved:true.",

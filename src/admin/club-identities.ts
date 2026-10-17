@@ -1,9 +1,13 @@
+import { Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
+import { booleanDefault, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
@@ -65,22 +69,14 @@ export async function reconcileBearsIdentity(
       "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
     ).first<{ revision: number; in_progress: number }>();
     if (!revision) throw new Error("Public input revision is unavailable");
-    const digest = Array.from(
-      new Uint8Array(
-        await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(
-            JSON.stringify({
-              ids: previewIds,
-              report,
-              matchIds,
-              revision: revision.revision,
-            }),
-          ),
-        ),
-      ),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(
+      JSON.stringify({
+        ids: previewIds,
+        report,
+        matchIds,
+        revision: revision.revision,
+      }),
+    );
     if (dryRun) {
       if (revision.in_progress)
         throw new OperationConflictError({
@@ -270,3 +266,18 @@ async function countReferences(
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
+
+/** Explicit historical club identity repair request. */
+export const BearsRepairRequestSchema: Schema.Struct<{
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly manifestDigest: Schema.optionalKey<Schema.String>;
+}> = Schema.Struct({
+  dryRun: booleanDefault(true),
+  resume: booleanDefault(false),
+  manifestDigest: Schema.optionalKey(Sha256HexSchema),
+});
+
+/** Decode a Bears repair body, rejecting unknown keys. */
+export const decodeBearsRepairRequest: Decoder<typeof BearsRepairRequestSchema.Type> =
+  strictDecoder(BearsRepairRequestSchema);

@@ -45,9 +45,9 @@ function observedSchemaEnv(): Env {
   const rows = [
     { id: 77, year: 2025, season_key: "2025", code: "AFLW" },
     { row_count: 2, n0: 2 },
-    { row_count: 4 },
+    { row_count: 4, known_totals: 4, unknown_totals: 0 },
     { row_count: 5, match_count: 2 },
-    { row_count: 3 },
+    { row_count: 3, eligible_completed: 3, matches_with_statistics: 2 },
     null,
     { failures: 0, unresolved: 0, overdue: 0 },
     { revision: 0, in_progress: 0 },
@@ -268,6 +268,10 @@ describe("handleMcpRequest", () => {
   it.each([
     [{ includeObserved: "yes" }, 'Expected boolean at "includeObserved". '],
     [{ table: "matches" }, 'Expected no excess property at "table". '],
+    [
+      { competition: "AFLM", season: "abc", includeObserved: true },
+      'Expected a string matching the RegExp ^\\d{4}(?:-S[67])?$ at "season". ',
+    ],
     [
       { competition: "AFLW", season: 2022, includeObserved: true },
       "Ambiguous or invalid season; AFLW 2022 requires 2022-S6 or 2022-S7. ",

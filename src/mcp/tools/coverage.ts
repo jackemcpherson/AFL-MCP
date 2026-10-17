@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { resolveStoredSeason } from "../../db/seasons";
 import { COMPETITION_CODES, type CompetitionCode } from "../../lib/competitions";
-import { batchRow } from "../../lib/decode";
+import { batchRow, decodeRow } from "../../lib/decode";
 import { type StatFieldCapabilities, statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
@@ -658,8 +658,8 @@ export interface MatchPresenceObservation {
 }
 /** Column-level deviation from a table default; only deviating keys are present. */
 export interface ColumnException {
-  expected?: CoverageExpectation;
-  range?: string;
+  readonly expected?: CoverageExpectation;
+  readonly range?: string;
 }
 
 /** Wire shape for one competition-table: a default plus exception columns. */
@@ -823,10 +823,38 @@ async function queryCoachingObservation(
   };
 }
 
-type NumericRow = Record<string, number>;
+/** Per-column non-null counts; the `n${index}` columns follow OBSERVED_STAT_COLUMNS. */
+const StatCountRowSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.Number));
 
-/** An aggregate row of named counts; SUM over no rows reads as NULL. */
-const CountRowSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.Number));
+/** PAV row counts. SUM over no rows reads as NULL. */
+const PavCountRowSchema = Schema.Struct({
+  row_count: Schema.Number,
+  known_totals: Schema.Number,
+  unknown_totals: Schema.NullOr(Schema.Number),
+});
+
+/** Lineup row and match counts. */
+const LineupCountRowSchema = Schema.Struct({
+  row_count: Schema.Number,
+  match_count: Schema.Number,
+});
+
+/** Stored, completed and stat-bearing match counts. */
+const MatchCountRowSchema = Schema.Struct({
+  row_count: Schema.Number,
+  eligible_completed: Schema.Number,
+  matches_with_statistics: Schema.Number,
+});
+
+/** Statistics refresh failure, diagnostic and overdue counts. */
+const RefreshCountRowSchema = Schema.Struct({
+  failures: Schema.Number,
+  unresolved: Schema.Number,
+  overdue: Schema.Number,
+});
+
+/** The public input revision marker. */
+const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Schema.Number });
 
 /** The stored provider inventory for one season. */
 const InventoryRowSchema = Schema.Struct({
@@ -893,20 +921,23 @@ async function queryObservation(
     ),
     env.DB.prepare("SELECT revision,in_progress FROM public_input_revision WHERE id=1"),
   ]);
-  const statRow = batchRow(results, 0, CountRowSchema);
-  const pav = batchRow(results, 1, CountRowSchema);
-  const lineups = batchRow(results, 2, CountRowSchema);
-  const matches = batchRow(results, 3, CountRowSchema);
+  const statRow = batchRow(results, 0, StatCountRowSchema);
+  const pav = batchRow(results, 1, PavCountRowSchema);
+  const lineups = batchRow(results, 2, LineupCountRowSchema);
+  const matches = batchRow(results, 3, MatchCountRowSchema);
   const inventory = batchRow(results, 4, InventoryRowSchema);
-  const refresh = batchRow(results, 5, CountRowSchema);
-  const marker = batchRow(results, 6, CountRowSchema);
-  if (marker?.["in_progress"] !== 0)
+  const refresh = batchRow(results, 5, RefreshCountRowSchema);
+  const marker = batchRow(results, 6, MarkerRowSchema);
+  if (marker?.in_progress !== 0)
     throw new Error("Coverage observation blocked by an unfinished input write");
   const coaches = await queryCoachingObservation(env, competition, seasonRow.year);
-  const after = await env.DB.prepare(
-    "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
-  ).first<NumericRow>();
-  if (after?.["in_progress"] !== 0 || after["revision"] !== marker["revision"])
+  const after = decodeRow(
+    await env.DB.prepare(
+      "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
+    ).first(),
+    MarkerRowSchema,
+  );
+  if (after?.in_progress !== 0 || after.revision !== marker.revision)
     throw new Error("Coverage inputs changed during observation; retry");
 
   const rows = statRow?.["row_count"] ?? 0;
@@ -928,32 +959,41 @@ async function queryObservation(
     inventory: {
       provider_matches: inventory?.provider_matches ?? null,
       provider_observed_at: inventory?.observed_at ?? null,
-      stored_matches: matches?.["row_count"] ?? 0,
-      eligible_completed_matches: matches?.["eligible_completed"] ?? 0,
-      matches_with_statistics: matches?.["matches_with_statistics"] ?? 0,
+      stored_matches: matches?.row_count ?? 0,
+      eligible_completed_matches: matches?.eligible_completed ?? 0,
+      matches_with_statistics: matches?.matches_with_statistics ?? 0,
       participant_rows: rows,
-      refresh_failures: refresh?.["failures"] ?? 0,
-      unresolved_refreshes: refresh?.["unresolved"] ?? 0,
-      overdue_refreshes: refresh?.["overdue"] ?? 0,
-      input_revision: marker["revision"],
+      refresh_failures: refresh?.failures ?? 0,
+      unresolved_refreshes: refresh?.unresolved ?? 0,
+      overdue_refreshes: refresh?.overdue ?? 0,
+      input_revision: marker.revision,
     },
     pav: {
       unit: "table_rows",
-      rows: pav?.["row_count"] ?? 0,
-      known_totals: pav?.["known_totals"] ?? 0,
-      unknown_totals: pav?.["unknown_totals"] ?? 0,
+      rows: pav?.row_count ?? 0,
+      known_totals: pav?.known_totals ?? 0,
+      unknown_totals: pav?.unknown_totals ?? 0,
     } satisfies TableRowsObservation,
     lineups: {
       unit: "match_presence",
-      total_matches: matches?.["row_count"] ?? 0,
-      matches_with_rows: lineups?.["match_count"] ?? 0,
-      rows: lineups?.["row_count"] ?? 0,
-      ratio: ratio(lineups?.["match_count"] ?? 0, matches?.["row_count"] ?? 0),
+      total_matches: matches?.row_count ?? 0,
+      matches_with_rows: lineups?.match_count ?? 0,
+      rows: lineups?.row_count ?? 0,
+      ratio: ratio(lineups?.match_count ?? 0, matches?.row_count ?? 0),
     } satisfies MatchPresenceObservation,
   };
 }
 
-/** Query one bounded competition-season observation, with a 15-minute Cache API entry. */
+/**
+ * Query one bounded competition-season observation, with a 15-minute Cache API entry.
+ *
+ * @param env - Worker bindings.
+ * @param competition - Competition to measure.
+ * @param season - Canonical season key or year.
+ * @param cache - Cache for the observation. Defaults to the Workers cache when present.
+ * @returns The observation, from cache when a fresh entry exists.
+ * @throws {Error} When the season is unknown or inputs change during the observation.
+ */
 export async function observeCoverage(
   env: Env,
   competition: CoverageCompetition,
@@ -1018,6 +1058,11 @@ export interface CoverageContract {
  * Return the static contract, optionally with one bounded competition-season
  * observation attached as a sibling `observed` block. Measurements never
  * mutate the static expectations — they are reported side by side.
+ *
+ * @param options - Validated schema tool options.
+ * @param env - Worker bindings, required only for observed coverage.
+ * @returns The coverage contract, with `observed` when requested.
+ * @throws {Error} When observed coverage is requested without `env`.
  */
 export async function coverageContract(
   options: CoverageOptions,

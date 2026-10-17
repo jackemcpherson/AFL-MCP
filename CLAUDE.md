@@ -94,11 +94,13 @@ This Worker deliberately deviates from TypeScript standard v4. Do not
   protocol 2026-07-28, or when a second transport feature (streaming,
   resources) is needed.
 
-`effect/Schema` decodes every external input: MCP and admin request
-bodies (`src/mcp/validation.ts` and each `src/admin/*` module), Open-Meteo
-payloads, D1 rows and stored JSON. Shared field schemas live in
-`src/lib/schemas.ts`, decoders in `src/lib/decode.ts`, and competition
-codes in `src/lib/competitions.ts`.
+`effect/Schema` decodes every external input: MCP request bodies
+(`src/mcp/validation.ts`), admin request bodies (each `src/admin/*`
+module), Open-Meteo payloads and stored JSON columns. It also decodes the
+D1 rows that admin operations, health and coverage read. Internal sync
+queries may still use a typed `.first<T>()` or `.all<T>()`. Shared field
+schemas live in `src/lib/schemas.ts`, decoders in `src/lib/decode.ts`,
+and competition codes in `src/lib/competitions.ts`.
 
 ## Key Constraints
 
@@ -114,6 +116,10 @@ codes in `src/lib/competitions.ts`.
 - **Bun** as package manager, **Vite+** (`vp`: Oxlint, Oxfmt, tsgo, Vitest) for
   checks and tests. Lint and format config lives in `vite.config.ts`.
 - Use Web Standard APIs only (no Bun-specific) — code runs on Cloudflare Workers V8.
+- **`Id` casing** — identifiers write `Id`, not the standard's `ID`
+  (`matchId`, `canonicalId`, `playerIds`). This deviation is deliberate,
+  because the names match the admin JSON keys and D1 columns. Do not
+  rename them.
 - **Tests** mirror `src/` under `test/`. Tests that need `cloudflare:test`
   end in `.worker.test.ts`. Import support code as `#test/<name>`. No
   `vi.mock` (Oxlint `no-module-mocking`); inject collaborators through

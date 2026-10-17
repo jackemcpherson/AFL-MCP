@@ -31,7 +31,10 @@ AFL-MCP keeps its current shape as a recorded deviation from v4:
   catches them, with no Effect runtime in request handling.
 
 The rest of v4 still applies. The repo adopts `effect/Schema` for every
-boundary decode, along with the v4 toolchain and compiler settings.
+boundary decode, along with the v4 toolchain and compiler settings. A
+boundary here means request bodies, provider payloads, stored JSON columns
+and the D1 rows that admin, health and coverage code read. Internal sync
+queries may keep typed D1 reads.
 
 Revisit the decision when routing reaches about 20 routes, or when admin
 callers need typed clients.

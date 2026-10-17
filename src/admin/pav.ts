@@ -9,6 +9,7 @@ import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { PavCompetitionSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
 import { booleanDefault, SeasonSelectorSchema, Sha256HexSchema } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { calculatePav } from "../sync/pav";
@@ -17,7 +18,7 @@ import { OperationConflictError } from "./errors";
 
 /** One reviewed competition-season replacement; no implicit calendar-year scope. */
 export const PavRepairRequestSchema: Schema.Struct<{
-  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW"]>;
+  readonly competition: typeof PavCompetitionSchema;
   readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
   readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
   readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
@@ -77,12 +78,7 @@ export async function repairPav(env: Env, request: PavRepairRequest): Promise<Pa
     ).first<{ revision: number; in_progress: number; write_operation: string | null }>();
     if (!revision) throw new Error("Public input revision is unavailable");
     const preview = { season, inputRevision: revision.revision };
-    const digest = Array.from(
-      new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(preview))),
-      ),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(JSON.stringify(preview));
     if (request.dryRun) {
       if (revision.in_progress)
         throw new OperationConflictError({

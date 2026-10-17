@@ -6,8 +6,10 @@ import {
   publicInputWriteFence,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { CompetitionCodeSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
 import {
   type EvidenceSchema,
   IsoDateSchema,
@@ -126,12 +128,43 @@ const RecordedManifestSchema = Schema.fromJsonString(
   Schema.Struct({
     ids: Schema.Array(Schema.Number),
     canonicalId: Schema.optionalKey(Schema.Number),
-    newPerson: Schema.optionalKey(Schema.Unknown),
+    newPerson: Schema.optionalKey(
+      Schema.Struct({
+        firstName: Schema.String,
+        surname: Schema.String,
+        dateOfBirth: Schema.String,
+        evidence: Schema.Struct({
+          url: Schema.String,
+          sha256: Schema.String,
+          explanation: Schema.String,
+        }),
+      }),
+    ),
     kind: Schema.optionalKey(Schema.String),
     matchIds: Schema.optionalKey(Schema.Array(Schema.Number)),
   }),
 );
 const decodeRecordedManifest = Schema.decodeUnknownSync(RecordedManifestSchema);
+
+/** A season whose PAV an identity repair rebuilds. */
+const PavSeasonRowSchema = Schema.Struct({
+  id: Schema.Number,
+  season_key: Schema.String,
+  code: CompetitionCodeSchema,
+});
+type PavSeasonRow = typeof PavSeasonRowSchema.Type;
+const decodePavSeasonRows = Schema.decodeUnknownSync(Schema.Array(PavSeasonRowSchema));
+
+/** An existing provider link for a reviewed provider identity. */
+const decodeProviderLinkRows = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      provider: Schema.String,
+      provider_id: Schema.String,
+      player_id: Schema.Number,
+    }),
+  ),
+);
 type AppearanceTable = "player_match_stats" | "match_lineups";
 interface Conflict {
   readonly table: AppearanceTable;
@@ -142,8 +175,8 @@ interface Conflict {
 
 /** Merged appearance rows and the conflicts no resolution addressed. */
 export interface AppearanceMerge {
-  readonly rows: Row[];
-  readonly conflicts: Conflict[];
+  readonly rows: readonly Row[];
+  readonly conflicts: readonly Conflict[];
 }
 
 /**
@@ -188,10 +221,10 @@ export function mergeIdentityAppearances(
           (entry) => entry.table === table && entry.matchId === matchId && entry.field === field,
         );
         if (resolution) {
-          const expectsString = table === "match_lineups" && field === "position";
-          const expectedType = expectsString ? "string" : "number";
+          const isStringField = table === "match_lineups" && field === "position";
+          const expectedType = isStringField ? "string" : "number";
           if (
-            expectsString
+            isStringField
               ? !Predicate.isString(resolution.value)
               : !Predicate.isNumber(resolution.value)
           )
@@ -210,15 +243,6 @@ export function mergeIdentityAppearances(
       message: "Resolution is duplicated or does not address a conflicting field",
     });
   return { rows: merged, conflicts };
-}
-
-async function hash(value: object): Promise<string> {
-  return Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
-    ),
-    (byte) => byte.toString(16).padStart(2, "0"),
-  ).join("");
 }
 
 /**
@@ -324,8 +348,8 @@ export async function repairPlayerIdentity(
             JOIN seasons s ON s.id=q.season_id JOIN competitions c ON c.id=s.competition_id
             WHERE q.reason=?1 ORDER BY s.id`)
               .bind(`identity:${request.manifestDigest}`)
-              .all<Row>();
-          await rebuildIdentityPav(env, seasons.results, holder);
+              .all();
+          await rebuildIdentityPav(env, decodePavSeasonRows(seasons.results), holder);
           await protectOperationWrites(env, holder)
             .DB.prepare(
               "UPDATE identity_repair_operations SET status='complete' WHERE manifest_digest=?1",
@@ -391,7 +415,7 @@ export async function repairPlayerIdentity(
       throw new OperationConflictError({
         message: "Group includes a retired ID; use its approved repair digest or canonical ID",
       });
-    const players = snapshots[0]?.results ?? [];
+    const players = decodeRows(snapshots[0]?.results ?? []);
     if (request.newPerson && players.some((player) => player["id"] === canonicalId))
       throw new OperationConflictError({
         message: "The reviewed new person target already exists",
@@ -406,7 +430,7 @@ export async function repairPlayerIdentity(
       ),
     ];
     const providerLinks = request.providerIdentities.length
-      ? await env.DB.batch<Row>(
+      ? await env.DB.batch(
           request.providerIdentities.map((identity) =>
             env.DB.prepare(
               "SELECT provider,provider_id,player_id FROM player_provider_ids WHERE provider=?1 AND provider_id=?2",
@@ -416,7 +440,7 @@ export async function repairPlayerIdentity(
       : [];
     if (
       providerLinks.some((result) =>
-        result.results.some((row) => !ids.includes(Number(row["player_id"]))),
+        decodeProviderLinkRows(result.results).some((row) => !ids.includes(row.player_id)),
       )
     )
       throw new OperationConflictError({
@@ -466,7 +490,7 @@ export async function repairPlayerIdentity(
       stats: stats.rows,
       lineups: lineups.rows,
     };
-    const digest = await hash(manifest);
+    const digest = await sha256Hex(JSON.stringify(manifest));
     const conflicts = [...stats.conflicts, ...lineups.conflicts];
     if (request.dryRun)
       return {
@@ -598,11 +622,12 @@ export async function repairPlayerIdentity(
         ).bind(retired, canonicalId, digest),
       );
     }
-    for (const season of snapshots[5]?.results ?? []) {
+    const affectedSeasons = decodePavSeasonRows(snapshots[5]?.results ?? []);
+    for (const season of affectedSeasons) {
       statements.push(
         env.DB.prepare(
           "INSERT INTO pav_rebuild_queue(season_id, reason) VALUES(?1,?2) ON CONFLICT(season_id) DO UPDATE SET reason=excluded.reason",
-        ).bind(season["id"], `identity:${digest}`),
+        ).bind(season.id, `identity:${digest}`),
       );
     }
     statements.push(
@@ -611,7 +636,7 @@ export async function repairPlayerIdentity(
       ).bind(digest),
     );
     await env.DB.batch(statements);
-    await rebuildIdentityPav(env, snapshots[5]?.results ?? [], holder);
+    await rebuildIdentityPav(env, affectedSeasons, holder);
     await protectOperationWrites(env, holder)
       .DB.prepare(
         "UPDATE identity_repair_operations SET status='complete' WHERE manifest_digest=?1",
@@ -637,23 +662,22 @@ export async function repairPlayerIdentity(
 
 async function rebuildIdentityPav(
   env: Env,
-  seasons: readonly Row[],
+  seasons: readonly PavSeasonRow[],
   holder: string,
 ): Promise<void> {
   const writer = protectOperationWrites(env, holder);
   for (const season of seasons) {
     if (
-      (season["code"] === "AFLM" || season["code"] === "AFLW") &&
-      Number(String(season["season_key"]).slice(0, 4)) >=
-        MIN_PAV_YEAR_BY_COMPETITION[season["code"]]
+      (season.code === "AFLM" || season.code === "AFLW") &&
+      Number(season.season_key.slice(0, 4)) >= MIN_PAV_YEAR_BY_COMPETITION[season.code]
     )
-      await calculatePav(writer, String(season["season_key"]), season["code"], holder);
+      await calculatePav(writer, season.season_key, season.code, holder);
     else
       await writer.DB.prepare("DELETE FROM player_season_pav WHERE season_id=?1")
-        .bind(season["id"])
+        .bind(season.id)
         .run();
     await writer.DB.prepare("DELETE FROM pav_rebuild_queue WHERE season_id=?1")
-      .bind(season["id"])
+      .bind(season.id)
       .run();
   }
 }

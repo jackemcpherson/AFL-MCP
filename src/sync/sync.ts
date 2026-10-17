@@ -14,7 +14,7 @@ import {
   resumePublicInputWrite,
 } from "../db/public-inputs";
 import { seasonKey } from "../db/seasons";
-import { logError } from "../lib/errors";
+import { describeError, logError, type MessageFields, type TaggedErrorBase } from "../lib/errors";
 import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
@@ -37,7 +37,6 @@ import {
   upsertMatches,
   upsertPlayers,
 } from "./upserts";
-import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 
 const FORWARD_DAYS = 3;
 const BACKWARD_DAYS = 1;
@@ -415,8 +414,4 @@ async function fetchLineupsSafe(
     return [];
   }
   return result.data;
-}
-
-function describeError(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }

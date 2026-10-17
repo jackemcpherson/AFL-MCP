@@ -1,20 +1,38 @@
 import type { MatchCoachAssignment, MatchCoachFailure } from "fitzroy";
 import { fetchMatchCoaches } from "fitzroy";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   beginPublicInputWrite,
   finishPublicInputWrite,
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 import { runFitzroy } from "../lib/fitzroy";
-import { IsoDateSchema, NonEmptyStringSchema, UrlStringSchema } from "../lib/schemas";
+import { type Decoder, looseDecoder } from "../lib/decode";
+import {
+  booleanDefault,
+  IsoDateSchema,
+  NonEmptyStringSchema,
+  UrlStringSchema,
+} from "../lib/schemas";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
 
 type CoachProvider = "afl-tables" | "footywire";
+
+const CoachingSourceErrorBase: TaggedErrorBase<
+  CoachingSourceError,
+  "CoachingSourceError",
+  MessageFields
+> = Schema.TaggedError<CoachingSourceError>()("CoachingSourceError", {
+  message: Schema.String,
+});
+
+/** A coaching provider fetch failed before any database mutation. */
+class CoachingSourceError extends CoachingSourceErrorBase {}
 
 /** One row of {@link MATCH_PROJECTION}. */
 const MatchCandidateSchema = Schema.Struct({
@@ -36,6 +54,29 @@ const MatchCandidateSchema = Schema.Struct({
 type MatchCandidate = typeof MatchCandidateSchema.Type;
 
 const decodeMatchCandidates = Schema.decodeUnknownSync(Schema.Array(MatchCandidateSchema));
+
+/** Provider match ids already linked to stored matches. */
+const decodeCrosswalkRows = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ external_match_id: Schema.String, match_id: Schema.Number })),
+);
+
+/** Provider coach ids already linked to canonical coaches. */
+const decodeCoachIdentityRows = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      external_coach_id: Schema.String,
+      coach_id: Schema.String,
+      verified: Schema.Number,
+    }),
+  ),
+);
+
+/** Current coach assignments for the season. */
+const decodeAssignmentRows = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({ match_id: Schema.Number, team_id: Schema.Number, coach_id: Schema.String }),
+  ),
+);
 
 /** Counts for one coaching season import, previewed or applied. */
 export interface CoachingImportSummary {
@@ -116,18 +157,18 @@ export async function ingestMatchCoachResult(
     throw new Error("Coaching reconciliation inputs are unavailable");
   const seasonMatches = decodeMatchCandidates(matches.results);
   const matchCrosswalk = new Map(
-    crosswalks.results.map((row) => [String(row["external_match_id"]), Number(row["match_id"])]),
+    decodeCrosswalkRows(crosswalks.results).map((row) => [row.external_match_id, row.match_id]),
   );
   const coachIdentities = new Map(
-    identities.results.map((row) => [
-      String(row["external_coach_id"]),
-      { coach_id: String(row["coach_id"]), verified: Number(row["verified"]) },
+    decodeCoachIdentityRows(identities.results).map((row) => [
+      row.external_coach_id,
+      { coach_id: row.coach_id, verified: row.verified },
     ]),
   );
   const existingAssignments = new Map(
-    currentAssignments.results.map((row) => [
-      `${String(row["match_id"])}:${String(row["team_id"])}`,
-      String(row["coach_id"]),
+    decodeAssignmentRows(currentAssignments.results).map((row) => [
+      `${row.match_id}:${row.team_id}`,
+      row.coach_id,
     ]),
   );
   const coaches = new Map<string, string>();
@@ -509,11 +550,6 @@ export async function refreshActiveCoaches(env: Env, now: Date = new Date()): Pr
   }
 }
 
-/** A coaching provider fetch failed before any database mutation. */
-class CoachingSourceError extends Schema.TaggedError<CoachingSourceError>()("CoachingSourceError", {
-  message: Schema.String,
-}) {}
-
 async function runCoachBatch(
   env: Env,
   season: number,
@@ -809,3 +845,31 @@ async function recordSourceFailure(env: Env, season: number, source: CoachProvid
     .run();
   await logSync(env, `sync:${source}:coaches`, 0, "coaching source fetch failed");
 }
+
+/** One explicit AFLM coaching season and source. */
+export const CoachingBackfillRequestSchema: Schema.Struct<{
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly fromYear: Schema.Int;
+  readonly toYear: Schema.Int;
+  readonly source: Schema.withDecodingDefaultKey<
+    Schema.Literals<readonly ["afl-tables", "footywire"]>,
+    never
+  >;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+}> = Schema.Struct({
+  resume: booleanDefault(false),
+  fromYear: Schema.Int,
+  toYear: Schema.Int,
+  source: Schema.Literals(["afl-tables", "footywire"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("afl-tables" as const)),
+  ),
+  dryRun: booleanDefault(true),
+});
+
+/** One-season coaching backfill request shape. */
+export type CoachingBackfillRequest = typeof CoachingBackfillRequestSchema.Type;
+
+/** Decode a coaching backfill body, ignoring unknown keys. */
+export const decodeCoachingBackfillRequest: Decoder<CoachingBackfillRequest> = looseDecoder(
+  CoachingBackfillRequestSchema,
+);

@@ -53,9 +53,25 @@ export const IsoDateSchema: Schema.String = Schema.String.check(
   ),
 );
 
-/** A season selector: a year, or a canonical key such as `2022-S7`. */
+/**
+ * A season selector: a year, or a canonical key such as `2022-S7`. Strings
+ * are not checked here, so admin routes can answer a bad key with
+ * `seasonKey()`'s specific `SeasonSelectionError`.
+ */
 export const SeasonSelectorSchema: Schema.Union<readonly [Schema.Int, Schema.String]> =
   Schema.Union([Schema.Int, Schema.String]);
+
+/** A canonical season key: a year such as `2024`, or an AFLW 2022 split such as `2022-S7`. */
+export const SEASON_KEY_PATTERN: RegExp = /^\d{4}(?:-S[67])?$/;
+
+/** A canonical season key string, checked against {@link SEASON_KEY_PATTERN}. */
+export const SeasonKeyStringSchema: Schema.String = Schema.String.check(
+  Schema.isPattern(SEASON_KEY_PATTERN),
+);
+
+/** A {@link SeasonSelectorSchema} whose strings must be canonical season keys. */
+export const SeasonKeySelectorSchema: Schema.Union<readonly [Schema.Int, Schema.String]> =
+  Schema.Union([Schema.Int, SeasonKeyStringSchema]);
 
 /**
  * Narrow a validated or stored season selector to fitzroy's selector type.

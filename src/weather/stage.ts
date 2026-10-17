@@ -16,7 +16,7 @@
  * Provider failures are isolated per match and persisted for daily retries.
  * After three failed retries, missing values retain an explicit diagnostic.
  */
-import { logError } from "../lib/errors";
+import { describeError, logError } from "../lib/errors";
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
@@ -337,8 +337,4 @@ async function fetchAndStore(
   return weatherMetricValues(metrics).some((value) => value === null)
     ? "partial: missing-weather-metrics"
     : null;
-}
-
-function describeError(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }

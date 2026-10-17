@@ -1,7 +1,18 @@
-import { Predicate, Result } from "effect";
-import { backfillBrownlow } from "./admin/brownlow";
-import { reconcileBearsIdentity } from "./admin/club-identities";
-import { backfillCoaches } from "./admin/coaching";
+import { Result, Schema } from "effect";
+import {
+  type BackfillRequest,
+  decodeBackfillRequest,
+  decodeExactSeasonBackfillRequest,
+  describeBackfillIssue,
+  decodeSeasonPresence,
+} from "./admin/backfill";
+import {
+  backfillBrownlow,
+  decodeBrownlowBackfillRequest,
+  describeBrownlowBackfillIssue,
+} from "./admin/brownlow";
+import { decodeBearsRepairRequest, reconcileBearsIdentity } from "./admin/club-identities";
+import { backfillCoaches, decodeCoachingBackfillRequest } from "./admin/coaching";
 import { OperationConflictError } from "./admin/errors";
 import { decodePavRepairRequest, repairPav } from "./admin/pav";
 import { decodeIdentityRepairRequest, repairPlayerIdentity } from "./admin/player-identities";
@@ -11,21 +22,11 @@ import { decodeWeatherRefreshRequest, refreshWeather } from "./admin/weather-ref
 import { decodeWeatherRetryRequest, retryWeather } from "./admin/weather-retry";
 import { SeasonSelectionError, seasonKey } from "./db/seasons";
 import { COMPETITION_CODES } from "./lib/competitions";
+import { decodeRow } from "./lib/decode";
 import { logError } from "./lib/errors";
 import { toSeasonSelector } from "./lib/schemas";
 import { handleMcpRequest } from "./mcp/protocol";
-import {
-  type BackfillRequest,
-  decodeBackfillRequest,
-  decodeBearsRepairRequest,
-  decodeBrownlowBackfillRequest,
-  decodeCoachingBackfillRequest,
-  decodeExactSeasonBackfillRequest,
-  decodeSeasonKey,
-  decodeSyncRequest,
-  describeBackfillIssue,
-  describeBrownlowBackfillIssue,
-} from "./mcp/validation";
+import { decodeSyncRequest } from "./mcp/validation";
 import { auditNextSeason } from "./sync/audit";
 import { sync } from "./sync/sync";
 import type { Env } from "./types";
@@ -45,6 +46,9 @@ const MAX_BROWNLOW_YEARS = 2;
 /** /mcp/health reports unhealthy when the newest sync_log row is older than this. */
 const SYNC_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
 
+/** The timestamp of a `sync_log` row read by the health check. */
+const SyncLogTimestampSchema = Schema.Struct({ timestamp: Schema.String });
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -61,7 +65,7 @@ export default {
           );
         }
       }
-      const [freshness, lastSync, lastCritical] = await Promise.all([
+      const [freshness, lastSyncRow, lastCriticalRow] = await Promise.all([
         env.DB.prepare(
           "SELECT MAX(date) as latest_match FROM matches WHERE home_points IS NOT NULL",
         ).first(),
@@ -92,14 +96,11 @@ export default {
       // synced competition writes a sync_log row, so a quiet log means the
       // cron itself is broken. Returning 503 lets any dumb uptime monitor
       // alert on status code alone (OPS-02).
-      const lastSyncTimestamp = lastSync?.["timestamp"];
-      const lastTimestamp = Predicate.isString(lastSyncTimestamp) ? lastSyncTimestamp : null;
+      const lastTimestamp = decodeRow(lastSyncRow, SyncLogTimestampSchema)?.timestamp ?? null;
       const ageMs = lastTimestamp === null ? null : Date.now() - Date.parse(lastTimestamp);
       const isStale = ageMs === null || Number.isNaN(ageMs) || ageMs > SYNC_STALE_AFTER_MS;
-      const criticalTimestamp = lastCritical?.["timestamp"];
-      const criticalTs = Predicate.isString(criticalTimestamp)
-        ? Date.parse(criticalTimestamp)
-        : null;
+      const criticalTimestamp = decodeRow(lastCriticalRow, SyncLogTimestampSchema)?.timestamp;
+      const criticalTs = criticalTimestamp === undefined ? null : Date.parse(criticalTimestamp);
       const hasRecentCriticalError =
         criticalTs !== null &&
         !Number.isNaN(criticalTs) &&
@@ -385,7 +386,7 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
-    if (Result.isSuccess(decodeSeasonKey(raw))) {
+    if (Result.isSuccess(decodeSeasonPresence(raw))) {
       const exact = decodeExactSeasonBackfillRequest(raw);
       if (Result.isFailure(exact))
         return Response.json({ error: "invalid exact-season backfill request" }, { status: 400 });

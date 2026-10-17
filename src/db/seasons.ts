@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { CompetitionCode } from "fitzroy";
-import type { Env } from "../types";
 import type { TaggedErrorBase } from "../lib/errors";
+import type { Env } from "../types";
 
 /** Exact stored season identity. The calendar year is descriptive, not unique. */
 export interface StoredSeason {

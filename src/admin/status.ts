@@ -228,7 +228,7 @@ export async function getAdminStatus(
     status: "ok",
     asOf,
     lease: {
-      held: count(lease?.held) === 1,
+      held: countOrZero(lease?.held) === 1,
       ageSeconds: ageOrNull(lease?.ageSeconds),
     },
     competitions,
@@ -241,30 +241,30 @@ export async function getAdminStatus(
     },
     degradation: {
       windowHours: DEGRADATION_WINDOW_HOURS,
-      partialLineupEvents: count(degradation?.partialLineupEvents),
-      partialStatsEvents: count(degradation?.partialStatsEvents),
-      unmappedTeamEvents: count(degradation?.unmappedTeamEvents),
+      partialLineupEvents: countOrZero(degradation?.partialLineupEvents),
+      partialStatsEvents: countOrZero(degradation?.partialStatsEvents),
+      unmappedTeamEvents: countOrZero(degradation?.unmappedTeamEvents),
     },
     remediation: {
-      inputWriteActive: count(remediation?.in_progress) === 1,
+      inputWriteActive: countOrZero(remediation?.in_progress) === 1,
       inputWriteOperation: remediation?.write_operation ?? null,
-      auditScopesUnresolved: count(remediation?.auditScopesUnresolved),
+      auditScopesUnresolved: countOrZero(remediation?.auditScopesUnresolved),
       inputWriteAgeSeconds: ageSeconds(remediation?.write_started_at ?? null, now),
-      statisticsDue: count(remediation?.statisticsDue),
-      statisticsFailed: count(remediation?.statisticsFailed),
-      statisticsUnresolved: count(remediation?.statisticsUnresolved),
-      weatherUnresolved: count(remediation?.weatherUnresolved),
-      weatherUnavailable: count(remediation?.weatherUnavailable),
-      pavSeasonsPending: count(remediation?.pavSeasonsPending),
-      identityRepairsPending: count(remediation?.identityRepairsPending),
+      statisticsDue: countOrZero(remediation?.statisticsDue),
+      statisticsFailed: countOrZero(remediation?.statisticsFailed),
+      statisticsUnresolved: countOrZero(remediation?.statisticsUnresolved),
+      weatherUnresolved: countOrZero(remediation?.weatherUnresolved),
+      weatherUnavailable: countOrZero(remediation?.weatherUnavailable),
+      pavSeasonsPending: countOrZero(remediation?.pavSeasonsPending),
+      identityRepairsPending: countOrZero(remediation?.identityRepairsPending),
     },
     coaching: {
       latestSuccessAt: coaching?.latestSuccessAt ?? null,
-      failedScopes: count(coaching?.failedScopes),
-      unresolvedJoins: count(coachingJoins?.unresolvedJoins),
-      conflicts: count(coachingConflict?.conflicts),
-      currentSeasonExpectedAssignments: count(coachingCoverage?.expectedAssignments),
-      currentSeasonObservedAssignments: count(coachingCoverage?.observedAssignments),
+      failedScopes: countOrZero(coaching?.failedScopes),
+      unresolvedJoins: countOrZero(coachingJoins?.unresolvedJoins),
+      conflicts: countOrZero(coachingConflict?.conflicts),
+      currentSeasonExpectedAssignments: countOrZero(coachingCoverage?.expectedAssignments),
+      currentSeasonObservedAssignments: countOrZero(coachingCoverage?.observedAssignments),
     },
   };
   console.log(
@@ -277,11 +277,11 @@ export async function getAdminStatus(
 }
 
 function countAt(results: readonly D1Result[], index: number): number {
-  return count(batchRow(results, index, CountRowSchema)?.count);
+  return countOrZero(batchRow(results, index, CountRowSchema)?.count);
 }
 
 /** A finite count, with NULL or a missing row read as zero. */
-function count(value: number | null | undefined): number {
+function countOrZero(value: number | null | undefined): number {
   return value !== null && value !== undefined && Number.isFinite(value) ? value : 0;
 }
 

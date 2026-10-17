@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
 import { type Decoder, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
 import {
   booleanDefault,
   PositiveIntSchema,
@@ -14,7 +15,7 @@ import { OperationConflictError } from "./errors";
 
 /** Targeted retry of an unavailable observation after reviewing its stored diagnostic. */
 export const WeatherRetryRequestSchema: Schema.Struct<{
-  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly competition: typeof CompetitionCodeSchema;
   readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
   readonly matchId: Schema.Int;
   readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
@@ -70,15 +71,7 @@ export async function retryWeather(
       WHERE m.id=?1 AND m.season_id=?2 AND r.diagnostic IS NOT NULL ORDER BY r.kind,r.source`)
         .bind(request.matchId, season.id)
         .all();
-    const digest = Array.from(
-      new Uint8Array(
-        await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(JSON.stringify({ season, rows: rows.results })),
-        ),
-      ),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(JSON.stringify({ season, rows: rows.results }));
     if (request.dryRun)
       return {
         busy: false,

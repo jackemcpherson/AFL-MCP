@@ -96,6 +96,23 @@ export function describeIssue(error: Schema.SchemaError): string {
 }
 
 /**
+ * Decode the row a D1 `.first()` call returned.
+ *
+ * @param row - The row, or `null` when the query matched none.
+ * @param schema - Row schema. Columns it does not declare are ignored.
+ * @returns The decoded row, or `null` when there is none.
+ * @throws {Schema.SchemaError} When the row does not match the schema.
+ * @example
+ * const marker = decodeRow(await statement.first(), MarkerRowSchema);
+ */
+export function decodeRow<S extends Schema.ConstraintDecoder<unknown>>(
+  row: unknown,
+  schema: S,
+): S["Type"] | null {
+  return row === null ? null : Schema.decodeUnknownSync(schema)(row);
+}
+
+/**
  * Decode every row of one statement in a D1 batch result.
  *
  * @param results - The batch results.

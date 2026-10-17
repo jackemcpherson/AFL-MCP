@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import type { PlayerStats } from "fitzroy";
 import { fetchPlayerStats } from "fitzroy";
 import {
@@ -6,8 +7,10 @@ import {
   protectOperationWrites,
   resumePublicInputWrite,
 } from "../db/public-inputs";
+import { type Decoder, firstIssue, looseDecoder } from "../lib/decode";
 import { runFitzroy } from "../lib/fitzroy";
 import { normaliseTeam } from "../lib/normalise";
+import { booleanDefault } from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
@@ -476,4 +479,40 @@ function extractMatchDate(matchId: string): string | null {
 function blockedCode(summary: BrownlowSeasonSummary): string {
   if (summary.failedMatchCount > 0) return "blocked:partial-fetch";
   return "blocked:resolution";
+}
+
+/** Shape of POST /mcp/admin/backfill-brownlow bodies. Range clamps live with the route. */
+export const BrownlowBackfillRequestSchema: Schema.Struct<{
+  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+  readonly fromYear: Schema.Int;
+  readonly toYear: Schema.Int;
+  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
+}> = Schema.Struct({
+  resume: booleanDefault(false),
+  fromYear: Schema.Int,
+  toYear: Schema.Int,
+  dryRun: booleanDefault(true),
+});
+
+/** A validated Brownlow backfill request. */
+export type BrownlowBackfillRequest = typeof BrownlowBackfillRequestSchema.Type;
+
+/** Decode a Brownlow backfill body, ignoring unknown keys. */
+export const decodeBrownlowBackfillRequest: Decoder<BrownlowBackfillRequest> = looseDecoder(
+  BrownlowBackfillRequestSchema,
+);
+
+/**
+ * Map the first Brownlow request issue to a stable caller-facing message.
+ *
+ * @param error - The failed decode.
+ * @returns A stable caller-facing message.
+ */
+export function describeBrownlowBackfillIssue(error: Schema.SchemaError): string {
+  const { path, message } = firstIssue(error);
+  const [root] = path;
+  if (root === "fromYear") return "fromYear must be an integer";
+  if (root === "toYear") return "toYear must be an integer";
+  if (root === "dryRun") return "dryRun must be a boolean";
+  return message;
 }

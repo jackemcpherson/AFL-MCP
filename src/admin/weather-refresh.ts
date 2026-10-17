@@ -7,7 +7,8 @@ import {
 } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { type Decoder, strictDecoder } from "../lib/decode";
+import { type Decoder, decodeRow, strictDecoder } from "../lib/decode";
+import { sha256Hex } from "../lib/hash";
 import {
   type EvidenceSchema,
   PositiveIntSchema,
@@ -21,14 +22,38 @@ import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
 import { OperationConflictError } from "./errors";
 
+/**
+ * One fixture's weather context. Field order follows the SELECT, because the
+ * decoded row goes into the manifest digest.
+ */
+const FixtureContextSchema = Schema.Struct({
+  id: Schema.Number,
+  season_id: Schema.Number,
+  date: Schema.String,
+  local_time: Schema.NullOr(Schema.String),
+  kickoff_at: Schema.NullOr(Schema.String),
+  status: Schema.NullOr(Schema.String),
+  venue_id: Schema.NullOr(Schema.Number),
+  canonical_venue_id: Schema.NullOr(Schema.Number),
+  latitude: Schema.NullOr(Schema.Number),
+  longitude: Schema.NullOr(Schema.Number),
+});
+
 /** The reviewed context and evidence recorded with an earlier approved digest. */
 const decodeRecordedManifest = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ context: Schema.Unknown, evidence: Schema.Unknown })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      context: FixtureContextSchema,
+      evidence: Schema.Array(
+        Schema.Struct({ url: Schema.String, sha256: Schema.String, explanation: Schema.String }),
+      ),
+    }),
+  ),
 );
 
 /** Exact weather recomputation after reviewing a fixture or venue correction. */
 export const WeatherRefreshRequestSchema: Schema.Struct<{
-  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly competition: typeof CompetitionCodeSchema;
   readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
   readonly matchId: Schema.Int;
   readonly evidence: Schema.$Array<EvidenceSchema>;
@@ -86,13 +111,14 @@ export async function refreshWeather(
   let consistent = false;
   try {
     const season = await resolveStoredSeason(env, request.competition, request.season);
-    const context =
+    const contextRow =
       await env.DB.prepare(`SELECT m.id,m.season_id,m.date,m.local_time,m.kickoff_at,m.status,m.venue_id,
       cv.id AS canonical_venue_id,cv.latitude,cv.longitude FROM matches m
       LEFT JOIN venues v ON v.id=m.venue_id LEFT JOIN venues cv ON cv.id=COALESCE(v.canonical_venue_id,v.id)
       WHERE m.id=?1 AND m.season_id=?2`)
         .bind(request.matchId, season.id)
         .first();
+    const context = decodeRow(contextRow, FixtureContextSchema);
     if (!context)
       throw new OperationConflictError({ message: "No fixture in this exact season scope" });
     const prior =
@@ -151,26 +177,16 @@ export async function refreshWeather(
       evidence: request.evidence,
       snapshots: snapshots.map((row) => row.results),
     };
-    const digest = prior
-      ? request.manifestDigest
-      : Array.from(
-          new Uint8Array(
-            await crypto.subtle.digest(
-              "SHA-256",
-              new TextEncoder().encode(JSON.stringify(manifest)),
-            ),
-          ),
-          (byte) => byte.toString(16).padStart(2, "0"),
-        ).join("");
+    const digest = prior ? request.manifestDigest : await sha256Hex(JSON.stringify(manifest));
     if (request.dryRun) return { busy: false, dryRun: true, manifestDigest: digest, manifest };
     if (!digest || digest !== request.manifestDigest)
       throw new OperationConflictError({ message: "Weather refresh preview missing or stale" });
     if (
-      context["status"] !== "Cancelled" &&
-      (!context["kickoff_at"] ||
-        !context["local_time"] ||
-        context["latitude"] == null ||
-        context["longitude"] == null)
+      context.status !== "Cancelled" &&
+      (!context.kickoff_at ||
+        !context.local_time ||
+        context.latitude === null ||
+        context.longitude === null)
     )
       throw new OperationConflictError({
         message: "Verified kickoff and canonical venue coordinates are required",

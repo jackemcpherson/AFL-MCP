@@ -223,8 +223,8 @@ const CacheEntrySchema = Schema.fromJsonString(
 
 /** Weather metrics generated from one cached Open-Meteo response. */
 interface CachedMetrics {
-  metrics: WeatherMetrics;
-  fetchedAt: string;
+  readonly metrics: WeatherMetrics;
+  readonly fetchedAt: string;
 }
 
 function metricsFromCache(match: EligibleMatch): CachedMetrics {

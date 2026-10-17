@@ -1,5 +1,6 @@
 /**
- * `effect/Schema` schemas for the Worker's HTTP boundaries (MNT-02).
+ * `effect/Schema` schemas for the MCP endpoint's boundaries (MNT-02). Admin
+ * request schemas live next to their handlers in `src/admin/`.
  *
  * Per the fleet style guide, external input is decoded at the boundary
  * and trusted internally; types are derived from the schemas.
@@ -7,8 +8,8 @@
 
 import { Effect, Schema } from "effect";
 import { CompetitionCodeSchema } from "../lib/competitions";
-import { type Decoder, firstIssue, looseDecoder, strictDecoder } from "../lib/decode";
-import { booleanDefault, SeasonSelectorSchema, Sha256HexSchema } from "../lib/schemas";
+import { type Decoder, looseDecoder, strictDecoder } from "../lib/decode";
+import { booleanDefault, SeasonKeySelectorSchema } from "../lib/schemas";
 
 /** JSON-RPC 2.0 request envelope. */
 export const JsonRpcRequestSchema: Schema.Struct<{
@@ -72,16 +73,10 @@ const COVERAGE_START_YEAR = {
 export const SCHEMA_TOOL_CONTRACT =
   "Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).";
 
-/** A canonical season key such as `2024` or `2022-S7`, or a season year. */
-const SchemaToolSeasonSchema = Schema.Union([
-  Schema.Int,
-  Schema.String.check(Schema.isPattern(/^\d{4}(?:-S[67])?$/)),
-]);
-
 const SchemaToolFieldsSchema = Schema.Struct({
   includeObserved: booleanDefault(false),
   competition: Schema.optionalKey(CompetitionCodeSchema),
-  season: Schema.optionalKey(SchemaToolSeasonSchema),
+  season: Schema.optionalKey(SeasonKeySelectorSchema),
 });
 
 type SchemaToolFields = typeof SchemaToolFieldsSchema.Type;
@@ -124,9 +119,7 @@ function checkSchemaToolCall(value: SchemaToolFields): string | true {
  */
 export const SchemaToolRequestSchema: Schema.Struct<{
   readonly includeObserved: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly competition: Schema.optionalKey<
-    Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>
-  >;
+  readonly competition: Schema.optionalKey<typeof CompetitionCodeSchema>;
   readonly season: Schema.optionalKey<Schema.Union<readonly [Schema.Int, Schema.String]>>;
 }> = SchemaToolFieldsSchema.check(Schema.makeFilter(checkSchemaToolCall));
 
@@ -144,9 +137,7 @@ export const decodeSchemaToolRequest: Decoder<SchemaToolRequest> =
  */
 export const CodeToolRequestSchema: Schema.Struct<{
   readonly code: Schema.String;
-  readonly competition: Schema.optionalKey<
-    Schema.NullOr<Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>>
-  >;
+  readonly competition: Schema.optionalKey<Schema.NullOr<typeof CompetitionCodeSchema>>;
 }> = Schema.Struct({
   code: Schema.String.check(Schema.makeFilter((code) => code.trim() !== "")),
   competition: Schema.optionalKey(Schema.NullOr(CompetitionCodeSchema)),
@@ -166,149 +157,3 @@ export const SyncRequestSchema: Schema.Struct<{
 /** Decode a POST /mcp/admin/sync body. */
 export const decodeSyncRequest: Decoder<typeof SyncRequestSchema.Type> =
   strictDecoder(SyncRequestSchema);
-
-/** Shape of POST /mcp/admin/backfill bodies. Range clamps live with the route. */
-export const BackfillRequestSchema: Schema.Struct<{
-  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly competitions: Schema.$Array<Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>>;
-  readonly fromYear: Schema.Int;
-  readonly toYear: Schema.Int;
-  readonly skipShouldRunNow: Schema.optionalKey<Schema.Boolean>;
-}> = Schema.Struct({
-  resume: booleanDefault(false),
-  competitions: Schema.Array(CompetitionCodeSchema).check(Schema.isMinLength(1)),
-  fromYear: Schema.Int,
-  toYear: Schema.Int,
-  skipShouldRunNow: Schema.optionalKey(Schema.Boolean),
-});
-
-/** A validated year-range backfill request. */
-export type BackfillRequest = typeof BackfillRequestSchema.Type;
-
-/** Decode a year-range backfill body, rejecting unknown keys. */
-export const decodeBackfillRequest: Decoder<BackfillRequest> = strictDecoder(BackfillRequestSchema);
-
-/** Exact-season ingestion, including the two distinct AFLW 2022 seasons. */
-export const ExactSeasonBackfillRequestSchema: Schema.Struct<{
-  readonly fixturesOnly: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
-  readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
-  readonly skipShouldRunNow: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-}> = Schema.Struct({
-  fixturesOnly: booleanDefault(false),
-  resume: booleanDefault(false),
-  competition: CompetitionCodeSchema,
-  season: SeasonSelectorSchema,
-  skipShouldRunNow: booleanDefault(true),
-});
-
-/** Decode an exact-season backfill body, rejecting unknown keys. */
-export const decodeExactSeasonBackfillRequest: Decoder<
-  typeof ExactSeasonBackfillRequestSchema.Type
-> = strictDecoder(ExactSeasonBackfillRequestSchema);
-
-/** A body that names a `season`, selecting the exact-season backfill. */
-const SeasonKeySchema = Schema.Struct({ season: Schema.Unknown });
-
-/** Succeeds when a backfill body names a `season`, selecting the exact-season form. */
-export const decodeSeasonKey: Decoder<{ readonly season: unknown }> = looseDecoder(SeasonKeySchema);
-
-/** Shape of POST /mcp/admin/backfill-brownlow bodies. Range clamps live with the route. */
-export const BrownlowBackfillRequestSchema: Schema.Struct<{
-  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly fromYear: Schema.Int;
-  readonly toYear: Schema.Int;
-  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-}> = Schema.Struct({
-  resume: booleanDefault(false),
-  fromYear: Schema.Int,
-  toYear: Schema.Int,
-  dryRun: booleanDefault(true),
-});
-
-/** A validated Brownlow backfill request. */
-export type BrownlowBackfillRequest = typeof BrownlowBackfillRequestSchema.Type;
-
-/** Decode a Brownlow backfill body, ignoring unknown keys. */
-export const decodeBrownlowBackfillRequest: Decoder<BrownlowBackfillRequest> = looseDecoder(
-  BrownlowBackfillRequestSchema,
-);
-
-/** One explicit AFLM coaching season and source. */
-export const CoachingBackfillRequestSchema: Schema.Struct<{
-  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly fromYear: Schema.Int;
-  readonly toYear: Schema.Int;
-  readonly source: Schema.withDecodingDefaultKey<
-    Schema.Literals<readonly ["afl-tables", "footywire"]>,
-    never
-  >;
-  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-}> = Schema.Struct({
-  resume: booleanDefault(false),
-  fromYear: Schema.Int,
-  toYear: Schema.Int,
-  source: Schema.Literals(["afl-tables", "footywire"]).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed("afl-tables" as const)),
-  ),
-  dryRun: booleanDefault(true),
-});
-
-/** One-season coaching backfill request shape. */
-export type CoachingBackfillRequest = typeof CoachingBackfillRequestSchema.Type;
-
-/** Decode a coaching backfill body, ignoring unknown keys. */
-export const decodeCoachingBackfillRequest: Decoder<CoachingBackfillRequest> = looseDecoder(
-  CoachingBackfillRequestSchema,
-);
-
-/** Explicit historical club identity repair request. */
-export const BearsRepairRequestSchema: Schema.Struct<{
-  readonly dryRun: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly resume: Schema.withDecodingDefaultKey<Schema.Boolean, never>;
-  readonly manifestDigest: Schema.optionalKey<Schema.String>;
-}> = Schema.Struct({
-  dryRun: booleanDefault(true),
-  resume: booleanDefault(false),
-  manifestDigest: Schema.optionalKey(Sha256HexSchema),
-});
-
-/** Decode a Bears repair body, rejecting unknown keys. */
-export const decodeBearsRepairRequest: Decoder<typeof BearsRepairRequestSchema.Type> =
-  strictDecoder(BearsRepairRequestSchema);
-
-/**
- * Map the first backfill decode issue to the caller-facing message contract
- * the endpoint has always used (and the integration tests assert).
- *
- * @param error - The failed decode.
- * @returns A stable caller-facing message.
- */
-export function describeBackfillIssue(error: Schema.SchemaError): string {
-  const { path, message } = firstIssue(error);
-  const [root, index] = path;
-  if (root === "competitions") {
-    return index === undefined
-      ? "competitions must be a non-empty array"
-      : "invalid competition code";
-  }
-  if (root === "fromYear") return "fromYear must be an integer";
-  if (root === "toYear") return "toYear must be an integer";
-  return message;
-}
-
-/**
- * Map the first Brownlow request issue to a stable caller-facing message.
- *
- * @param error - The failed decode.
- * @returns A stable caller-facing message.
- */
-export function describeBrownlowBackfillIssue(error: Schema.SchemaError): string {
-  const { path, message } = firstIssue(error);
-  const [root] = path;
-  if (root === "fromYear") return "fromYear must be an integer";
-  if (root === "toYear") return "toYear must be an integer";
-  if (root === "dryRun") return "dryRun must be a boolean";
-  return message;
-}

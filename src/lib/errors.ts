@@ -30,6 +30,21 @@ export type TaggedErrorBase<
 /** Fields of a tagged error that carries only an application-written message. */
 export type MessageFields = { readonly message: Schema.String };
 
+/**
+ * Read a thrown value's message for storage in a `sync_log` row.
+ *
+ * Use it only for database diagnostics. Logs go through {@link logError},
+ * which never writes error text.
+ *
+ * @param cause - Any thrown value.
+ * @returns The error's message, or the value as a string.
+ * @example
+ * await logSync(env, "sync:weather", 0, describeError(error));
+ */
+export function describeError(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 /** Matches a `src/` file position such as `src/sync/sync.ts:161:12`. */
 const SOURCE_FRAME = /src\/[a-zA-Z0-9_./-]+:\d+:\d+/g;
 

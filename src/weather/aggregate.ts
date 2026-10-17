@@ -147,8 +147,8 @@ export function aggregateWeatherWindow(
   series: HourlySeries,
   scheduledStart: string,
 ): WeatherMetrics {
-  const absolute = isEpochAxis(series.time);
-  const keys: readonly (string | number)[] = absolute
+  const isAbsolute = isEpochAxis(series.time);
+  const keys: readonly (string | number)[] = isAbsolute
     ? series.time.map((seconds) => seconds * 1000)
     : series.time;
   const index = new Map<string | number, number>();
@@ -157,13 +157,13 @@ export function aggregateWeatherWindow(
   }
 
   const startHour = floorHour(scheduledStart);
-  const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index, absolute);
+  const matchWindow = windowIndexes(startHour, 0, MATCH_WINDOW_HOURS, index, isAbsolute);
   const priorWindow = windowIndexes(
     startHour,
     -PRIOR_WINDOW_HOURS,
     PRIOR_WINDOW_HOURS,
     index,
-    absolute,
+    isAbsolute,
   );
 
   return {
@@ -232,7 +232,7 @@ function windowIndexes(
   offsetHours: number,
   count: number,
   index: ReadonlyMap<string | number, number>,
-  absolute: boolean,
+  isAbsolute: boolean,
 ): number[] {
   const hourMs = 60 * 60 * 1000;
   const found: number[] = [];
@@ -241,9 +241,9 @@ function windowIndexes(
     const label = formatHour(instant);
     // Only legacy local axes lack the offset needed to distinguish repeated hours.
     const ambiguous =
-      !absolute &&
+      !isAbsolute &&
       (formatHour(instant - hourMs) === label || formatHour(instant + hourMs) === label);
-    const at = ambiguous ? -1 : index.get(absolute ? instant : label);
+    const at = ambiguous ? -1 : index.get(isAbsolute ? instant : label);
     found.push(at ?? -1);
   }
   return found;

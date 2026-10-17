@@ -8,7 +8,13 @@ import {
 import { resolveStoredSeason, type StoredSeason } from "../db/seasons";
 import { CompetitionCodeSchema } from "../lib/competitions";
 import { type Decoder, strictDecoder } from "../lib/decode";
-import { booleanDefault, PositiveIntSchema, Sha256HexSchema } from "../lib/schemas";
+import { sha256Hex } from "../lib/hash";
+import {
+  booleanDefault,
+  PositiveIntSchema,
+  SeasonKeyStringSchema,
+  Sha256HexSchema,
+} from "../lib/schemas";
 import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { refreshDueStats, type StatsRefreshReport } from "../sync/stats-refresh";
 import type { Env } from "../types";
@@ -16,7 +22,7 @@ import { OperationConflictError } from "./errors";
 
 /** Explicit scope and resumable operation identity for historical corrections. */
 export const StatsRefreshRequestSchema: Schema.Struct<{
-  readonly competition: Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>;
+  readonly competition: typeof CompetitionCodeSchema;
   readonly season: Schema.Union<readonly [Schema.Int, Schema.String]>;
   readonly matchId: Schema.optionalKey<Schema.Int>;
   readonly operationId: Schema.String;
@@ -27,7 +33,7 @@ export const StatsRefreshRequestSchema: Schema.Struct<{
   competition: CompetitionCodeSchema,
   season: Schema.Union([
     Schema.Int.check(Schema.isBetween({ minimum: 1897, maximum: 2100 })),
-    Schema.String.check(Schema.isPattern(/^\d{4}(?:-S[67])?$/)),
+    SeasonKeyStringSchema,
   ]),
   matchId: Schema.optionalKey(PositiveIntSchema),
   operationId: Schema.String.check(Schema.isUUID()),
@@ -89,10 +95,7 @@ export async function operateStatsRefresh(
         message: "No eligible completed matches in requested scope",
       });
     const payload = JSON.stringify({ season, matches: matches.results });
-    const digest = Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload))),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
+    const digest = await sha256Hex(payload);
     if (request.dryRun)
       return {
         busy: false,

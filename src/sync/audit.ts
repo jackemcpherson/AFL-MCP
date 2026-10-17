@@ -1,9 +1,16 @@
 import { Schema } from "effect";
-import { batchRow } from "../lib/decode";
+import { batchRow, decodeRow } from "../lib/decode";
 import type { Env } from "../types";
 
 /** The public input revision marker. */
 const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Schema.Number });
+
+/** The least recently audited competition-season. */
+const AuditSeasonRowSchema = Schema.Struct({
+  id: Schema.Number,
+  season_key: Schema.String,
+  code: Schema.String,
+});
 
 /**
  * Inspect one competition-season per hourly pass without changing public inputs.
@@ -18,15 +25,12 @@ const MarkerRowSchema = Schema.Struct({ revision: Schema.Number, in_progress: Sc
  * await auditNextSeason(env);
  */
 export async function auditNextSeason(env: Env, now: Date = new Date()): Promise<void> {
-  const season = await env.DB.prepare(`SELECT s.id, s.season_key, c.code
+  const nextSeason = await env.DB.prepare(`SELECT s.id, s.season_key, c.code
     FROM seasons s JOIN competitions c ON c.id=s.competition_id
     LEFT JOIN sync_log l ON l.type='audit:season:' || s.id
     WHERE c.code IN ('AFLM','AFLW','VFL','VFLW')
-    GROUP BY s.id ORDER BY MAX(l.timestamp), s.id LIMIT 1`).first<{
-    id: number;
-    season_key: string;
-    code: string;
-  }>();
+    GROUP BY s.id ORDER BY MAX(l.timestamp), s.id LIMIT 1`).first();
+  const season = decodeRow(nextSeason, AuditSeasonRowSchema);
   if (!season) return;
   const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, in_progress FROM public_input_revision WHERE id=1"),
@@ -49,9 +53,12 @@ export async function auditNextSeason(env: Env, now: Date = new Date()): Promise
       LIMIT 101`).bind(season.id),
   ]);
   const start = batchRow(results, 0, MarkerRowSchema);
-  const end = await env.DB.prepare(
-    "SELECT revision, in_progress FROM public_input_revision WHERE id=1",
-  ).first<{ revision: number; in_progress: number }>();
+  const end = decodeRow(
+    await env.DB.prepare(
+      "SELECT revision, in_progress FROM public_input_revision WHERE id=1",
+    ).first(),
+    MarkerRowSchema,
+  );
   if (!start || !end || start.in_progress || end.in_progress || start.revision !== end.revision)
     return;
   const rows = results[1]?.results ?? [];

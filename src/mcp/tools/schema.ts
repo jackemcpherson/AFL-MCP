@@ -121,6 +121,9 @@ function competitionSummaries<C extends CoverageCompetition>(
  *
  * @param options - Validated options from the schema tool boundary.
  * @param env - Worker environment; required only for observed coverage.
+ * @returns The schema document, filtered or overlaid as the options ask.
+ * @throws {Error} When observed coverage is requested without `env`, or
+ *   the observation fails.
  */
 export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): Promise<SchemaInfo> {
   const coverage = await coverageContract(options, env);

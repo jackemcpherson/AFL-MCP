@@ -209,3 +209,19 @@ it("recovers a retained marker when the initial journal batch rolls back", async
   expect(await refreshWeather(env, request)).toMatchObject({ idempotent: true });
   expect(network).toHaveBeenCalledTimes(1);
 });
+
+it("digests the fixture context exactly as D1 returns it, so earlier previews still verify", async () => {
+  await seed();
+  const result = await refreshWeather(
+    env,
+    Result.getOrThrow(
+      decodeWeatherRefreshRequest({ competition: "AFLM", season: 2026, matchId: 804, evidence }),
+    ),
+  );
+  const raw =
+    await env.DB.prepare(`SELECT m.id,m.season_id,m.date,m.local_time,m.kickoff_at,m.status,m.venue_id,
+      cv.id AS canonical_venue_id,cv.latitude,cv.longitude FROM matches m
+      LEFT JOIN venues v ON v.id=m.venue_id LEFT JOIN venues cv ON cv.id=COALESCE(v.canonical_venue_id,v.id)
+      WHERE m.id=804`).first();
+  expect(JSON.stringify(result.manifest?.["context"])).toBe(JSON.stringify(raw));
+});
