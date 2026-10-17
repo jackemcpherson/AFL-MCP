@@ -60,6 +60,10 @@ the repository to TypeScript standard v4.
 - Breaking: the `code` tool rejects arguments it does not declare with an
   `isError` result that names the key and lists the valid arguments. It
   used to ignore them. `competition: null` still counts as omitted.
+- `schema` output is 17% smaller and puts the query API and shared rules
+  first. It corrects stale notes. The `ladder` example counts only
+  completed home-and-away matches, and `lineup_round_comparison` stays
+  within one season.
 
 ### Fixed in 5.0.0
 

@@ -60,36 +60,36 @@ export type SchemaTable =
   | "public_input_revision";
 
 /** A named example query in the `schema` tool response. */
+/** A named example query in the `schema` tool response. */
 export type CommonJoin =
-  | "multi_comp_summary"
-  | "team_roster_pav"
-  | "player_career_arc"
-  | "zone_leaders"
   | "match_with_teams_venue"
+  | "team_season_pav"
+  | "player_career_arc"
   | "match_coaches_lookup"
   | "coaching_source_comparisons"
   | "lineup_round_comparison"
-  | "lineup_with_pav"
-  | "match_weather_lookup"
   | "wet_game_scoring"
-  | "round_predictions"
   | "tipping_performance"
   | "ladder";
 
-/** The public database contract returned by the `schema` tool. */
+/**
+ * The public database contract returned by the `schema` tool. Key order is
+ * the reading order: the query API and cross-cutting rules come first, the
+ * per-table reference next, and the coverage contract last.
+ */
 export interface SchemaInfo {
-  readonly database: {
-    readonly engine: string;
-    readonly competitions: Partial<Record<CoverageCompetition, CompetitionSummary>>;
-    readonly coverage_contract: SchemaCoverageContract;
-    readonly tables: Readonly<Record<SchemaTable, string>>;
-    readonly notes: readonly string[];
-    readonly common_joins: Readonly<Record<CommonJoin, string>>;
-  };
   readonly query_api: {
     readonly usage: string;
     readonly methods: readonly string[];
     readonly notes: string;
+  };
+  readonly database: {
+    readonly engine: string;
+    readonly competitions: Partial<Record<CoverageCompetition, CompetitionSummary>>;
+    readonly notes: readonly string[];
+    readonly tables: Readonly<Record<SchemaTable, string>>;
+    readonly common_joins: Readonly<Record<CommonJoin, string>>;
+    readonly coverage_contract: SchemaCoverageContract;
   };
 }
 
@@ -136,43 +136,67 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
       }
     : coverage;
   return {
+    query_api: {
+      usage: "Call these on `db` inside code-tool code. Bind values with ? placeholders.",
+      methods: [
+        "db.prepare(sql).bind(...args).all() — returns { results: Row[], success: boolean }",
+        "db.prepare(sql).bind(...args).first() — returns first Row or null",
+      ],
+      notes: "Read-only. The code tool description lists the sandbox limits.",
+    },
     database: {
       engine: "SQLite (Cloudflare D1)",
       competitions: competitionSummaries(baseFilter ? [baseFilter] : COVERAGE_COMPETITIONS),
-      coverage_contract: coverageResponse,
+      // Cross-cutting rules every query needs. Table-specific caveats sit with
+      // their table in `tables`.
+      notes: [
+        "Filter every query by competition: JOIN seasons s ON m.season_id = s.id JOIN competitions c ON s.competition_id = c.id WHERE c.code = ?. Each competition has its own team rows (Carlton AFLM and Carlton VFL have distinct team_id values), so an unfiltered query silently mixes competitions and double-counts aggregates. One player_id can play in two competitions in one season (an AFLM-listed player in VFL), so resolve a stat row's competition through match → season → competition.",
+        "Select seasons by seasons.season_key: 'YYYY', except AFLW 2022, which has two seasons, '2022-S6' and '2022-S7'. A year filter merges them.",
+        "Rounds: `round` is the AFL API's long label, `round_abbreviation` its short form ('Rd N', 'OR', 'WC', 'FW1', 'QF', 'EF', 'SF', 'PF', 'GF'; unmapped finals names become 'F<round_number>'), `round_type` is 'Regular' or 'Finals', and `round_number` is a per-season ordinal continuous through finals. Opening Round (AFLM 2024+, round_number 0) precedes Round 1 and is a Regular round: include it. VFL's 'Wildcard' round before finals is also Regular. Finals names vary by competition and era ('Finals Week 1', 'Qualifying Final', 'Elimination Final', 'Semi Finals', 'Preliminary Finals', 'Grand Final', and from 2026 'Wildcard Finals' and 'Qualifying & Elimination Finals'), so select finals with round_type = 'Finals' and a specific final with `round`. round_number differs across competitions and seasons (AFLM 2024 finals are 25-28, AFLW 2025 finals 13-16, VFL 2025 Wildcard 22 then finals 23-26; AFLM R1 is March, AFLW R1 August, VFL R1 April): compare rounds within one season, or by date.",
+        "Played matches have status = 'Complete'. 'Live' rows carry partial scores. 'Cancelled' rows (COVID-era VFL/VFLW 2021 and one AFLM 2015 match) were not played: their NULL scores mean cancelled, not missing, and a recorded score there is not a result.",
+        "database.coverage_contract is canonical for which seasons, columns and sources are populated. Where a note seems to disagree, the contract wins.",
+        "Integrity-check views v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin and v_integrity_brownlow return one row per invariant violation. An empty result means the invariant holds.",
+      ],
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT (AFLM/AFLW/VFL/VFLW), name TEXT",
         seasons:
-          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, season_key TEXT (canonical selector, AFLW 2022-S6 or 2022-S7), display_name TEXT, is_complete INTEGER (0=in-progress, 1=all matches played)",
+          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, season_key TEXT (canonical selector, AFLW 2022-S6 or 2022-S7), display_name TEXT, is_complete INTEGER (1 when the season has matches and all have home_points, else 0)",
         season_provider_ids:
           "season_id INTEGER, provider TEXT, provider_season_id TEXT. Verified provider season mappings.",
         player_provider_ids:
           "provider TEXT, provider_id TEXT, player_id INTEGER, evidence_json TEXT. Provider identity crosswalk; names are not identity evidence.",
         player_id_redirects:
-          "retired_id INTEGER, canonical_id INTEGER, manifest_digest TEXT. Resolve retired internal IDs without altering issued predictions.",
-        teams:
-          "id INTEGER PRIMARY KEY, name TEXT, abbreviation TEXT, competition_id INTEGER REFERENCES competitions(id)",
+          "retired_id INTEGER, canonical_id INTEGER, manifest_digest TEXT. Maps a merged player's retired internal ID to its canonical ID. Resolve stored or external player IDs through it; issued predictions keep the IDs they were issued with.",
+        teams: [
+          "id INTEGER PRIMARY KEY, name TEXT,",
+          "abbreviation TEXT (AFLM: ADE, BB, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB; NULL for AFLW, VFL and VFLW),",
+          "competition_id INTEGER REFERENCES competitions(id).",
+          "Historical AFLM clubs keep distinct team IDs to preserve source history: Brisbane Bears (through 1996), Fitzroy and Brisbane Lions. Rating models may carry ratings across the Bears-to-Lions transition.",
+        ].join(" "),
         venues: [
           "id INTEGER PRIMARY KEY, name TEXT,",
           "latitude REAL, longitude REAL, timezone TEXT (IANA, e.g. Australia/Melbourne),",
-          "roof TEXT ('retractable' | 'none'),",
-          "canonical_venue_id INTEGER REFERENCES venues(id) (alias -> physical ground; self when canonical)",
+          "roof TEXT ('retractable' for Marvel Stadium only, where rain may not reach the surface | 'none' | NULL unclassified),",
+          "canonical_venue_id INTEGER REFERENCES venues(id) (sponsor renames create separate rows; this points to the physical ground: self when canonical, NULL until the sync classifies a new venue).",
+          "Group by physical ground with JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id).",
         ].join(" "),
         players: [
           "id INTEGER PRIMARY KEY, first_name TEXT, surname TEXT, external_id TEXT,",
-          "external_afl_player_id TEXT,",
-          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER (NULL=unknown; source-verified 0/1 only), legacy_is_retired INTEGER (unverified imported/defaulted flag; never infer current availability)",
+          "external_afl_player_id TEXT (AFL API CD_I ID),",
+          "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER (NULL=unknown; source-verified 0/1 only), legacy_is_retired INTEGER (unverified imported/defaulted flag; never infer current availability).",
+          "A player has no team column: take the team per game from player_match_stats.team_id.",
+          "Fryzigg and AFL API records are unified under one player_id; a few same-name players keep separate records because they are different people.",
         ].join(" "),
         matches: [
           "id INTEGER PRIMARY KEY, season_id INTEGER REFERENCES seasons(id),",
-          "round TEXT, round_abbreviation TEXT, round_number INTEGER, round_type TEXT,",
-          "date TEXT, local_time TEXT, kickoff_at TEXT (nullable canonical UTC source instant), lineups_observed_at TEXT (nullable UTC lineup observation),",
+          "round TEXT, round_abbreviation TEXT, round_number INTEGER, round_type TEXT (see the rounds note),",
+          "date TEXT (YYYY-MM-DD), local_time TEXT (Melbourne time HH:MM:SS for every competition; venue-local time is not stored), kickoff_at TEXT (nullable canonical UTC source instant), lineups_observed_at TEXT (nullable UTC lineup observation),",
           "venue_id INTEGER REFERENCES venues(id),",
           "home_team_id INTEGER REFERENCES teams(id),",
           "away_team_id INTEGER REFERENCES teams(id),",
           "home_goals INTEGER, home_behinds INTEGER, home_points INTEGER,",
           "away_goals INTEGER, away_behinds INTEGER, away_points INTEGER,",
-          "margin INTEGER, attendance INTEGER,",
+          "margin INTEGER (home perspective: positive = home won; ABS(margin) for size), attendance INTEGER,",
           "external_afltables_id TEXT, external_fryzigg_id TEXT,",
           "external_afl_id TEXT,",
           "home_rushed_behinds INTEGER, away_rushed_behinds INTEGER,",
@@ -185,15 +209,16 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "away_q2_goals INTEGER, away_q2_behinds INTEGER,",
           "away_q3_goals INTEGER, away_q3_behinds INTEGER,",
           "away_q4_goals INTEGER, away_q4_behinds INTEGER,",
-          "status TEXT, live_period_status TEXT,",
-          "completed_quarter INTEGER (NULL or 0-4; highest fully completed quarter)",
+          "status TEXT ('Upcoming' | 'Live' | 'Complete' | 'Postponed' | 'Cancelled'; set on every row),",
+          "live_period_status TEXT (opaque raw AFL API text such as 'LIVE', 'POSTGAME', 'CONCLUDED'; it stays 'LIVE' through quarter breaks),",
+          "completed_quarter INTEGER (highest fully completed quarter from the AFL API clock: 0 before the first ends, 1-4 after; NULL when no clock was supplied or the row predates refresh. Pair it with status. Five-minute-sync context, not a live siren signal)",
         ].join(" "),
         player_match_stats: [
           "id INTEGER PRIMARY KEY, match_id INTEGER REFERENCES matches(id),",
           "player_id INTEGER REFERENCES players(id),",
           "team_id INTEGER REFERENCES teams(id),",
           "guernsey_number INTEGER, player_position TEXT,",
-          "subbed TEXT, time_on_ground_pct REAL,",
+          "subbed TEXT ('Not Subbed' | 'Subbed In' | 'Subbed Out' | NULL), time_on_ground_pct REAL,",
           "kicks INTEGER, handballs INTEGER, disposals INTEGER,",
           "effective_disposals INTEGER, disposal_efficiency_pct REAL,",
           "marks INTEGER, bounces INTEGER, tackles INTEGER,",
@@ -209,7 +234,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "hitouts INTEGER, hitouts_to_advantage INTEGER,",
           "hitout_win_pct REAL, ruck_contests INTEGER,",
           "inside_fifties INTEGER, rebounds INTEGER,",
-          "turnovers INTEGER, intercepts INTEGER, metres_gained INTEGER,",
+          "turnovers INTEGER, intercepts INTEGER, metres_gained INTEGER (can be negative: net territory lost),",
           "pressure_acts INTEGER, def_half_pressure_acts INTEGER,",
           "tackles_inside_fifty INTEGER, spoils INTEGER,",
           "contest_def_losses INTEGER, contest_def_one_on_ones INTEGER,",
@@ -231,125 +256,81 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "player_id INTEGER REFERENCES players(id),",
           "season_id INTEGER REFERENCES seasons(id),",
           "team_id INTEGER REFERENCES teams(id),",
-          "off_pav REAL, mid_pav REAL, def_pav REAL, total_pav REAL",
+          "off_pav REAL (offence: goals, score involvements, forward craft), mid_pav REAL (midfield: disposals, clearances, tackles, contested ball), def_pav REAL (defence: intercepts, spoils, one-percenters, rebounds), total_pav REAL.",
+          "total_pav ≈ off_pav + mid_pav + def_pav: each is rounded independently, so about a third of rows differ by ±0.01.",
+          "AFLM scale: 25+ exceptional (Brownlow contention), 20-25 great (All-Australian), 15-20 very good (best-22), 10-15 solid contributor, 5-10 below average or limited games, <5 minimal. AFLW totals run lower (shorter games, smaller squads).",
+          "Derived only for some competition-seasons (see coverage_contract), so LEFT JOIN it to player_match_stats. Missing season inputs leave values NULL; cancelled and live matches are excluded.",
         ].join(" "),
         match_lineups: [
           "id INTEGER PRIMARY KEY,",
           "match_id INTEGER REFERENCES matches(id),",
           "player_id INTEGER REFERENCES players(id),",
           "team_id INTEGER REFERENCES teams(id),",
-          "guernsey_number INTEGER, position TEXT,",
-          "is_emergency INTEGER (0=no, 1=yes),",
-          "is_substitute INTEGER (0=no, 1=yes)",
+          "guernsey_number INTEGER,",
+          "position TEXT (18 field positions FB, BPL, BPR, CHB, HBFL, HBFR, C, WL, WR, R, RR, RK, HFFL, HFFR, CHF, FPL, FPR, FF; INT interchange; SUB medical substitute; EMERG emergency),",
+          "is_emergency INTEGER (1 = named emergency, may not play),",
+          "is_substitute INTEGER (1 = the medical substitute, position 'SUB').",
+          "Rows are the team after late changes, plus named emergencies. No rows for a match means not yet published.",
         ].join(" "),
         match_weather: [
           "match_id INTEGER REFERENCES matches(id),",
-          "kind TEXT ('observed' | 'forecast'),",
-          "temp_c REAL (deg C, mean over the 3h match window),",
-          "precip_mm REAL (mm, total over the 3h match window),",
-          "precip_24h_prior_mm REAL (mm, total over the 24h before the match window; ground condition),",
-          "wind_speed_kmh REAL (km/h, max over the 3h match window),",
-          "wind_gust_kmh REAL (km/h, max over the 3h match window),",
-          "humidity_pct REAL (%, mean over the 3h match window),",
-          "source TEXT ('era5_land+era5' | 'historical_forecast' | 'best_match'),",
+          "kind TEXT ('forecast' = pre-match forecast, refreshed in place and kept after the match for forecast-error checks | 'observed' = post-match value),",
+          "temp_c REAL (deg C, mean), precip_mm REAL (mm, total),",
+          "precip_24h_prior_mm REAL (mm, total over the 24h before the match window; ground condition, separate from in-game rain),",
+          "wind_speed_kmh REAL (km/h, max), wind_gust_kmh REAL (km/h, max), humidity_pct REAL (%, mean),",
+          "source TEXT ('era5_land+era5' = final reanalysis, temp/humidity/wind from ERA5-Land and precipitation from ERA5 | 'historical_forecast' = interim observed value, replaced by reanalysis within about a week | 'best_match' = forecast rows),",
           "fetched_at TEXT (UTC ISO 8601),",
-          "PRIMARY KEY (match_id, kind)",
+          "PRIMARY KEY (match_id, kind).",
+          "Metrics cover the 3h match window from scheduled start. Values are ambient conditions: discount rain yourself at roofed venues (venues.roof). Cancelled matches and the 'To Be Confirmed' placeholder venue get no rows. Data: Open-Meteo (CC-BY 4.0).",
         ].join(" "),
         match_predictions: [
           "match_id INTEGER PRIMARY KEY REFERENCES matches(id),",
-          "tipper_run_id INTEGER (nullable reference to prospective capture run), home_win_prob REAL (0..1, home team's win probability),",
+          "tipper_run_id INTEGER (prospective capture run; NULL for backfilled rows), home_win_prob REAL (0..1),",
           "predicted_margin REAL (points, one decimal; positive = home favoured),",
           "model_version TEXT (production model identity and full source revision),",
-          "generated_at TEXT (UTC ISO 8601)",
+          "generated_at TEXT (UTC ISO 8601, actual generation time).",
+          "One retained row per match, combining chronological season backfill with real-time Tipper predictions: read both together for season performance, and LEFT JOIN to report missing predictions. Both values take the HOME team's perspective. The tipped winner is home when home_win_prob >= 0.5, else away (not the rounded margin).",
         ].join(" "),
         coach_backfill_progress:
           "provider TEXT, season INTEGER, cursor TEXT, assignments_json TEXT, updated_at TEXT, PRIMARY KEY (provider, season)",
-        coaches: "id TEXT PRIMARY KEY, display_name TEXT, profile_url TEXT, created_at TEXT",
+        coaches:
+          "id TEXT PRIMARY KEY, display_name TEXT, profile_url TEXT, created_at TEXT. Coach IDs are provider-qualified unless a cross-provider match has been explicitly verified.",
         coach_external_ids:
           "provider TEXT, external_coach_id TEXT, coach_id TEXT REFERENCES coaches(id), display_name TEXT, profile_url TEXT, verified INTEGER, PRIMARY KEY (provider, external_coach_id)",
         coach_external_match_ids:
           "provider TEXT, external_match_id TEXT, match_id INTEGER REFERENCES matches(id), PRIMARY KEY (provider, external_match_id)",
         coach_observations:
-          "id INTEGER PRIMARY KEY, provider TEXT, external_coach_id TEXT, external_match_id TEXT, coach_id TEXT, match_id INTEGER, team_id INTEGER, season INTEGER, source_url TEXT, retrieved_at TEXT, match_date TEXT, display_name TEXT, raw_team TEXT, home_points INTEGER, away_points INTEGER",
+          "id INTEGER PRIMARY KEY, provider TEXT ('afl-tables' | 'footywire'), external_coach_id TEXT, external_match_id TEXT, coach_id TEXT, match_id INTEGER, team_id INTEGER, season INTEGER, source_url TEXT, retrieved_at TEXT, match_date TEXT, display_name TEXT, raw_team TEXT, home_points INTEGER, away_points INTEGER. Keeps each provider's evidence independently. FootyWire is comparison-only and never replaces the canonical AFL Tables assignment; source disagreements stay queryable here.",
         match_coaches:
-          "match_id INTEGER REFERENCES matches(id), team_id INTEGER REFERENCES teams(id), coach_id TEXT REFERENCES coaches(id), observation_id INTEGER REFERENCES coach_observations(id), updated_at TEXT, PRIMARY KEY (match_id, team_id)",
+          "match_id INTEGER REFERENCES matches(id), team_id INTEGER REFERENCES teams(id), coach_id TEXT REFERENCES coaches(id), observation_id INTEGER REFERENCES coach_observations(id), updated_at TEXT, PRIMARY KEY (match_id, team_id). Canonical AFL Tables assignments: at most one credited coach per match and participant club. LEFT JOIN it to keep unknown assignments.",
         coach_import_pages:
           "provider TEXT, season INTEGER, scope TEXT, status TEXT, last_checked_at TEXT, last_success_at TEXT, failure_count INTEGER",
         coach_import_diagnostics:
           "id INTEGER PRIMARY KEY, provider TEXT, season INTEGER, scope TEXT, source_url TEXT, reason TEXT, created_at TEXT, resolved_at TEXT",
         public_input_revision:
-          "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT, write_holder TEXT (opaque operation ownership), write_operation TEXT (resumable operation identity)",
+          "id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER, in_progress INTEGER, write_started_at TEXT, write_holder TEXT (opaque operation ownership), write_operation TEXT (resumable operation identity). A monotonic input-change marker: revision changes for meaningful match result or canonical coach changes. Read revision, in_progress and write_started_at before and after a native snapshot; retry on a revision difference or any active write. The scheduled sync resumes a marker left by its own interrupted run on the next tick; any other stale marker requires operator recovery after checking the shared lease and incomplete work. Last-check timestamps, secondary observations, diagnostics and coverage checks do not change the revision.",
       },
-      notes: [
-        // Multi-competition rules — read first
-        "ALWAYS filter queries by competition. Join `seasons s ON m.season_id = s.id` then `competitions c ON s.competition_id = c.id` and add `WHERE c.code = ?`. Without this filter, results mix competitions silently — team rows with the same name (e.g. Carlton AFLM vs Carlton VFL) have distinct team_id values, so unfiltered aggregates double-count.",
-        "Coverage expectations, exact ranges, sources, and review dates are canonical in database.coverage_contract. Descriptive notes never override that typed contract.",
-        "match_coaches has at most one credited coach per match and participant club. It stores canonical AFL Tables assignments; LEFT JOIN it to preserve unknown assignments. Coach IDs use provider-qualified identity unless a cross-provider match has been explicitly verified.",
-        "coach_observations retains AFL Tables and FootyWire evidence independently. FootyWire is comparison-only and never replaces the canonical AFL Tables assignment. Source disagreements remain queryable in this table.",
-        "Historical AFLM team identities are Brisbane Bears through 1996, Fitzroy, and Brisbane Lions. Their distinct team IDs preserve the source history; downstream ELO systems may carry ratings across the Bears-to-Lions transition.",
-        "public_input_revision is a monotonic input-change marker. It changes for meaningful match result or canonical coach changes. Read revision, in_progress, and write_started_at before and after a native snapshot; retry on a revision difference or any active write. The scheduled sync resumes a marker left by its own interrupted run on the next tick; any other stale marker requires operator recovery after checking the shared lease and incomplete work. Last-check timestamps, secondary observations, diagnostics, and coverage checks do not change the revision.",
-        // Round labels — competition-specific
-        "Round labels: matches has TWO round-string columns mirroring the AFL API directly (same approach as the R fitzRoy package — no cross-competition normalisation):",
-        "- `round` is the long form: `Round 1`–`Round N`, `Opening Round` (AFLM 2024+, round_number=0), `Wildcard` (VFL only, before finals), and finals `Finals Week 1` / `Semi Finals` / `Preliminary Finals` / `Grand Final`. The AFLM 2026 finals format adds `Wildcard Finals` and `Qualifying & Elimination Finals`.",
-        "- `round_abbreviation` is the AFL's short form: `Rd 1`–`Rd N`, `OR`, `WC`, `FW1`, `SF`, `PF`, `GF`. Finals round names without a mapped short form fall back to `F<round_number>` (e.g. AFLM 2026 `Wildcard Finals` = `F25`, `Qualifying & Elimination Finals` = `F26`). Stable across all four competitions; useful for compact display and abbreviation-based filters.",
-        "- `round_number` is a per-season ordinal: continuous through regular and finals (e.g. AFLM 2024 finals are 25–28; AFLW 2025 finals are 13–16; VFL 2025 has Wildcard at 22 then finals 23–26). Round numbers don't align across competitions — AFLM R1 is March, AFLW R1 is August, VFL R1 is April.",
-        "- `round_type` is `Regular` (home-and-away + Opening Round + Wildcard) or `Finals`.",
-        "Pre-v3.0.0 historical data may still have legacy `EF`/`QF`/`SF`/`PF`/`GF` strings in `round` for AFLM finals 2012–2025; these get rewritten to the long form on the next backfill.",
-        "round_type is either 'Regular' or 'Finals'. For granular finals identification use the round column.",
-        "Opening Round (round_number=0, only present for AFLM 2024+) is played before Round 1 and must not be excluded from queries.",
-        "AFLM 2012–2025 finals labels were rewritten in v3.0.0 to match fitzroy v2.1's labels; legacy `EF/QF/SF/PF/GF` no longer appears in the data.",
-        // Players + teams
-        "Players have no team_id column — a player's team is determined per-game via player_match_stats.team_id. The same player_id can appear in multiple competitions in the same season (e.g. an AFLM-listed reserves player who also plays VFL games for the affiliate); resolve their competition per stat row via match → season → competition.",
-        // PAV semantics
-        "total_pav ≈ off_pav + mid_pav + def_pav. ~12-15% of rows differ by exactly ±0.01 because each component is rounded independently. Treat the relationship as approximate, not exact.",
-        "PAV zone meanings: off_pav = offensive (goals, score involvements, forward craft); mid_pav = midfield (disposals, clearances, tackles, contested ball); def_pav = defensive (intercepts, spoils, one-percenters, rebounds).",
-        "PAV interpretation (AFLM scale): 25+ exceptional (Brownlow contention), 20-25 great (All-Australian), 15-20 very good (team best-22), 10-15 solid contributor, 5-10 below average or limited games, <5 minimal contribution. AFLW PAV is on a similar but lower-totals scale because of shorter games and smaller squads.",
-        "Use LEFT JOIN when combining player_season_pav with player_match_stats because PAV is not applicable to every competition-season.",
-        // Format
-        "match date format is ISO 8601 (YYYY-MM-DD).",
-        "matches.margin is signed from the home team's perspective: positive = home team won by that many points, negative = away team won. Use ABS(margin) for absolute margin.",
-        "teams.abbreviation: AFL standard 2–4 letter codes for AFLM (ADE, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB). May be NULL for AFLW/VFL/VFLW teams sourced from fitzroy.",
-        // Value semantics; coverage and ranges live only in coverage_contract.
-        "external_afl_player_id is the AFL API player ID (CD_I format).",
-        "metres_gained can be negative (valid — player lost net territory). Minimum observed: -92.",
-        "subbed values are 'Not Subbed' and 'Subbed'.",
-        "local_time is Melbourne local time (AEST/AEDT) as HH:MM:SS for every competition; venue-native time is intentionally not stored.",
-        "matches.status lifecycle values are 'Upcoming', 'Live', 'Complete', 'Postponed', and 'Cancelled'. Populated for every row: historical played matches are 'Complete', and the 38 unscored VFL/VFLW 2021 COVID-era matches are 'Cancelled' (NULL scores there mean cancelled, not missing data).",
-        "matches.live_period_status is opaque raw AFL API text; observed values include 'LIVE', 'QTR_TIME', 'HALF_TIME', '3QTR_TIME', and 'FULL_TIME'.",
-        "matches.completed_quarter is the highest fully completed quarter from the AFL API match clock: 0 means play has not completed a quarter, 1-4 identify the last completed quarter, and NULL means no clock was supplied or the row predates refresh. Pair it with status; it is five-minute-sync context, not a live siren SLA.",
-        // Weather
-        "match_weather: up to two rows per match, keyed (match_id, kind). kind='forecast' is the pre-match Open-Meteo forecast, overwritten in place per refresh and KEPT after the match (compare with observed for forecast error); kind='observed' is the post-match value.",
-        "match_weather window: metrics cover the 3h from scheduled start — temp_c/humidity_pct are means, precip_mm a total, wind_speed_kmh/wind_gust_kmh maxima. precip_24h_prior_mm is rainfall in the 24h BEFORE the window (ground condition, separate from in-game rain).",
-        "match_weather.source: 'era5_land+era5' = final reanalysis (temp/humidity/wind from ERA5-Land, precipitation from ERA5); 'historical_forecast' = interim observed value, upgraded to reanalysis within ~a week; 'best_match' = forecast rows. Data from Open-Meteo (CC-BY 4.0).",
-        "Venue aliases: sponsor renames create separate venues rows; venues.canonical_venue_id points to the physical ground — self for canonical rows, NULL for venues the sync has inserted but not yet classified. Group by physical venue via JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id) (the COALESCE covers the unclassified-NULL case).",
-        "venues.roof = 'retractable' (Marvel Stadium only) flags grounds where rain may never reach the surface; match_weather always stores ambient conditions, so discount them yourself for roofed venues. Cancelled matches and the 'To Be Confirmed' placeholder venue (id 17748, NULL geodata) never get match_weather rows.",
-        // Predictions
-        "match_predictions retains one stored row per match, combining chronological historical season backfill with real-time Tipper predictions. Read both together for season performance. home_win_prob (0..1) and predicted_margin (one decimal, positive = home favoured) use the HOME team's perspective; model_version records production model identity and full source revision. generated_at is the actual generation time; tipper_run_id is optional and NULL for backfilled rows. Use LEFT JOIN to report missing predictions.",
-        "For tipping_performance, infer the tipped winner from home_win_prob >= 0.5 (home) or < 0.5 (away), not rounded predicted_margin. Accuracy excludes draws; draws and decisive_matches count predicted games. Margin MAE includes covered draws. through_date is the latest scored prediction date.",
-        // Lineups
-        "match_lineups represents the post-change team — the players who actually took the field. Treat absence as not-yet-published rather than canonical.",
-        "match_lineups is_emergency=1 means the player is named as an emergency and may not play.",
-        "match_lineups is_substitute=1 marks all interchange/bench players (INT + SUB positions), not just the medical sub. To find just the medical substitute, filter on position = 'SUB'.",
-        "match_lineups position codes: 18 starting positions (FB, BPL, BPR, CHB, HBFL, HBFR, FF, FPL, FPR, CHF, HFFL, HFFR, C, WL, WR, R, RR, RK), plus INT (interchange), SUB (medical substitute), and EMERG (emergency).",
-        "Most players with both fryzigg and AFL API data are unified under a single player_id. A small number of common-name players may have separate records for genuinely different people who share a name.",
-        "Integrity-check views (v_integrity_disposals, v_integrity_match_points, v_integrity_quarter_scores, v_integrity_margin, v_integrity_brownlow) return one row per invariant violation; an empty result set means the invariant holds.",
-        "seasons.is_complete: 1 when every match in the season has been played (home_points NOT NULL for all rows). 0 for in-progress and not-started seasons.",
-      ],
+      // Patterns a model would not write correctly from the column list alone.
+      // Every example binds the competition first.
       common_joins: {
-        // Always filter by competition — first bound parameter in every example.
-        multi_comp_summary: [
-          "-- Per-competition match counts for a season",
-          "SELECT c.code AS competition, COUNT(m.id) AS matches",
-          "FROM competitions c",
-          "JOIN seasons s ON s.competition_id = c.id",
-          "JOIN matches m ON m.season_id = s.id",
-          "WHERE s.season_key = ?",
-          "GROUP BY c.code",
-          "ORDER BY c.code",
+        match_with_teams_venue: [
+          "-- Base pattern: competition filter plus team and venue names.",
+          "-- Bind: competition, canonical season key",
+          "SELECT m.date, m.round, ht.name as home_team, at.name as away_team,",
+          "  m.home_points, m.away_points, m.margin, v.name as venue",
+          "FROM matches m",
+          "JOIN seasons s ON m.season_id = s.id",
+          "JOIN competitions c ON s.competition_id = c.id",
+          "JOIN teams ht ON m.home_team_id = ht.id",
+          "JOIN teams at ON m.away_team_id = at.id",
+          "JOIN venues v ON m.venue_id = v.id",
+          "WHERE c.code = ? AND s.season_key = ?",
         ].join("\n"),
-        team_roster_pav: [
-          "-- Bind: competition, team name, canonical season key",
-          "SELECT p.first_name, p.surname, psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
+        team_season_pav: [
+          "-- Bind: competition, team name, canonical season key.",
+          "-- Drop the team filter and add LIMIT 20 for league-wide leaders.",
+          "SELECT p.first_name, p.surname, t.name AS team,",
+          "  psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
           "FROM player_season_pav psp",
           "JOIN players p ON psp.player_id = p.id",
           "JOIN seasons s ON psp.season_id = s.id",
@@ -370,30 +351,6 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "WHERE c.code = ? AND pms.player_id = ?",
           "GROUP BY s.year, psp.total_pav, psp.off_pav, psp.mid_pav, psp.def_pav",
           "ORDER BY s.year",
-        ].join("\n"),
-        zone_leaders: [
-          "-- Bind: competition, canonical season key",
-          "SELECT p.first_name, p.surname, t.name as team, psp.mid_pav, psp.off_pav, psp.def_pav, psp.total_pav",
-          "FROM player_season_pav psp",
-          "JOIN players p ON psp.player_id = p.id",
-          "JOIN seasons s ON psp.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN teams t ON psp.team_id = t.id",
-          "WHERE c.code = ? AND s.season_key = ?",
-          "ORDER BY psp.total_pav DESC",
-          "LIMIT 20",
-        ].join("\n"),
-        match_with_teams_venue: [
-          "-- Bind: competition, canonical season key",
-          "SELECT m.date, m.round, ht.name as home_team, at.name as away_team,",
-          "  m.home_points, m.away_points, m.margin, v.name as venue",
-          "FROM matches m",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN teams ht ON m.home_team_id = ht.id",
-          "JOIN teams at ON m.away_team_id = at.id",
-          "JOIN venues v ON m.venue_id = v.id",
-          "WHERE c.code = ? AND s.season_key = ?",
         ].join("\n"),
         match_coaches_lookup: [
           "-- Bind: competition, canonical season key",
@@ -426,72 +383,27 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "ORDER BY primary_obs.match_date, team",
         ].join("\n"),
         lineup_round_comparison: [
-          "-- Compare team lineups between two rounds (shows ins/outs)",
-          "-- Bind: competition, team name, current round number, prev round number, then again for OUT half",
-          "SELECT 'IN' as change, p.first_name, p.surname, ml.position",
-          "FROM match_lineups ml",
-          "JOIN matches m ON ml.match_id = m.id",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN players p ON ml.player_id = p.id",
-          "JOIN teams t ON ml.team_id = t.id",
-          "WHERE c.code = ? AND t.name = ? AND m.round_number = ? AND ml.is_emergency = 0",
-          "  AND ml.player_id NOT IN (",
-          "    SELECT ml2.player_id FROM match_lineups ml2",
-          "    JOIN matches m2 ON ml2.match_id = m2.id",
-          "    WHERE ml2.team_id = ml.team_id AND m2.round_number = ? AND m2.season_id = m.season_id AND ml2.is_emergency = 0",
-          "  )",
+          "-- Ins and outs between two rounds of one season, emergencies excluded.",
+          "-- Bind: competition, team name, canonical season key, current round number, previous round number",
+          "WITH r AS (",
+          "  SELECT m.round_number, ml.player_id, ml.position",
+          "  FROM match_lineups ml",
+          "  JOIN matches m ON ml.match_id = m.id",
+          "  JOIN seasons s ON m.season_id = s.id",
+          "  JOIN competitions c ON s.competition_id = c.id",
+          "  JOIN teams t ON ml.team_id = t.id",
+          "  WHERE c.code = ? AND t.name = ? AND s.season_key = ? AND ml.is_emergency = 0",
+          "), cur AS (SELECT * FROM r WHERE round_number = ?), prev AS (SELECT * FROM r WHERE round_number = ?)",
+          "SELECT 'IN' AS change, p.first_name, p.surname, cur.position",
+          "FROM cur JOIN players p ON p.id = cur.player_id",
+          "WHERE cur.player_id NOT IN (SELECT player_id FROM prev)",
           "UNION ALL",
-          "SELECT 'OUT', p.first_name, p.surname, ml.position",
-          "FROM match_lineups ml",
-          "JOIN matches m ON ml.match_id = m.id",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN players p ON ml.player_id = p.id",
-          "JOIN teams t ON ml.team_id = t.id",
-          "WHERE c.code = ? AND t.name = ? AND m.round_number = ? AND ml.is_emergency = 0",
-          "  AND ml.player_id NOT IN (",
-          "    SELECT ml2.player_id FROM match_lineups ml2",
-          "    JOIN matches m2 ON ml2.match_id = m2.id",
-          "    WHERE ml2.team_id = ml.team_id AND m2.round_number = ? AND m2.season_id = m.season_id AND ml2.is_emergency = 0",
-          "  )",
-        ].join("\n"),
-        lineup_with_pav: [
-          "-- Team lineup enriched with PAV data",
-          "-- Bind: competition, team name, round number, canonical season key",
-          "SELECT p.first_name, p.surname, ml.position, ml.guernsey_number,",
-          "  ml.is_emergency, ml.is_substitute,",
-          "  psp.off_pav, psp.mid_pav, psp.def_pav, psp.total_pav",
-          "FROM match_lineups ml",
-          "JOIN matches m ON ml.match_id = m.id",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN players p ON ml.player_id = p.id",
-          "JOIN teams t ON ml.team_id = t.id",
-          "LEFT JOIN player_season_pav psp ON psp.player_id = p.id AND psp.season_id = s.id",
-          "WHERE c.code = ? AND t.name = ? AND m.round_number = ? AND s.season_key = ?",
-          "ORDER BY ml.is_emergency, psp.total_pav DESC NULLS LAST",
-        ].join("\n"),
-        match_weather_lookup: [
-          "-- Weather for one match (observed + retained forecast) via the canonical venue.",
-          "-- Bind: competition, canonical season key, home team name",
-          "SELECT m.date, m.round, ht.name AS home_team, at.name AS away_team,",
-          "  cv.name AS venue, cv.roof, w.kind, w.source,",
-          "  w.temp_c, w.precip_mm, w.precip_24h_prior_mm,",
-          "  w.wind_speed_kmh, w.wind_gust_kmh, w.humidity_pct",
-          "FROM matches m",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN teams ht ON m.home_team_id = ht.id",
-          "JOIN teams at ON m.away_team_id = at.id",
-          "JOIN venues v ON m.venue_id = v.id",
-          "JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)",
-          "LEFT JOIN match_weather w ON w.match_id = m.id",
-          "WHERE c.code = ? AND s.season_key = ? AND ht.name = ?",
-          "ORDER BY m.date, w.kind",
+          "SELECT 'OUT', p.first_name, p.surname, prev.position",
+          "FROM prev JOIN players p ON p.id = prev.player_id",
+          "WHERE prev.player_id NOT IN (SELECT player_id FROM cur)",
         ].join("\n"),
         wet_game_scoring: [
-          "-- Scoring in wet games, excluding roofed venues.",
+          "-- Observed weather via the canonical venue, excluding roofed and unclassified grounds.",
           "-- Bind: competition",
           "SELECT s.year, m.date, ht.name AS home_team, at.name AS away_team,",
           "  m.home_points + m.away_points AS total_points,",
@@ -504,26 +416,14 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "JOIN teams at ON m.away_team_id = at.id",
           "JOIN venues v ON m.venue_id = v.id",
           "JOIN venues cv ON cv.id = COALESCE(v.canonical_venue_id, v.id)",
-          "WHERE c.code = ? AND m.home_points IS NOT NULL",
+          "WHERE c.code = ? AND m.status = 'Complete'",
           "  AND w.precip_mm >= 2.0 AND cv.roof = 'none'",
           "ORDER BY w.precip_mm DESC",
         ].join("\n"),
-        round_predictions: [
-          "-- Model predictions for a round, with team names.",
-          "-- Bind: competition, canonical season key, round number",
-          "SELECT m.date, m.round, ht.name AS home_team, at.name AS away_team,",
-          "  mp.home_win_prob, mp.predicted_margin, mp.model_version",
-          "FROM matches m",
-          "JOIN seasons s ON m.season_id = s.id",
-          "JOIN competitions c ON s.competition_id = c.id",
-          "JOIN teams ht ON m.home_team_id = ht.id",
-          "JOIN teams at ON m.away_team_id = at.id",
-          "LEFT JOIN match_predictions mp ON mp.match_id = m.id",
-          "WHERE c.code = ? AND s.season_key = ? AND m.round_number = ?",
-          "ORDER BY m.date",
-        ].join("\n"),
         tipping_performance: [
           "-- Bind: competition, canonical season key. Includes retained backfill and real-time predictions.",
+          "-- accuracy_pct excludes draws; draws and decisive_matches count predicted games;",
+          "-- margin_mae includes covered draws; through_date is the latest scored prediction date.",
           "WITH summary AS (",
           "  SELECT c.code AS competition, s.year, COUNT(*) AS completed_matches,",
           "    COUNT(mp.match_id) AS predictions, COUNT(*) - COUNT(mp.match_id) AS missing_predictions,",
@@ -542,7 +442,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           ") SELECT *, 100.0 * correct_winners / NULLIF(decisive_matches, 0) AS accuracy_pct FROM summary",
         ].join("\n"),
         ladder: [
-          "-- Ladder for a season (regular season only). Works for any competition.",
+          "-- Home-and-away ladder: played Regular rounds, including Opening Round, excluding VFL's Wildcard.",
           "-- Bind: competition, canonical season key",
           "SELECT t.name AS team,",
           "  COUNT(*) AS played,",
@@ -557,21 +457,13 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "JOIN competitions c ON t.competition_id = c.id",
           "JOIN matches m ON t.id = m.home_team_id OR t.id = m.away_team_id",
           "JOIN seasons s ON m.season_id = s.id",
-          "WHERE c.code = ? AND s.season_key = ? AND m.round_type = 'Regular' AND m.home_points IS NOT NULL",
+          "WHERE c.code = ? AND s.season_key = ? AND m.round_type = 'Regular' AND m.round <> 'Wildcard'",
+          "  AND m.status = 'Complete'",
           "GROUP BY t.id",
           "ORDER BY premiership_points DESC, percentage DESC",
         ].join("\n"),
       },
-    },
-    query_api: {
-      usage:
-        "db.prepare(sql).bind(param1, param2, ...).all() returns { results: Row[] }. Use .first() for a single row.",
-      methods: [
-        "db.prepare(sql).bind(...args).all() — returns { results: Row[], success: boolean }",
-        "db.prepare(sql).bind(...args).first() — returns first Row or null",
-      ],
-      notes:
-        "Read-only. 30-second timeout. Use ? for parameter binding. The db object is available in the sandbox via an RPC proxy that transparently handles D1 calls. Always filter your queries by competition (see notes above).",
+      coverage_contract: coverageResponse,
     },
   };
 }

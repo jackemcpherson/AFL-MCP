@@ -328,7 +328,7 @@ const UNSUPPORTED_COACHING_TABLES = {
 const VENUES = {
   ...CORE,
   source: ["afl-api", "venue-geodata"],
-  // Alias/placeholder semantics are documented once in the schema tool notes;
+  // Alias/placeholder semantics are documented once in the schema tool tables entry;
   // per-leaf notes multiply across every column and blow the response budget.
   notes: [],
   overrides: {
@@ -340,7 +340,7 @@ const VENUES = {
 } as const satisfies CoverageTableExpectation;
 
 // Weather semantics (window, kinds, sources, exclusions) are documented once
-// in the schema tool notes; per-leaf notes multiply across every column.
+// in the schema tool tables entry; per-leaf notes multiply across every column.
 const MATCH_WEATHER_BASE = {
   expected: "partial",
   source: ["open-meteo"],
@@ -348,12 +348,12 @@ const MATCH_WEATHER_BASE = {
 } as const;
 
 // Prediction semantics (home perspective, retained backfill and live tips)
-// are documented once in the schema tool notes; per-leaf notes stay minimal.
+// are documented once in the schema tool's match_predictions table entry.
 const MATCH_PREDICTIONS = {
   range: "2026..current",
   expected: "partial",
   source: ["tipper"],
-  notes: ["Retained historical backfill and real-time predictions; missing rows remain possible."],
+  notes: [],
 } as const satisfies CoverageTableExpectation;
 
 const PUBLICATION_MATCH_RANGES = {
@@ -446,15 +446,12 @@ export const COVERAGE_EXPECTATIONS: Readonly<
       range: "1998..current",
       source: ["derived-pav"],
       expected: "partial",
-      notes: [
-        "Missing required season inputs leave derived values unknown; cancelled and live matches are excluded.",
-      ],
     },
     match_lineups: {
       ...CORE,
       range: "2015..current",
       expected: "partial",
-      // Absence semantics live in the schema tool notes (budget); the gap
+      // Absence semantics live in the schema tool tables entry (budget); the gap
       // fact itself stays here (coverage design decision 37).
       notes: ["Known historical round gaps."],
     },
@@ -493,9 +490,6 @@ export const COVERAGE_EXPECTATIONS: Readonly<
       range: "2017..current",
       source: ["derived-pav"],
       expected: "partial",
-      notes: [
-        "Missing required season inputs leave derived values unknown; cancelled and live matches are excluded.",
-      ],
     },
     match_lineups: {
       ...CORE,
@@ -679,11 +673,10 @@ export type ContractCoverage = Record<string, TableContract>;
  * exceptions-only encoding is self-describing to an LLM consumer.
  */
 export const COVERAGE_HOW_TO_READ: string =
-  "Each table declares a default: `range` (inclusive season span; 'current' = latest season), " +
-  "`expected` (complete | partial | best-effort | absent | not-applicable), and `source`. " +
-  "The default applies to every column of that table. `columns` lists ONLY exceptions — a column " +
-  "appears there when its `expected` or `range` deviates from the table default; any column not " +
-  "listed has exactly the default coverage.";
+  "Each table has a default `range` (inclusive seasons; 'current' = latest), `expected` " +
+  "(complete | partial | best-effort | absent | not-applicable) and `source` that applies to " +
+  "every column. `columns` lists only exceptions: columns whose `expected` or `range` differs. " +
+  "Unlisted columns have the default.";
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator === 0 ? null : Math.round((numerator / denominator) * 1_000_000) / 1_000_000;
@@ -1104,7 +1097,6 @@ export async function coverageContract(
           source: ["afl-tables", "footywire comparison"],
           unit: "participant assignments",
           notes: [
-            "AFL Tables controls canonical assignments. FootyWire observations are comparison evidence only.",
             "Expected assignments equal two per completed match, including Opening Round and finals. Missing rows remain unknown.",
           ],
         },
