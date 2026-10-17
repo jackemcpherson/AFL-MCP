@@ -327,7 +327,8 @@ belongs to downstream consumers.
 
 `GET /mcp/admin/status` returns a stable aggregate snapshot for all four
 competitions. The snapshot includes whole-sync outcomes, completed match dates,
-lease age, and all five integrity-view counts. It also reports 24-hour
+lease age, and counts for five integrity views. It omits
+`v_integrity_clearances`. It also reports 24-hour
 partial-lineup, partial-stat, and unmapped-team event counts.
 
 The endpoint uses thirteen fixed statements and one fixed window. It includes

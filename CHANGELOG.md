@@ -8,10 +8,26 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [5.0.1] - 2026-10-17
 
 This patch corrects `schema` tool examples and notes from an external v5
-test report. The `code` sandbox, the views and the data do not change.
+test report and repairs AFLM clearance totals. The `code` sandbox does not
+change.
+
+### Added in 5.0.1
+
+- `v_integrity_clearances` lists `player_match_stats` rows whose
+  `clearances` differs from `centre_clearances + stoppage_clearances`.
 
 ### Fixed in 5.0.1
 
+- Migration `0045` repairs 1,793 AFLM `player_match_stats` rows (2012 to
+  2020) whose `clearances` did not equal `centre_clearances +
+  stoppage_clearances`. The historical import mixed AFL Tables and
+  Footywire totals with Champion Data components. Champion Data (AFL API)
+  wins, matching the source for 2021 onwards. The AFL API confirmed each row
+  for its match and player. Components stay as stored and each total becomes
+  their sum.
+  `data/repairs/0045_clearance_totals.csv` holds the old and new values.
+  PAV for AFLM 2012 to 2020 rebuilds on the next sync, so `mid_pav` can shift
+  for affected players.
 - `lineup_round_comparison` compares two matches by id instead of two
   round numbers. It binds competition, team name, current match id and
   previous match id. Each row gives the player id and the match id and date
