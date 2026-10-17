@@ -46,6 +46,7 @@ the repository to TypeScript standard v4.
 - `tools/call` with a non-string tool `name` returns `-32602` with
   `Missing tool name`. It used to return an `Unknown tool` result. A missing
   `name` already returned `Missing tool name`.
+- The `code` tool's read-only SQL guard is tighter.
 - The `mcp:client` log event adds `metaProtocolVersion`, the 2026-07-28
   `_meta` protocol version marker, or `null` when a request has none.
 

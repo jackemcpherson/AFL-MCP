@@ -16,7 +16,7 @@ import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 const ALLOWED_LEADING_KEYWORDS = new Set(["SELECT", "WITH", "EXPLAIN"]);
 
 const FORBIDDEN_KEYWORDS =
-  /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
+  /\b(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE|TRUNCATE|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX|ANALYZE|BEGIN|COMMIT|ROLLBACK|SAVEPOINT)\b/i;
 
 const ReadOnlySqlErrorBase: TaggedErrorBase<ReadOnlySqlError, "ReadOnlySqlError", MessageFields> =
   Schema.TaggedError<ReadOnlySqlError>()("ReadOnlySqlError", {
@@ -92,8 +92,8 @@ function stripCommentsAndStrings(sql: string): string {
  * Validates that a SQL statement is read-only.
  *
  * A statement passes when its first keyword is `SELECT`, `WITH`, or
- * `EXPLAIN` and no write/DDL/session keyword appears anywhere outside
- * comments and string literals.
+ * `EXPLAIN`, no write/DDL/session keyword appears anywhere outside
+ * comments and string literals, and nothing but whitespace follows a `;`.
  *
  * @param sql - The statement supplied by sandboxed code.
  * @throws ReadOnlySqlError if the statement is not provably read-only.
@@ -110,6 +110,11 @@ export function assertReadOnlySql(sql: string): void {
   if (forbidden) {
     throw new ReadOnlySqlError({
       message: `Read-only access: ${forbidden[0].toUpperCase()} statements are not permitted.`,
+    });
+  }
+  if (/;\s*\S/.test(cleaned)) {
+    throw new ReadOnlySqlError({
+      message: "Read-only access: only one statement is permitted.",
     });
   }
 }

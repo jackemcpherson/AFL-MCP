@@ -66,6 +66,27 @@ describe("assertReadOnlySql", () => {
     expect(() => assertReadOnlySql("BEGIN")).toThrow(ReadOnlySqlError);
   });
 
+  it("rejects ANALYZE", () => {
+    expect(() => assertReadOnlySql("SELECT 1; ANALYZE")).toThrow(
+      "Read-only access: ANALYZE statements are not permitted.",
+    );
+  });
+
+  it("rejects more than one statement", () => {
+    expect(() => assertReadOnlySql("SELECT 1; SELECT 2")).toThrow(ReadOnlySqlError);
+  });
+
+  it("allows a single trailing semicolon", () => {
+    expect(() => assertReadOnlySql("SELECT 1;")).not.toThrow();
+    expect(() => assertReadOnlySql("SELECT 1;   ")).not.toThrow();
+  });
+
+  it("allows semicolons inside string literals and comments", () => {
+    expect(() => assertReadOnlySql("SELECT * FROM sync_log WHERE message = 'a; b'")).not.toThrow();
+    expect(() => assertReadOnlySql("SELECT 1 /* a; b */ FROM matches")).not.toThrow();
+    expect(() => assertReadOnlySql("SELECT 1 -- a; b\nFROM matches")).not.toThrow();
+  });
+
   it("rejects empty and non-SQL input", () => {
     expect(() => assertReadOnlySql("")).toThrow(ReadOnlySqlError);
     expect(() => assertReadOnlySql("-- only a comment")).toThrow(ReadOnlySqlError);
