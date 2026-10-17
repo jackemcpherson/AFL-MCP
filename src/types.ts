@@ -4,7 +4,7 @@ interface WorkerLoader {
     mainModule: string;
     modules: Record<string, string>;
     env?: Record<string, unknown>;
-    globalOutbound?: unknown | null;
+    globalOutbound?: unknown;
     limits?: { cpuMs?: number; subRequests?: number };
   }): {
     getEntrypoint(): { fetch(request: Request): Promise<Response> };

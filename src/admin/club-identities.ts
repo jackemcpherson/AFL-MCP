@@ -92,7 +92,7 @@ export async function reconcileBearsIdentity(
     marked = true;
     const writer = protectOperationWrites(env, holder);
     const ids = await findClubIds(writer, false);
-    if (!dryRun && report.matchSides > 0) {
+    if (report.matchSides > 0) {
       const stmts: D1PreparedStatement[] = [];
       stmts.push(
         writer.DB.prepare(

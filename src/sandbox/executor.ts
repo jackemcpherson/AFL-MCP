@@ -102,8 +102,8 @@ export async function executeCode(
  * actionable feedback (their own SQL/code errors) without stack frames,
  * file paths, or unbounded internal detail.
  */
-export function sanitizeErrorMessage(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+export function sanitizeErrorMessage(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
   const firstLine = message.split("\n")[0]?.trim() ?? "";
   if (firstLine === "") {
     return "execution failed";

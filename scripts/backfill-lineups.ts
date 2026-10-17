@@ -55,23 +55,25 @@ function executeSQL(filePath: string): void {
 
 // ── Team name normalisation (matches constants.ts) ──────────────────
 
-const TEAM_NAME_MAP: Record<string, string> = {
-  "Greater Western Sydney": "GWS Giants",
-  GWS: "GWS Giants",
-  "GWS GIANTS": "GWS Giants",
-  "Brisbane Bears": "Brisbane Lions",
-  Brisbane: "Brisbane Lions",
-  Footscray: "Western Bulldogs",
-  "Sydney Swans": "Sydney",
-  "Geelong Cats": "Geelong",
-  "Adelaide Crows": "Adelaide",
-  "West Coast Eagles": "West Coast",
-  "Gold Coast SUNS": "Gold Coast",
-  "Gold Coast Suns": "Gold Coast",
-};
+const TEAM_NAME_MAP = new Map(
+  Object.entries({
+    "Greater Western Sydney": "GWS Giants",
+    GWS: "GWS Giants",
+    "GWS GIANTS": "GWS Giants",
+    "Brisbane Bears": "Brisbane Lions",
+    Brisbane: "Brisbane Lions",
+    Footscray: "Western Bulldogs",
+    "Sydney Swans": "Sydney",
+    "Geelong Cats": "Geelong",
+    "Adelaide Crows": "Adelaide",
+    "West Coast Eagles": "West Coast",
+    "Gold Coast SUNS": "Gold Coast",
+    "Gold Coast Suns": "Gold Coast",
+  }),
+);
 
 function normaliseTeam(name: string): string {
-  return TEAM_NAME_MAP[name.trim()] ?? name.trim();
+  return TEAM_NAME_MAP.get(name.trim()) ?? name.trim();
 }
 
 // ── Main ────────────────────────────────────────────────────────────

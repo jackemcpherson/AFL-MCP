@@ -119,7 +119,7 @@ export async function ingestMatchCoachResult(
   );
   const existingAssignments = new Map(
     currentAssignments.results.map((row) => [
-      `${row.match_id}:${row.team_id}`,
+      `${String(row.match_id)}:${String(row.team_id)}`,
       String(row.coach_id),
     ]),
   );
@@ -658,11 +658,17 @@ function matchesEvidence(
   );
 }
 
+/** Outcome of matching a coaching assignment to a season match. */
+interface MatchResolution {
+  readonly status: "none" | "ambiguous" | "found";
+  readonly match?: MatchCandidate;
+}
+
 function resolveMatch(
   matches: readonly MatchCandidate[],
   crosswalk: ReadonlyMap<string, number>,
   assignment: MatchCoachAssignment,
-): { readonly status: "none" | "ambiguous" | "found"; readonly match?: MatchCandidate } {
+): MatchResolution {
   const externalId = crosswalk.get(assignment.matchId);
   const external = matches.find((match) => match.id === externalId);
   if (external)

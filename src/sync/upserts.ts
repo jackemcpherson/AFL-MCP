@@ -63,7 +63,7 @@ async function batchAndCountChanges(
     if (chunk.length === 0) continue;
     const results = await env.DB.batch(chunk);
     for (const r of results) {
-      if (r.success) affected += countReturnedRows ? r.results.length : r.meta.changes;
+      affected += countReturnedRows ? r.results.length : r.meta.changes;
     }
   }
   return affected;

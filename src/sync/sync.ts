@@ -392,6 +392,6 @@ async function fetchLineupsSafe(
   return result.data;
 }
 
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function describeError(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }

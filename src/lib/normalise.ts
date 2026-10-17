@@ -24,12 +24,12 @@ export function normaliseTeamForMatch(name: string, competition: string, season:
 
 export function normaliseTeam(name: string): string {
   const trimmed = name.trim();
-  return TEAM_NAME_MAP[trimmed] ?? trimmed;
+  return TEAM_NAME_MAP.get(trimmed) ?? trimmed;
 }
 
 export function normaliseVenue(name: string): string {
   const trimmed = name.trim();
-  return VENUE_NAME_MAP[trimmed] ?? trimmed;
+  return VENUE_NAME_MAP.get(trimmed) ?? trimmed;
 }
 
 /**

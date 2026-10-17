@@ -144,7 +144,7 @@ function printEligibilitySummary(matches: EligibleMatch[]): void {
     bySeason.set(key, (bySeason.get(key) ?? 0) + 1);
   }
   console.log("Eligible matches per competition/season:");
-  for (const [key, count] of [...bySeason.entries()].sort()) {
+  for (const [key, count] of [...bySeason.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     console.log(`  ${key}: ${count}`);
   }
   const cached = matches.filter((m) => existsSync(cachePath(m.id))).length;
@@ -209,7 +209,13 @@ async function fetchPhase(matches: EligibleMatch[]): Promise<void> {
 /** Shape of one data/weather-cache/<matchId>.json entry written by fetchPhase. */
 const CacheEntrySchema = z.object({ fetchedAt: z.string(), payload: z.unknown() });
 
-function metricsFromCache(match: EligibleMatch): { metrics: WeatherMetrics; fetchedAt: string } {
+/** Weather metrics generated from one cached Open-Meteo response. */
+interface CachedMetrics {
+  metrics: WeatherMetrics;
+  fetchedAt: string;
+}
+
+function metricsFromCache(match: EligibleMatch): CachedMetrics {
   const cached = CacheEntrySchema.parse(JSON.parse(readFileSync(cachePath(match.id), "utf-8")));
   const series = extractHourlySeries(cached.payload);
   if (match.local_time === null) throw new Error(`Match ${match.id}: kickoff time unavailable`);

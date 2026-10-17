@@ -55,20 +55,22 @@ function normalizeName(s: string): string {
 
 // ── DOB parsing ──────────────────────────────────────────────────────
 
-const MONTHS: Record<string, string> = {
-  jan: "01",
-  feb: "02",
-  mar: "03",
-  apr: "04",
-  may: "05",
-  jun: "06",
-  jul: "07",
-  aug: "08",
-  sep: "09",
-  oct: "10",
-  nov: "11",
-  dec: "12",
-};
+const MONTHS = new Map(
+  Object.entries({
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  }),
+);
 
 /** Normalise a DOB to ISO YYYY-MM-DD without going through Date (no tz drift). */
 function toIsoDob(raw: string | null | undefined): string | null {
@@ -78,7 +80,7 @@ function toIsoDob(raw: string | null | undefined): string | null {
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const dmy = s.match(/^(\d{1,2})[-/ ]([A-Za-z]{3})[A-Za-z]*[-/ ](\d{4})$/);
   if (dmy?.[1] && dmy[2] && dmy[3]) {
-    const month = MONTHS[dmy[2].toLowerCase()];
+    const month = MONTHS.get(dmy[2].toLowerCase());
     if (month) return `${dmy[3]}-${month}-${dmy[1].padStart(2, "0")}`;
   }
   return null;
@@ -178,7 +180,7 @@ function stageFryzigg(frame: DataFrame, players: DbPlayer[]): string[] {
   const dobByFryziggId = new Map<string, string>();
   const conflicted = new Set<string>();
   for (let i = 0; i < nRows; i++) {
-    const fid = String(colPlayerId?.[i] ?? "");
+    const fid = colPlayerId?.[i] == null ? "" : String(colPlayerId[i]);
     if (!fid || conflicted.has(fid)) continue;
     const iso = toIsoDob(colDob?.[i] as string | null);
     if (!iso) continue;
@@ -247,7 +249,7 @@ async function stageAflTables(startYear: number, endYear: number): Promise<strin
   const ambiguous: string[] = [];
   const unmatched: string[] = [];
 
-  for (const [team, teamStints] of [...byTeam.entries()].sort()) {
+  for (const [team, teamStints] of [...byTeam.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const canonical = normaliseTeamName(team);
     const listResult = await runFitzroy(
       AflTables.use((aflTables) => aflTables.fetchPlayerList(canonical)),
