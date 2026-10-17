@@ -96,9 +96,10 @@ This Worker deliberately deviates from TypeScript standard v4. Do not
 
 `effect/Schema` decodes every external input: MCP request bodies
 (`src/mcp/validation.ts`), admin request bodies (each `src/admin/*`
-module), Open-Meteo payloads and stored JSON columns. It also decodes the
-D1 rows that admin operations, health and coverage read. Internal sync
-queries may still use a typed `.first<T>()` or `.all<T>()`. Shared field
+module), Open-Meteo payloads and stored JSON columns. Some admin
+operations also decode the D1 rows they read. Other D1 reads, including
+the rest of admin, health, coverage and sync, may use a typed
+`.first<T>()` or `.all<T>()`. Shared field
 schemas live in `src/lib/schemas.ts`, decoders in `src/lib/decode.ts`,
 and competition codes in `src/lib/competitions.ts`.
 
