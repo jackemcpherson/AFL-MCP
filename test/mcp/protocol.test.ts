@@ -202,6 +202,31 @@ describe("handleMcpRequest", () => {
     expect(json.error).toBeUndefined();
   });
 
+  it("accepts a body of exactly 4 MiB and rejects one byte more with 413", async () => {
+    const limit = 4 * 1024 * 1024;
+    const ping = JSON.stringify({ jsonrpc: "2.0", id: 4, method: "ping" });
+    const padded = (bytes: number) => ping.padEnd(bytes, " ");
+    const post = (body: string) =>
+      handleMcpRequest(
+        new Request("https://afl.test/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        }),
+        stubEnv,
+        stubCtx,
+      );
+    expect(new TextEncoder().encode(padded(limit)).byteLength).toBe(limit);
+
+    const atLimit = await post(padded(limit));
+    expect(atLimit.status).toBe(200);
+    expect(await parseJson(atLimit)).toMatchObject({ id: 4, result: {} });
+
+    const overLimit = await post(padded(limit + 1));
+    expect(overLimit.status).toBe(413);
+    expect((await parseJson(overLimit)).error?.message).toBe("Request body exceeds 4 MiB");
+  });
+
   it("acknowledges notifications with 202 and no body", async () => {
     const res = await handleMcpRequest(
       makeRequest({ jsonrpc: "2.0", method: "notifications/initialized" }),
