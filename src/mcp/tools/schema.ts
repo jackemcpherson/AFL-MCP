@@ -179,7 +179,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "retired_id INTEGER, canonical_id INTEGER, manifest_digest TEXT. Maps a merged player's retired internal ID to its canonical ID. Resolve stored or external player IDs through it; issued predictions keep the IDs they were issued with.",
         teams: [
           "id INTEGER PRIMARY KEY, name TEXT,",
-          "abbreviation TEXT (AFLM: ADE, BB, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB; NULL for AFLW, VFL and VFLW),",
+          "abbreviation TEXT (AFLM club codes: ADE, BB, BL, CARL, COLL, ESS, FITZ, FREO, GEEL, GCFC, GWS, HAW, MELB, NM, PORT, RICH, STK, SYD, WCE, WB. The sync creates teams without one, so AFLW, VFL and VFLW teams have NULL: label teams by name),",
           "competition_id INTEGER REFERENCES competitions(id).",
           "Historical AFLM clubs keep distinct team IDs to preserve source history: Brisbane Bears (through 1996), Fitzroy and Brisbane Lions. Rating models may carry ratings across the Bears-to-Lions transition.",
         ].join(" "),
@@ -195,7 +195,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "external_afl_player_id TEXT (AFL API CD_I ID),",
           "date_of_birth TEXT, height_cm INTEGER, weight_kg INTEGER, is_retired INTEGER (NULL=unknown; source-verified 0/1 only), legacy_is_retired INTEGER (unverified imported/defaulted flag; never infer current availability).",
           "A player has no team column: take the team per game from player_match_stats.team_id.",
-          "Fryzigg and AFL API records are unified under one player_id; a few same-name players keep separate records because they are different people.",
+          "Provider records resolve to one player_id through player_provider_ids, and merged duplicates through player_id_redirects. Names are never identity evidence, so same-name players can keep separate player_id values.",
         ].join(" "),
         matches: [
           "id INTEGER PRIMARY KEY, season_id INTEGER REFERENCES seasons(id),",

@@ -51,12 +51,19 @@ Never filter or group match data by round name or `round_number` alone — use
 date-based or total match-count comparisons. The season includes special
 rounds outside standard numeric ordering:
 
-- **Opening Round** before R1 (4–5 games), stored as
-  `round = 'Opening Round'`, `round_number = 0`. The 2026 Opening Round had 5
-  games.
-- Numbered rounds: `R1`, `R2`, …
-- Finals: `QF`, `EF`, `SF`, `PF`, `GF`. `round_type` is `'Regular'` or
-  `'Finals'`.
+- **Opening Round** before Round 1 (4-5 games, AFLM 2024+), stored as
+  `round = 'Opening Round'`, `round_abbreviation = 'OR'`, `round_number = 0`.
+  The 2026 Opening Round had 5 games.
+- Numbered rounds: `round = 'Round N'`, `round_abbreviation = 'Rd N'`.
+- VFL `Wildcard` (`WC`) before finals is a Regular round. From 2026 the
+  finals open with `Wildcard Finals` instead.
+- Finals: `round` names vary by competition and era, for example
+  `Qualifying Final`, `Elimination Final`, `Finals Week 1`, `Semi Finals`,
+  `Preliminary Finals`, `Grand Final`, and from 2026 `Wildcard Finals` and
+  `Qualifying & Elimination Finals`. `round_abbreviation` maps known names to
+  `QF`, `EF`, `FW1`, `SF`, `PF` and `GF`, and other names become
+  `F<round_number>`. Select finals with `round_type = 'Finals'` (the other
+  value is `'Regular'`). The `schema` tool's rounds note holds the full rule.
 
 This rule applies to freshness checks, ETL logic, and any match query.
 
