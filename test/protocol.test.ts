@@ -13,7 +13,7 @@ vi.mock("../src/sandbox/executor", () => ({
 }));
 
 import { scriptedD1, testCtx, testEnv } from "#test/fixtures";
-import { handleMcpRequest } from "../src/mcp/protocol";
+import { defaultDeps, handleMcpRequest } from "../src/mcp/protocol";
 import type { Env } from "../src/types";
 
 function makeRequest(body: unknown, method = "POST"): Request {
@@ -470,8 +470,9 @@ describe("handleMcpRequest", () => {
       }
     });
 
-    it("logs competition: null and does NOT return an error when competition is an unrecognised value", async () => {
+    it("rejects an unrecognised competition with the valid codes and runs nothing", async () => {
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const executeCode = vi.fn(async () => ({ result: 1, execution_time_ms: 1 }));
       try {
         const res = await handleMcpRequest(
           makeRequest({
@@ -485,17 +486,18 @@ describe("handleMcpRequest", () => {
           }),
           stubEnv,
           stubCtx,
+          { ...defaultDeps, executeCode },
         );
         const json = await parseJson(res);
-        expect(json.result?.isError).toBeFalsy();
+        expect(json.result?.isError).toBe(true);
+        expect(json.result?.content?.[0]?.text).toBe(
+          "competition must be one of AFLM, AFLW, VFL, VFLW",
+        );
+        expect(executeCode).not.toHaveBeenCalled();
         const telemetryCall = logSpy.mock.calls.find(
           (c) => Predicate.isString(c[0]) && c[0].includes("tool:code"),
         );
-        expect(telemetryCall).toBeDefined();
-        expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
-          event: "tool:code",
-          competition: null,
-        });
+        expect(telemetryCall).toBeUndefined();
       } finally {
         logSpy.mockRestore();
       }

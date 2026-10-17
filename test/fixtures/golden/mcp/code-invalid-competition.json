@@ -10,9 +10,10 @@
       "content": [
         {
           "type": "text",
-          "text": "1"
+          "text": "competition must be one of AFLM, AFLW, VFL, VFLW"
         }
-      ]
+      ],
+      "isError": true
     }
   }
 }

@@ -5,6 +5,16 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+This release has breaking changes to the MCP tool contract.
+
+### Changed in Unreleased
+
+- Breaking: the `code` tool rejects an unknown `competition` with an
+  `isError` result that lists the valid codes. It no longer runs the code
+  with the hint ignored. Calls that omit `competition` behave as before.
+
 ## [4.0.11] - 2026-10-17
 
 This patch tightens MCP request media-type validation.

@@ -120,20 +120,16 @@ export type SchemaToolRequest = typeof SchemaToolRequestSchema.Type;
 export const decodeSchemaToolRequest = strictDecoder(SchemaToolRequestSchema);
 
 /**
- * `code` tool arguments. `competition` stays raw: an unrecognised value is
- * ignored rather than rejected, so it is decoded separately with
- * {@link decodeCompetitionHint}.
+ * `code` tool arguments. `competition` is an optional hint and, when
+ * present, must be a known competition code.
  */
 export const CodeToolRequestSchema = Schema.Struct({
   code: Schema.String.check(Schema.makeFilter((code) => code.trim() !== "")),
-  competition: Schema.optionalKey(Schema.Unknown),
+  competition: Schema.optionalKey(CompetitionCodeSchema),
 });
 
 /** Decode `code` tool arguments, ignoring unknown keys. */
 export const decodeCodeToolRequest = looseDecoder(CodeToolRequestSchema);
-
-/** Decode the `code` tool's optional competition hint. */
-export const decodeCompetitionHint = Schema.decodeUnknownOption(CompetitionCodeSchema);
 
 /** Optional recovery flag for the current competition-season sync scope. */
 export const SyncRequestSchema = Schema.Struct({

@@ -198,7 +198,7 @@ describe("MCP contract: code tool", () => {
     await expectGolden("code-missing", await serve(toolCall("code", {})));
   });
 
-  it("ignores an unrecognised competition hint", async () => {
+  it("rejects an unrecognised competition", async () => {
     const deps = withExecutor({ result: 1, execution_time_ms: 1 });
     await expectGolden(
       "code-invalid-competition",

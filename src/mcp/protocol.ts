@@ -1,14 +1,13 @@
-import { Option, Predicate, Result } from "effect";
+import { Predicate, Result } from "effect";
 import pkg from "../../package.json";
 import { COMPETITION_CODES } from "../lib/competitions";
-import { describeIssue } from "../lib/decode";
+import { describeIssue, firstIssue } from "../lib/decode";
 import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import type { Env } from "../types";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolDefinition } from "./types";
 import {
   decodeCodeToolRequest,
-  decodeCompetitionHint,
   decodeJsonRpcId,
   decodeJsonRpcRequest,
   decodeSchemaToolRequest,
@@ -152,11 +151,14 @@ async function handleToolCall(
       }
       const parsed = decodeCodeToolRequest(args);
       if (Result.isFailure(parsed)) {
-        return mcpError("code parameter is required and must be a non-empty string");
+        return mcpError(
+          firstIssue(parsed.failure).path[0] === "competition"
+            ? `competition must be one of ${COMPETITION_CODES.join(", ")}`
+            : "code parameter is required and must be a non-empty string",
+        );
       }
       const { code } = parsed.success;
-      // An unrecognised competition hint is logged as null, not rejected.
-      const competition = Option.getOrNull(decodeCompetitionHint(parsed.success.competition));
+      const competition = parsed.success.competition ?? null;
       console.log(JSON.stringify({ event: "tool:code", competition }));
       const result = await deps.executeCode(code, env, ctx);
       if (result.error) {
