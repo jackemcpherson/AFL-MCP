@@ -1,6 +1,6 @@
 import path from "node:path";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
-import { defineConfig, type ViteUserConfigFnPromise } from "vitest/config";
+import { configDefaults, defineConfig, type ViteUserConfigFnPromise } from "vitest/config";
 
 const config: ViteUserConfigFnPromise = defineConfig(async () => {
   const migrations = await readD1Migrations(path.resolve(import.meta.dirname, "src/db/migrations"));
@@ -25,7 +25,8 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
         {
           test: {
             name: "unit",
-            include: ["test/*.test.ts", "test/*.test.mjs"],
+            include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
+            exclude: [...configDefaults.exclude, "**/*.worker.test.ts"],
           },
         },
         {
@@ -47,8 +48,8 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
           ],
           test: {
             name: "integration",
-            include: ["test/integration/**/*.test.ts"],
-            setupFiles: ["test/integration/_setup.ts"],
+            include: ["test/**/*.worker.test.ts"],
+            setupFiles: ["test/support/worker-setup.ts"],
           },
         },
       ],
