@@ -40,10 +40,14 @@ the repository to TypeScript standard v4.
   `-32602` instead of an `isError` result.
 - `schema` argument errors now name the failing key, for example
   `Expected boolean at "includeObserved"` or
-  `Expected no excess property at "table"`. Contract errors such as a
-  missing `season` keep their existing text.
-- `tools/call` without a string tool `name` returns `-32602` with
-  `Missing tool name`.
+  `Expected no excess property at "table"`. Every `schema` argument error
+  ends with the usage hint that lists the valid calls. Contract errors such
+  as a missing `season` keep their existing text.
+- `tools/call` with a non-string tool `name` returns `-32602` with
+  `Missing tool name`. It used to return an `Unknown tool` result. A missing
+  `name` already returned `Missing tool name`.
+- The `mcp:client` log event adds `metaProtocolVersion`, the 2026-07-28
+  `_meta` protocol version marker, or `null` when a request has none.
 
 ### Internal Changes in 5.0.0
 

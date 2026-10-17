@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "season is outside the competition coverage range"
+          "text": "season is outside the competition coverage range. Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage)."
         }
       ],
       "isError": true

@@ -38,7 +38,10 @@ The handler checks each request in this order:
 7. Notifications return 202 with no body.
 
 Errors for a request whose id is unknown carry `id: null`. The handler logs
-each request's `Origin` and protocol version as an `mcp:client` event.
+each request's `Origin` and protocol version as an `mcp:client` event. The
+event records the `MCP-Protocol-Version` header, the `initialize`
+`protocolVersion`, and the 2026-07-28 `_meta` marker as
+`metaProtocolVersion`.
 
 ### Tools
 

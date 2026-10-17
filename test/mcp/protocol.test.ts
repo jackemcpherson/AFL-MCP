@@ -130,6 +130,7 @@ describe("handleMcpRequest", () => {
         origin: "https://client.test",
         protocolVersionHeader: "2025-03-26",
         initializeProtocolVersion: "2025-06-18",
+        metaProtocolVersion: null,
       }),
     );
     log.mockRestore();
@@ -262,6 +263,59 @@ describe("handleMcpRequest", () => {
     expect(json.result?.content?.[0]?.text).toBe(
       "Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).",
     );
+  });
+
+  it.each([
+    [{ includeObserved: "yes" }, 'Expected boolean at "includeObserved". '],
+    [{ table: "matches" }, 'Expected no excess property at "table". '],
+    [
+      { competition: "AFLW", season: 2022, includeObserved: true },
+      "Ambiguous or invalid season; AFLW 2022 requires 2022-S6 or 2022-S7. ",
+    ],
+  ])("keeps the usage hint on schema argument error %j", async (args, prefix) => {
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 52,
+        method: "tools/call",
+        params: { name: "schema", arguments: args },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+    const json = await parseJson(res);
+    expect(json.result?.isError).toBe(true);
+    expect(json.result?.content?.[0]?.text).toBe(
+      `${prefix}Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage).`,
+    );
+  });
+
+  it("logs the 2026-07-28 _meta protocol version marker", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 54,
+        method: "tools/list",
+        params: {
+          _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+        },
+      }),
+      stubEnv,
+      stubCtx,
+    );
+
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        event: "mcp:client",
+        method: "tools/list",
+        origin: null,
+        protocolVersionHeader: null,
+        initializeProtocolVersion: null,
+        metaProtocolVersion: "2026-07-28",
+      }),
+    );
+    log.mockRestore();
   });
 
   it("returns a competition-filtered base schema for competition alone", async () => {

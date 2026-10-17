@@ -15,6 +15,7 @@ import {
   decodeSchemaToolRequest,
   decodeToolCallParams,
   type JsonRpcRequest,
+  SCHEMA_TOOL_CONTRACT,
   type SchemaToolRequest,
 } from "./validation";
 
@@ -190,7 +191,13 @@ async function handleToolCall(
   switch (name) {
     case "schema": {
       const parsed = decodeSchemaToolRequest(args);
-      if (Result.isFailure(parsed)) return mcpError(describeIssue(parsed.failure));
+      if (Result.isFailure(parsed)) {
+        // Every argument error carries the usage hint so the model can retry.
+        const message = describeIssue(parsed.failure);
+        return mcpError(
+          message === SCHEMA_TOOL_CONTRACT ? message : `${message}. ${SCHEMA_TOOL_CONTRACT}`,
+        );
+      }
       return mcpContent(await deps.getSchemaInfo(parsed.success, env));
     }
 
@@ -265,9 +272,26 @@ async function handleJsonRpc(
 /** Longest header value recorded in client logs. */
 const MAX_LOGGED_HEADER_LENGTH = 200;
 
+/** `_meta` key that marks a request in the 2026-07-28 per-request format. */
+const MODERN_PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion";
+
+/**
+ * Read the 2026-07-28 protocol version marker from a request's `_meta`.
+ * @param rpcRequest - Validated JSON-RPC request.
+ * @returns `{ value }` when the marker key is present (any value), else `null`.
+ */
+function modernProtocolMarker(rpcRequest: JsonRpcRequest): { readonly value: unknown } | null {
+  const meta = rpcRequest.params?.["_meta"];
+  return Predicate.isObject(meta) && Predicate.hasProperty(meta, MODERN_PROTOCOL_VERSION_META)
+    ? { value: meta[MODERN_PROTOCOL_VERSION_META] }
+    : null;
+}
+
 /**
  * Log the client's Origin and protocol version so later releases can tighten
- * request checks against observed traffic.
+ * request checks against observed traffic. `metaProtocolVersion` records the
+ * 2026-07-28 `_meta` marker, so a request flagged only by `_meta` is told
+ * apart from a 2025-03-26 request (which sends no version header).
  * @param request - Incoming MCP POST request.
  * @param rpcRequest - Validated JSON-RPC request.
  */
@@ -279,6 +303,14 @@ function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
     rpcRequest.method === "initialize" && Predicate.isString(requested)
       ? requested.slice(0, MAX_LOGGED_HEADER_LENGTH)
       : null;
+  const marker = modernProtocolMarker(rpcRequest);
+  const metaProtocolVersion =
+    marker === null
+      ? null
+      : (Predicate.isString(marker.value)
+          ? marker.value
+          : String(JSON.stringify(marker.value))
+        ).slice(0, MAX_LOGGED_HEADER_LENGTH);
   console.log(
     JSON.stringify({
       event: "mcp:client",
@@ -286,6 +318,7 @@ function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
       origin: header("origin"),
       protocolVersionHeader: header("mcp-protocol-version"),
       initializeProtocolVersion,
+      metaProtocolVersion,
     }),
   );
 }
@@ -335,9 +368,6 @@ async function readBoundedText(request: Request): Promise<string | null> {
   return new TextDecoder().decode(bytes);
 }
 
-/** `_meta` key that marks a request in the 2026-07-28 per-request format. */
-const MODERN_PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion";
-
 /**
  * Check a request's protocol version against the revisions this server
  * speaks. `initialize` is exempt because its body negotiates the version.
@@ -351,11 +381,9 @@ const MODERN_PROTOCOL_VERSION_META = "io.modelcontextprotocol/protocolVersion";
  */
 function unsupportedProtocolMessage(request: Request, rpcRequest: JsonRpcRequest): string | null {
   if (rpcRequest.method === "initialize") return null;
-  const meta = rpcRequest.params?.["_meta"];
   const header = request.headers.get("mcp-protocol-version");
-  const modern =
-    Predicate.isObject(meta) && Predicate.hasProperty(meta, MODERN_PROTOCOL_VERSION_META);
-  if (!modern && (header === null || SUPPORTED_PROTOCOL_VERSIONS.includes(header))) return null;
+  const isModern = modernProtocolMarker(rpcRequest) !== null;
+  if (!isModern && (header === null || SUPPORTED_PROTOCOL_VERSIONS.includes(header))) return null;
   return `This server speaks MCP ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")} over an initialize handshake.`;
 }
 

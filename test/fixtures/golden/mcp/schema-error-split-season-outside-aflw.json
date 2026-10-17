@@ -10,7 +10,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Ambiguous or invalid season; AFLW 2022 requires 2022-S6 or 2022-S7"
+          "text": "Ambiguous or invalid season; AFLW 2022 requires 2022-S6 or 2022-S7. Valid calls: no params (full schema); competition alone (competition-filtered schema); competition + season + includeObserved:true (measured coverage)."
         }
       ],
       "isError": true
