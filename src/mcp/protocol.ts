@@ -146,11 +146,11 @@ async function handleToolCall(
           "The code tool is temporarily disabled by the operator. The schema endpoint remains available.",
         );
       }
-      const code = args.code;
+      const code = args["code"];
       if (typeof code !== "string" || code.trim() === "") {
         return mcpError("code parameter is required and must be a non-empty string");
       }
-      const rawCompetition = args.competition;
+      const rawCompetition = args["competition"];
       const competition =
         typeof rawCompetition === "string" &&
         (COMPETITION_CODES as readonly string[]).includes(rawCompetition)
@@ -189,8 +189,8 @@ async function handleJsonRpc(
       return jsonRpcResponse(id, { tools: TOOLS });
 
     case "tools/call": {
-      const name = params?.name as string;
-      const args = (params?.arguments ?? {}) as Record<string, unknown>;
+      const name = params?.["name"] as string;
+      const args = (params?.["arguments"] ?? {}) as Record<string, unknown>;
       if (!name) {
         return jsonRpcError(id, -32602, "Missing tool name");
       }
@@ -218,7 +218,7 @@ const MAX_LOGGED_HEADER_LENGTH = 200;
 function logClientHeaders(request: Request, rpcRequest: JsonRpcRequest): void {
   const header = (name: string) =>
     request.headers.get(name)?.slice(0, MAX_LOGGED_HEADER_LENGTH) ?? null;
-  const requested = rpcRequest.params?.protocolVersion;
+  const requested = rpcRequest.params?.["protocolVersion"];
   console.log(
     JSON.stringify({
       event: "mcp:client",

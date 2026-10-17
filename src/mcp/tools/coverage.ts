@@ -769,9 +769,9 @@ async function queryCoachingObservation(
   return {
     applicable: true,
     unit: "participant_assignments",
-    expected_assignments: row?.expected_assignments ?? 0,
-    observed_assignments: row?.observed_assignments ?? 0,
-    matches_with_both_coaches: row?.matches_with_both_coaches ?? 0,
+    expected_assignments: row?.["expected_assignments"] ?? 0,
+    observed_assignments: row?.["observed_assignments"] ?? 0,
+    matches_with_both_coaches: row?.["matches_with_both_coaches"] ?? 0,
     unresolved_joins: diagnostics?.n ?? 0,
     conflicts: conflicts?.n ?? 0,
     failed_pages: failedPages?.n ?? 0,
@@ -825,16 +825,16 @@ async function queryObservation(
     | undefined;
   const refresh = results[5]?.results[0] as NumericRow | undefined;
   const marker = results[6]?.results[0] as NumericRow | undefined;
-  if (marker?.in_progress !== 0)
+  if (marker?.["in_progress"] !== 0)
     throw new Error("Coverage observation blocked by an unfinished input write");
   const coaches = await queryCoachingObservation(env, competition, seasonRow.year);
   const after = await env.DB.prepare(
     "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
   ).first<NumericRow>();
-  if (after?.in_progress !== 0 || after.revision !== marker.revision)
+  if (after?.["in_progress"] !== 0 || after["revision"] !== marker["revision"])
     throw new Error("Coverage inputs changed during observation; retry");
 
-  const rows = statRow?.row_count ?? 0;
+  const rows = statRow?.["row_count"] ?? 0;
   const scalar: Record<string, RowObservation> = {};
   for (const [index, column] of OBSERVED_STAT_COLUMNS.entries()) {
     const nonNull = statRow?.[`n${index}`] ?? 0;
@@ -853,27 +853,27 @@ async function queryObservation(
     inventory: {
       provider_matches: inventory?.provider_matches ?? null,
       provider_observed_at: inventory?.observed_at ?? null,
-      stored_matches: matches?.row_count ?? 0,
-      eligible_completed_matches: matches?.eligible_completed ?? 0,
-      matches_with_statistics: matches?.matches_with_statistics ?? 0,
+      stored_matches: matches?.["row_count"] ?? 0,
+      eligible_completed_matches: matches?.["eligible_completed"] ?? 0,
+      matches_with_statistics: matches?.["matches_with_statistics"] ?? 0,
       participant_rows: rows,
-      refresh_failures: refresh?.failures ?? 0,
-      unresolved_refreshes: refresh?.unresolved ?? 0,
-      overdue_refreshes: refresh?.overdue ?? 0,
-      input_revision: marker.revision,
+      refresh_failures: refresh?.["failures"] ?? 0,
+      unresolved_refreshes: refresh?.["unresolved"] ?? 0,
+      overdue_refreshes: refresh?.["overdue"] ?? 0,
+      input_revision: marker["revision"],
     },
     pav: {
       unit: "table_rows",
-      rows: pav?.row_count ?? 0,
-      known_totals: pav?.known_totals ?? 0,
-      unknown_totals: pav?.unknown_totals ?? 0,
+      rows: pav?.["row_count"] ?? 0,
+      known_totals: pav?.["known_totals"] ?? 0,
+      unknown_totals: pav?.["unknown_totals"] ?? 0,
     } satisfies TableRowsObservation,
     lineups: {
       unit: "match_presence",
-      total_matches: matches?.row_count ?? 0,
-      matches_with_rows: lineups?.match_count ?? 0,
-      rows: lineups?.row_count ?? 0,
-      ratio: ratio(lineups?.match_count ?? 0, matches?.row_count ?? 0),
+      total_matches: matches?.["row_count"] ?? 0,
+      matches_with_rows: lineups?.["match_count"] ?? 0,
+      rows: lineups?.["row_count"] ?? 0,
+      ratio: ratio(lineups?.["match_count"] ?? 0, matches?.["row_count"] ?? 0),
     } satisfies MatchPresenceObservation,
   };
 }

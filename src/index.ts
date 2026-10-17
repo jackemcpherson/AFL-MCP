@@ -90,11 +90,14 @@ export default {
       // synced competition writes a sync_log row, so a quiet log means the
       // cron itself is broken. Returning 503 lets any dumb uptime monitor
       // alert on status code alone (OPS-02).
-      const lastTimestamp = typeof lastSync?.timestamp === "string" ? lastSync.timestamp : null;
+      const lastTimestamp =
+        typeof lastSync?.["timestamp"] === "string" ? lastSync["timestamp"] : null;
       const ageMs = lastTimestamp === null ? null : Date.now() - Date.parse(lastTimestamp);
       const isStale = ageMs === null || Number.isNaN(ageMs) || ageMs > SYNC_STALE_AFTER_MS;
       const criticalTs =
-        typeof lastCritical?.timestamp === "string" ? Date.parse(lastCritical.timestamp) : null;
+        typeof lastCritical?.["timestamp"] === "string"
+          ? Date.parse(lastCritical["timestamp"])
+          : null;
       const hasRecentCriticalError =
         criticalTs !== null &&
         !Number.isNaN(criticalTs) &&
@@ -105,7 +108,7 @@ export default {
           status: isHealthy ? "ok" : "unhealthy",
           stale: isStale,
           last_sync_age_ms: ageMs,
-          latest_match: freshness?.latest_match,
+          latest_match: freshness?.["latest_match"],
           has_recent_critical_error: hasRecentCriticalError,
         },
         { status: isHealthy ? 200 : 503 },

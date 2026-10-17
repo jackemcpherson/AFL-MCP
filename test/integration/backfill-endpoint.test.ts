@@ -17,7 +17,7 @@ const authedEnv: Env = { ...(env as Env), ADMIN_TOKEN };
 function makeRequest(body: unknown, token: string | null = ADMIN_TOKEN): Request {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token !== null) {
-    headers.Authorization = `Bearer ${token}`;
+    headers["Authorization"] = `Bearer ${token}`;
   }
   return new Request("https://afl.test/mcp/admin/backfill", {
     method: "POST",

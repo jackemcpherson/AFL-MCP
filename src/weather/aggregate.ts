@@ -190,7 +190,7 @@ function formatHour(epochMs: number): string {
   const parts = Object.fromEntries(
     MELBOURNE_CLOCK.formatToParts(epochMs).map((p) => [p.type, p.value]),
   );
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:00`;
+  return `${parts["year"]}-${parts["month"]}-${parts["day"]}T${parts["hour"]}:00`;
 }
 
 /** Resolve an unambiguous Melbourne hour to an instant before measuring elapsed time. */

@@ -55,7 +55,7 @@ describe("coverage contract", () => {
   });
 
   it("marks measured VFLW counterexample fields best-effort via the table default", () => {
-    const stats = contractCoverage().VFLW.player_match_stats;
+    const stats = contractCoverage().VFLW["player_match_stats"];
     // These columns are best-effort — same as the VFLW table default, so in
     // the v2 exceptions-only encoding they must NOT appear as exceptions.
     expect(stats?.expected).toBe("best-effort");
@@ -63,22 +63,22 @@ describe("coverage contract", () => {
       expect(stats?.columns?.[column]).toBeUndefined();
     }
     // Genuine deviations from the default remain listed.
-    expect(stats?.columns?.brownlow_votes?.expected).toBe("not-applicable");
-    expect(stats?.columns?.supercoach_score?.expected).toBe("absent");
+    expect(stats?.columns?.["brownlow_votes"]?.expected).toBe("not-applicable");
+    expect(stats?.columns?.["supercoach_score"]?.expected).toBe("absent");
   });
 
   it("keeps exact ranges and Melbourne-time coverage canonical as exceptions", () => {
     const coverage = contractCoverage();
-    expect(coverage.AFLM.matches?.columns?.attendance?.range).toBe("1990..2019");
-    expect(coverage.AFLM.player_match_stats?.range).toBe("1990..current");
-    expect(coverage.AFLM.player_match_stats?.columns?.brownlow_votes?.range).toBeUndefined();
+    expect(coverage.AFLM["matches"]?.columns?.["attendance"]?.range).toBe("1990..2019");
+    expect(coverage.AFLM["player_match_stats"]?.range).toBe("1990..current");
+    expect(coverage.AFLM["player_match_stats"]?.columns?.["brownlow_votes"]?.range).toBeUndefined();
     for (const competition of COVERAGE_COMPETITIONS) {
-      expect(coverage[competition].matches?.columns?.local_time?.expected).toBe("complete");
+      expect(coverage[competition]["matches"]?.columns?.["local_time"]?.expected).toBe("complete");
     }
     for (const side of ["home", "away"]) {
       for (const quarter of [1, 2, 3, 4]) {
         for (const score of ["goals", "behinds"]) {
-          expect(coverage.AFLM.matches?.columns?.[`${side}_q${quarter}_${score}`]?.range).toBe(
+          expect(coverage.AFLM["matches"]?.columns?.[`${side}_q${quarter}_${score}`]?.range).toBe(
             undefined,
           );
         }
@@ -137,7 +137,7 @@ describe("coverage contract", () => {
     const observed = schema.database.coverage_contract.observed;
     expect(observed?.competition).toBe("AFLW");
     expect(observed?.season).toBe(2025);
-    expect(observed?.player_match_stats.kicks?.unit).toBe("rows");
+    expect(observed?.player_match_stats["kicks"]?.unit).toBe("rows");
     expect(observed?.player_season_pav.unit).toBe("table_rows");
     expect(observed?.match_lineups.unit).toBe("match_presence");
     // Static expectations are never mutated by a measurement.
@@ -186,7 +186,7 @@ describe("coverage contract", () => {
     const { env, calls } = observationEnv();
     const { cache, entries } = memoryCache();
     const first = await observeCoverage(env, "VFLW", 2026, cache);
-    expect(first.scalar.guernsey_number).toEqual({
+    expect(first.scalar["guernsey_number"]).toEqual({
       unit: "rows",
       rows: 2,
       non_null: 2,

@@ -89,15 +89,15 @@ export function mergeIdentityAppearances(
 ) {
   const groups = new Map<number, Row[]>();
   for (const row of rows) {
-    const match = Number(row.match_id);
+    const match = Number(row["match_id"]);
     groups.set(match, [...(groups.get(match) ?? []), row]);
   }
   const merged: Row[] = [];
   const conflicts: Conflict[] = [];
   const used = new Set<RepairRequest["resolutions"][number]>();
   for (const [matchId, group] of groups) {
-    group.sort((a, b) => Number(a.id) - Number(b.id));
-    const retained = group.find((row) => row.player_id === canonicalId) ?? group[0];
+    group.sort((a, b) => Number(a["id"]) - Number(b["id"]));
+    const retained = group.find((row) => row["player_id"] === canonicalId) ?? group[0];
     if (!retained) continue;
     const row: Row = { ...retained, player_id: canonicalId };
     for (const field of Object.keys(retained)) {
@@ -291,13 +291,15 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
         "Group includes a retired ID; use its approved repair digest or canonical ID",
       );
     const players = snapshots[0]?.results ?? [];
-    if (request.newPerson && players.some((player) => player.id === canonicalId))
+    if (request.newPerson && players.some((player) => player["id"] === canonicalId))
       throw new OperationConflictError("The reviewed new person target already exists");
     if (players.length !== ids.length - (request.newPerson ? 1 : 0))
       throw new OperationConflictError("An identity group member no longer exists");
     const datesOfBirth = [
       ...new Set(
-        players.flatMap((player) => (player.date_of_birth == null ? [] : [player.date_of_birth])),
+        players.flatMap((player) =>
+          player["date_of_birth"] == null ? [] : [player["date_of_birth"]],
+        ),
       ),
     ];
     const providerLinks = request.providerIdentities.length
@@ -311,7 +313,7 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       : [];
     if (
       providerLinks.some((result) =>
-        result.results.some((row) => !ids.includes(Number(row.player_id))),
+        result.results.some((row) => !ids.includes(Number(row["player_id"]))),
       )
     )
       throw new OperationConflictError(
@@ -319,7 +321,9 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       );
     if (scoped) {
       const official = request.providerIdentities.filter((item) => item.provider === "afl-api");
-      const existing = players.find((player) => player.id === canonicalId)?.external_afl_player_id;
+      const existing = players.find((player) => player["id"] === canonicalId)?.[
+        "external_afl_player_id"
+      ];
       if (
         official.length > 1 ||
         (existing != null && official.some((item) => item.providerId !== existing))
@@ -407,7 +411,7 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       ["player_match_stats", stats],
       ["match_lineups", lineups],
     ] as const) {
-      const retained = JSON.stringify(merged.rows.map((row) => row.id));
+      const retained = JSON.stringify(merged.rows.map((row) => row["id"]));
       statements.push(
         env.DB.prepare(
           `DELETE FROM ${table} WHERE player_id IN (${selectors}) AND id NOT IN (SELECT value FROM json_each(?))
@@ -488,7 +492,7 @@ export async function repairPlayerIdentity(env: Env, request: RepairRequest) {
       statements.push(
         env.DB.prepare(
           "INSERT INTO pav_rebuild_queue(season_id, reason) VALUES(?1,?2) ON CONFLICT(season_id) DO UPDATE SET reason=excluded.reason",
-        ).bind(season.id, `identity:${digest}`),
+        ).bind(season["id"], `identity:${digest}`),
       );
     }
     statements.push(
@@ -529,16 +533,17 @@ async function rebuildIdentityPav(
   const writer = protectOperationWrites(env, holder);
   for (const season of seasons) {
     if (
-      (season.code === "AFLM" || season.code === "AFLW") &&
-      Number(String(season.season_key).slice(0, 4)) >= MIN_PAV_YEAR_BY_COMPETITION[season.code]
+      (season["code"] === "AFLM" || season["code"] === "AFLW") &&
+      Number(String(season["season_key"]).slice(0, 4)) >=
+        MIN_PAV_YEAR_BY_COMPETITION[season["code"]]
     )
-      await calculatePav(writer, String(season.season_key), season.code, holder);
+      await calculatePav(writer, String(season["season_key"]), season["code"], holder);
     else
       await writer.DB.prepare("DELETE FROM player_season_pav WHERE season_id=?1")
-        .bind(season.id)
+        .bind(season["id"])
         .run();
     await writer.DB.prepare("DELETE FROM pav_rebuild_queue WHERE season_id=?1")
-      .bind(season.id)
+      .bind(season["id"])
       .run();
   }
 }

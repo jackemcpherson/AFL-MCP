@@ -109,18 +109,18 @@ export async function ingestMatchCoachResult(
     throw new Error("Coaching reconciliation inputs are unavailable");
   const seasonMatches = matches.results as unknown as MatchCandidate[];
   const matchCrosswalk = new Map(
-    crosswalks.results.map((row) => [String(row.external_match_id), Number(row.match_id)]),
+    crosswalks.results.map((row) => [String(row["external_match_id"]), Number(row["match_id"])]),
   );
   const coachIdentities = new Map(
     identities.results.map((row) => [
-      String(row.external_coach_id),
-      { coach_id: String(row.coach_id), verified: Number(row.verified) },
+      String(row["external_coach_id"]),
+      { coach_id: String(row["coach_id"]), verified: Number(row["verified"]) },
     ]),
   );
   const existingAssignments = new Map(
     currentAssignments.results.map((row) => [
-      `${String(row.match_id)}:${String(row.team_id)}`,
-      String(row.coach_id),
+      `${String(row["match_id"])}:${String(row["team_id"])}`,
+      String(row["coach_id"]),
     ]),
   );
   const coaches = new Map<string, string>();

@@ -127,11 +127,11 @@ export async function refreshWeather(
     if (!digest || digest !== request.manifestDigest)
       throw new OperationConflictError("Weather refresh preview missing or stale");
     if (
-      context.status !== "Cancelled" &&
-      (!context.kickoff_at ||
-        !context.local_time ||
-        context.latitude == null ||
-        context.longitude == null)
+      context["status"] !== "Cancelled" &&
+      (!context["kickoff_at"] ||
+        !context["local_time"] ||
+        context["latitude"] == null ||
+        context["longitude"] == null)
     )
       throw new OperationConflictError(
         "Verified kickoff and canonical venue coordinates are required",

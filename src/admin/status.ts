@@ -155,13 +155,13 @@ export async function getAdminStatus(
   const lease = resultRow(results, 0);
   const syncRows = resultRows(results, 1);
   const matchRows = resultRows(results, 2);
-  const syncByCode = new Map(syncRows.map((row) => [stringValue(row.code), row]));
-  const matchesByCode = new Map(matchRows.map((row) => [stringValue(row.code), row]));
+  const syncByCode = new Map(syncRows.map((row) => [stringValue(row["code"]), row]));
+  const matchesByCode = new Map(matchRows.map((row) => [stringValue(row["code"]), row]));
   const competitions = COMPETITION_CODES.map((code): CompetitionStatus => {
     const sync = syncByCode.get(code);
-    const latestSyncAt = nullableString(sync?.latestSyncAt);
-    const latestSuccessAt = nullableString(sync?.latestSuccessAt);
-    const latestErrorAt = nullableString(sync?.latestErrorAt);
+    const latestSyncAt = nullableString(sync?.["latestSyncAt"]);
+    const latestSuccessAt = nullableString(sync?.["latestSuccessAt"]);
+    const latestErrorAt = nullableString(sync?.["latestErrorAt"]);
     return {
       code,
       latestSyncAt,
@@ -170,7 +170,9 @@ export async function getAdminStatus(
       successAgeSeconds: ageSeconds(latestSuccessAt, now),
       latestErrorAt,
       errorAgeSeconds: ageSeconds(latestErrorAt, now),
-      latestCompletedMatchDate: nullableString(matchesByCode.get(code)?.latestCompletedMatchDate),
+      latestCompletedMatchDate: nullableString(
+        matchesByCode.get(code)?.["latestCompletedMatchDate"],
+      ),
     };
   });
   const degradation = resultRow(results, 8);
@@ -183,8 +185,8 @@ export async function getAdminStatus(
     status: "ok",
     asOf,
     lease: {
-      held: numberValue(lease?.held) === 1,
-      ageSeconds: numberOrNull(lease?.ageSeconds),
+      held: numberValue(lease?.["held"]) === 1,
+      ageSeconds: numberOrNull(lease?.["ageSeconds"]),
     },
     competitions,
     integrity: {
@@ -196,30 +198,30 @@ export async function getAdminStatus(
     },
     degradation: {
       windowHours: DEGRADATION_WINDOW_HOURS,
-      partialLineupEvents: numberValue(degradation?.partialLineupEvents),
-      partialStatsEvents: numberValue(degradation?.partialStatsEvents),
-      unmappedTeamEvents: numberValue(degradation?.unmappedTeamEvents),
+      partialLineupEvents: numberValue(degradation?.["partialLineupEvents"]),
+      partialStatsEvents: numberValue(degradation?.["partialStatsEvents"]),
+      unmappedTeamEvents: numberValue(degradation?.["unmappedTeamEvents"]),
     },
     remediation: {
-      inputWriteActive: numberValue(remediation?.in_progress) === 1,
-      inputWriteOperation: nullableString(remediation?.write_operation),
-      auditScopesUnresolved: numberValue(remediation?.auditScopesUnresolved),
-      inputWriteAgeSeconds: ageSeconds(nullableString(remediation?.write_started_at), now),
-      statisticsDue: numberValue(remediation?.statisticsDue),
-      statisticsFailed: numberValue(remediation?.statisticsFailed),
-      statisticsUnresolved: numberValue(remediation?.statisticsUnresolved),
-      weatherUnresolved: numberValue(remediation?.weatherUnresolved),
-      weatherUnavailable: numberValue(remediation?.weatherUnavailable),
-      pavSeasonsPending: numberValue(remediation?.pavSeasonsPending),
-      identityRepairsPending: numberValue(remediation?.identityRepairsPending),
+      inputWriteActive: numberValue(remediation?.["in_progress"]) === 1,
+      inputWriteOperation: nullableString(remediation?.["write_operation"]),
+      auditScopesUnresolved: numberValue(remediation?.["auditScopesUnresolved"]),
+      inputWriteAgeSeconds: ageSeconds(nullableString(remediation?.["write_started_at"]), now),
+      statisticsDue: numberValue(remediation?.["statisticsDue"]),
+      statisticsFailed: numberValue(remediation?.["statisticsFailed"]),
+      statisticsUnresolved: numberValue(remediation?.["statisticsUnresolved"]),
+      weatherUnresolved: numberValue(remediation?.["weatherUnresolved"]),
+      weatherUnavailable: numberValue(remediation?.["weatherUnavailable"]),
+      pavSeasonsPending: numberValue(remediation?.["pavSeasonsPending"]),
+      identityRepairsPending: numberValue(remediation?.["identityRepairsPending"]),
     },
     coaching: {
-      latestSuccessAt: nullableString(coaching?.latestSuccessAt),
-      failedScopes: numberValue(coaching?.failedScopes),
-      unresolvedJoins: numberValue(coachingJoins?.unresolvedJoins),
-      conflicts: numberValue(coachingConflict?.conflicts),
-      currentSeasonExpectedAssignments: numberValue(coachingCoverage?.expectedAssignments),
-      currentSeasonObservedAssignments: numberValue(coachingCoverage?.observedAssignments),
+      latestSuccessAt: nullableString(coaching?.["latestSuccessAt"]),
+      failedScopes: numberValue(coaching?.["failedScopes"]),
+      unresolvedJoins: numberValue(coachingJoins?.["unresolvedJoins"]),
+      conflicts: numberValue(coachingConflict?.["conflicts"]),
+      currentSeasonExpectedAssignments: numberValue(coachingCoverage?.["expectedAssignments"]),
+      currentSeasonObservedAssignments: numberValue(coachingCoverage?.["observedAssignments"]),
     },
   };
   console.log(
@@ -252,7 +254,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function countAt(results: readonly D1Result<unknown>[], index: number): number {
-  return numberValue(resultRow(results, index)?.count);
+  return numberValue(resultRow(results, index)?.["count"]);
 }
 
 function stringValue(value: unknown): string {
