@@ -470,6 +470,39 @@ describe("handleMcpRequest", () => {
       }
     });
 
+    it("treats competition: null like an omitted hint", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const executeCode = vi.fn(async () => ({ result: 1, execution_time_ms: 1 }));
+      try {
+        const res = await handleMcpRequest(
+          makeRequest({
+            jsonrpc: "2.0",
+            id: 23,
+            method: "tools/call",
+            params: {
+              name: "code",
+              arguments: { code: "return 1", competition: null },
+            },
+          }),
+          stubEnv,
+          stubCtx,
+          { ...defaultDeps, executeCode },
+        );
+        const json = await parseJson(res);
+        expect(json.result?.isError).toBeFalsy();
+        expect(executeCode).toHaveBeenCalledOnce();
+        const telemetryCall = logSpy.mock.calls.find(
+          (c) => Predicate.isString(c[0]) && c[0].includes("tool:code"),
+        );
+        expect(JSON.parse(String(telemetryCall?.[0]))).toEqual({
+          event: "tool:code",
+          competition: null,
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
     it("rejects an unrecognised competition with the valid codes and runs nothing", async () => {
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       const executeCode = vi.fn(async () => ({ result: 1, execution_time_ms: 1 }));

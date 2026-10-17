@@ -13,7 +13,8 @@ This release has breaking changes to the MCP tool contract.
 
 - Breaking: the `code` tool rejects an unknown `competition` with an
   `isError` result that lists the valid codes. It no longer runs the code
-  with the hint ignored. Calls that omit `competition` behave as before.
+  with the hint ignored. Calls that omit `competition` or set it to
+  `null` behave as before.
 - The Worker logs each failure as a JSON event with the error's tag and
   source frames, and never the raw error message. A failed `sync_log` purge
   now logs a `sync_log_purge_failed` event instead of failing silently.

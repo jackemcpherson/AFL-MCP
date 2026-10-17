@@ -138,17 +138,18 @@ export const decodeSchemaToolRequest: Decoder<SchemaToolRequest> =
   strictDecoder(SchemaToolRequestSchema);
 
 /**
- * `code` tool arguments. `competition` is an optional hint and, when
- * present, must be a known competition code.
+ * `code` tool arguments. `competition` is an optional hint. `null` counts
+ * as omitted, since LLM clients often send `null` for unset optionals. Any
+ * other value must be a known competition code.
  */
 export const CodeToolRequestSchema: Schema.Struct<{
   readonly code: Schema.String;
   readonly competition: Schema.optionalKey<
-    Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>
+    Schema.NullOr<Schema.Literals<readonly ["AFLM", "AFLW", "VFL", "VFLW"]>>
   >;
 }> = Schema.Struct({
   code: Schema.String.check(Schema.makeFilter((code) => code.trim() !== "")),
-  competition: Schema.optionalKey(CompetitionCodeSchema),
+  competition: Schema.optionalKey(Schema.NullOr(CompetitionCodeSchema)),
 });
 
 /** Decode `code` tool arguments, ignoring unknown keys. */

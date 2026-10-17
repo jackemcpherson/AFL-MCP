@@ -253,6 +253,16 @@ describe("MCP contract: code tool", () => {
     );
   });
 
+  it("treats a null competition as omitted", async () => {
+    const deps = withExecutor({ result: 1, execution_time_ms: 1 });
+    await expectGolden(
+      "code-null-competition",
+      await serve(toolCall("code", { code: "return 1", competition: null }), {
+        deps,
+      }),
+    );
+  });
+
   it("reports the operator kill switch", async () => {
     const env = testEnv({ CODE_TOOL_DISABLED: "true" });
     await expectGolden(
