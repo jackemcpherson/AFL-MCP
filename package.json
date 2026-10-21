@@ -30,7 +30,7 @@
   },
   "overrides": {
     "undici": ">=7.28.0",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.2.0",
     "vitest": "4.1.11"
   }
 }
