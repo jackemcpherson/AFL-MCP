@@ -23,7 +23,7 @@ bun run check:schema     # Compare migrated and consolidated schemas
 bun run check            # vp check (Oxfmt, Oxlint, tsgo) + bun run typecheck
 bun run typecheck        # tsc -p on tsconfig.app/test/node.json (isolatedDeclarations)
 bun run format           # Auto-format and apply lint fixes (vp check --fix)
-bun run test             # Run all tests once (vp test --run)
+bun run test             # Run all tests once (standalone Vitest on Node)
 bunx wrangler deploy --dry-run  # Build the bundle and report its size
 ```
 
@@ -146,22 +146,25 @@ and competition codes in `src/lib/competitions.ts`.
   `vi.mock` (Oxlint `no-module-mocking`); inject collaborators through
   `McpDeps` in `src/mcp/protocol.ts` instead.
 - **Golden MCP contract** — `test/fixtures/golden/mcp/*.json` pin every
-  MCP response. Update them (`vp test --run -u`) only for a deliberate
+  MCP response. Update them (`bun run test --update`) only for a deliberate
   wire-contract change, and review the diff. CI fails on a missing golden.
 
 ## Toolchain Pins
 
-`vite-plus` is pinned at `0.3.3`, which bundles Vitest 4.1. vite-plus 1.x
-bundles Vitest 5, and `@cloudflare/vitest-pool-workers` (0.23) requires
-Vitest ^4.1: the Workers test project fails to boot on Vitest 5.
+`vite-plus` 1.1.0 provides lint and format checks and includes the patched
+editor launcher. It bundles Vitest 5, but `@cloudflare/vitest-pool-workers`
+0.23 requires Vitest ^4.1. Tests therefore run standalone Vitest 4.1.11 on
+Node, with upstream Vite 8.3.3 or newer patched 8.x dependencies.
 
-Upgrade trigger: `@cloudflare/vitest-pool-workers` supports Vitest 5. Then:
+`bunfig.toml` requires the isolated linker. Do not switch to hoisted installs:
+Vite+'s Vitest 5 internals can otherwise leak into the Workers test runner.
+Do not restore global `vite` or `vitest` overrides, and use `bun run test`,
+not `vp test`. `vite.config.ts` uses Vite+'s own configuration type.
 
-1. Move to vite-plus 1.x. Keep these in step with it: the `vite` and
-   `vitest` overrides in `package.json`, the `vitest` devDependency, and
-   `@oxlint/plugins` (imported by the vendored plugin in `tools/oxlint/`).
-2. Add `@effect/vitest` matching the `effect` version. It is deferred
-   until then because every stable 4.x release peers on Vitest 5.
+Keep the Workers pool and standalone Vitest compatible when updating them.
+When the pool supports Vitest 5, evaluate a coordinated migration with all
+unit and Workers tests. Do not cap Vite+ below a security-patched release.
+`@effect/vitest` remains deferred until its Vitest peer matches the test runner.
 
 ## Documentation (TSDoc)
 

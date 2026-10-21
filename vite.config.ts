@@ -1,5 +1,4 @@
-import type { UserConfig } from "vite";
-import { defineConfig } from "vite-plus";
+import { defineConfig, type ViteUserConfig } from "vite-plus";
 
 /** Paths that neither Oxlint nor Oxfmt may touch. */
 const ignorePatterns = [
@@ -12,7 +11,7 @@ const ignorePatterns = [
   "tools/oxlint/anti-slop/**",
 ];
 
-const config: UserConfig = defineConfig({
+const config: ViteUserConfig = defineConfig({
   lint: {
     ignorePatterns,
     plugins: ["typescript", "import"],

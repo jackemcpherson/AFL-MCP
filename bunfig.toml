@@ -1,0 +1,3 @@
+[install]
+# Keep Vite+'s Vitest 5 internals separate from the Workers-compatible Vitest 4.
+linker = "isolated"
