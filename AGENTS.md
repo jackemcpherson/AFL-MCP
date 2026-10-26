@@ -151,15 +151,22 @@ and competition codes in `src/lib/competitions.ts`.
 
 ## Toolchain Pins
 
-`vite-plus` is pinned at `0.3.3`, which bundles Vitest 4.1. vite-plus 1.x
-bundles Vitest 5, and `@cloudflare/vitest-pool-workers` (0.23) requires
-Vitest ^4.1: the Workers test project fails to boot on Vitest 5.
+`vite-plus` is on 1.x for its security fixes, but tests stay on Vitest 4.1.
+vite-plus 1.x bundles Vitest 5, and `@cloudflare/vitest-pool-workers` (0.23)
+requires Vitest ^4.1: the Workers test project fails to boot on Vitest 5. The
+`overrides` in `package.json` force `vitest` and every `@vitest/*` package that
+vite-plus pulls in (`expect`, `mocker`, `pretty-format`, `runner`, `snapshot`,
+`spy`, `utils`) to the same 4.1 version. Overriding only `vitest` is not enough:
+vite-plus's direct `@vitest/utils` 5 dependency gets hoisted, and the pool then
+fails with `'@vitest/utils/display' does not provide an export named
+'objDisplay'`. Keep all of them, and the `vitest` devDependency, on one version.
 
 Upgrade trigger: `@cloudflare/vitest-pool-workers` supports Vitest 5. Then:
 
-1. Move to vite-plus 1.x. Keep these in step with it: the `vite` and
-   `vitest` overrides in `package.json`, the `vitest` devDependency, and
-   `@oxlint/plugins` (imported by the vendored plugin in `tools/oxlint/`).
+1. Remove the `vitest` and `@vitest/*` overrides and the `vitest`
+   devDependency, so tests run on vite-plus's bundled Vitest. Keep the `vite`
+   override and `@oxlint/plugins` (imported by the vendored plugin in
+   `tools/oxlint/`) in step with vite-plus.
 2. Add `@effect/vitest` matching the `effect` version. It is deferred
    until then because every stable 4.x release peers on Vitest 5.
 
