@@ -15,7 +15,7 @@
     "check:schema": "python3 scripts/test_schema_parity.py && python3 scripts/verify_schema_parity.py"
   },
   "dependencies": {
-    "effect": "4.0.6",
+    "effect": "4.0.7",
     "fitzroy": "7.0.0"
   },
   "devDependencies": {
