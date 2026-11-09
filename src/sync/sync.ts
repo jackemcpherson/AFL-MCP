@@ -10,8 +10,9 @@ import { refreshActiveCoaches } from "../admin/coaching";
 import { runOperation } from "../db/operation";
 import { seasonKey } from "../db/seasons";
 import { describeError, logError, type MessageFields, type TaggedErrorBase } from "../lib/errors";
-import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
-import { playedMatch } from "../lib/match-state";
+import { runFitzroy } from "../lib/fitzroy";
+import { playedMatch, unsettledMatch } from "../lib/match-state";
+import { toSeasonSelector } from "../lib/schemas";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
@@ -124,19 +125,21 @@ export async function sync(
     return [];
   };
   return runOperation(env, skipped, async (operation) => {
-    const scopes: { competition: CompetitionCode; season: SeasonSelector }[] = [];
+    const scopes: SyncScope[] = [];
+    let coachingSeason: number | null = null;
     for (const competition of competitions) {
-      const seasons: readonly SeasonSelector[] =
-        options?.season !== undefined
-          ? [options.season]
-          : options?.fromYear !== undefined && options.toYear !== undefined
-            ? rangeInclusive(options.fromYear, options.toYear)
-            : [await runFitzroyOrThrow(resolveDefaultSeasonForCompetition(competition))];
-      for (const season of seasons) {
-        seasonKey(competition, season);
-        scopes.push({ competition, season });
+      if (options?.season !== undefined) scopes.push({ competition, season: options.season });
+      else if (options?.fromYear !== undefined && options.toYear !== undefined)
+        for (const season of rangeInclusive(options.fromYear, options.toYear))
+          scopes.push({ competition, season });
+      else {
+        const steady = await steadySeasons(env, competition, hourly);
+        if (competition === "AFLM") coachingSeason = seasonYear(steady.current);
+        scopes.push({ competition, season: steady.current });
+        for (const season of steady.upcoming) scopes.push({ competition, season, upcoming: true });
       }
     }
+    for (const scope of scopes) seasonKey(scope.competition, scope.season);
     const identity = syncIdentity(competitions, isBackfill ? scopes : null, fixturesOnly);
     // A run that dies mid-write (e.g. a D1 connection drop) keeps the marker so
     // readers never see partial inputs. A steady-state run is idempotent and
@@ -156,8 +159,8 @@ export async function sync(
         `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
       );
     const results: BackfillResult[] = [];
-    for (const { competition, season } of scopes)
-      results.push(await syncCompetition(writer, competition, season, isBackfill, fixturesOnly));
+    for (const scope of scopes)
+      results.push(await syncCompetition(writer, scope, isBackfill, fixturesOnly));
 
     if (!isBackfill) await queueRecentStatsRefresh(writer, now);
     if (hourly) {
@@ -170,7 +173,7 @@ export async function sync(
       );
       // Coach profiles are expensive season-wide reads; the import module
       // enforces its own retry cadence.
-      if (competitions.includes("AFLM")) await refreshActiveCoaches(writer, now);
+      if (coachingSeason !== null) await refreshActiveCoaches(writer, now, coachingSeason);
     }
 
     // Weather rides the same lease as match data but only on hourly ticks, so
@@ -191,6 +194,85 @@ export async function sync(
     await rebuildQueuedStatsPav(writer, undefined, operation.holder);
     return results;
   });
+}
+
+/** One competition-season a sync covers. */
+interface SyncScope {
+  readonly competition: CompetitionCode;
+  readonly season: SeasonSelector;
+  /** A season that has not started yet, synced ahead of its first match. */
+  readonly upcoming?: boolean;
+}
+
+function seasonYear(season: SeasonSelector): number {
+  return Number(String(season).slice(0, 4));
+}
+
+/**
+ * The seasons a steady-state sync covers for one competition.
+ *
+ * `current` is the latest season that has started. The provider only reports
+ * a season as current from its first bounce, so syncing it alone would load a
+ * new season's fixture after its opening match began: no lineup snapshot, no
+ * forecast and no fixture row beforehand. `upcoming` closes that gap with
+ * every later season. Discovery asks the provider on hourly ticks; in
+ * between, a later season already stored with unsettled matches stays in
+ * scope, so its lineups keep the five-minute cadence.
+ *
+ * If the provider cannot name the current season (a newly listed season
+ * without round dates fails the whole resolution), the latest stored season
+ * that has started stands in, so one undated season cannot halt every sync.
+ *
+ * @param env - Worker bindings.
+ * @param competition - Competition to resolve.
+ * @param hourly - Whether this tick may ask the provider for new seasons.
+ * @returns The current season and any seasons after it.
+ * @throws The provider's error when no stored season can stand in.
+ */
+async function steadySeasons(
+  env: Env,
+  competition: CompetitionCode,
+  hourly: boolean,
+): Promise<{ readonly current: SeasonSelector; readonly upcoming: readonly SeasonSelector[] }> {
+  const resolved = await runFitzroy(resolveDefaultSeasonForCompetition(competition));
+  let current: SeasonSelector;
+  if (resolved.success) current = resolved.data;
+  else {
+    const stored = await env.DB.prepare(
+      `SELECT s.season_key FROM seasons s JOIN competitions c ON c.id = s.competition_id
+       WHERE c.code = ?1 AND EXISTS (
+         SELECT 1 FROM matches m WHERE m.season_id = s.id AND m.date <= date('now'))
+       ORDER BY s.year DESC, s.season_key DESC LIMIT 1`,
+    )
+      .bind(competition)
+      .first<string>("season_key");
+    if (stored === null) throw resolved.error;
+    await logSync(
+      env,
+      "sync:season-fallback",
+      0,
+      `${competition}: ${describeError(resolved.error)}; using stored season ${stored}`,
+    );
+    current = toSeasonSelector(stored);
+  }
+  const year = seasonYear(current);
+  const later = await env.DB.prepare(
+    `SELECT s.season_key FROM seasons s JOIN competitions c ON c.id = s.competition_id
+     WHERE c.code = ?1 AND s.year > ?2 AND EXISTS (
+       SELECT 1 FROM matches m WHERE m.season_id = s.id AND ${unsettledMatch("m")})
+     ORDER BY s.year, s.season_key`,
+  )
+    .bind(competition, year)
+    .all<{ season_key: string }>();
+  const upcoming = new Set(later.results.map((row) => row.season_key));
+  if (hourly) {
+    // A discovery failure is not fatal here: syncing the current season makes
+    // the same call and reports it.
+    const discovered = await runFitzroy(fetchSeasons(competition));
+    if (discovered.success)
+      for (const entry of discovered.data) if (entry.year > year) upcoming.add(entry.seasonKey);
+  }
+  return { current, upcoming: [...upcoming].sort().map((key) => toSeasonSelector(key)) };
 }
 
 /**
@@ -249,8 +331,7 @@ export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
 
 async function syncCompetition(
   env: Env,
-  competition: CompetitionCode,
-  season: SeasonSelector,
+  { competition, season, upcoming = false }: SyncScope,
   isBackfill: boolean,
   fixturesOnly = false,
 ): Promise<BackfillResult> {
@@ -265,7 +346,14 @@ async function syncCompetition(
     const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
     if (!matchResult.success) {
       const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
-      await logSync(env, `sync:${competition}`, 0, error);
+      // A season that has not started may have no usable fixture yet. That is
+      // not a failure of the competition's sync and must not page.
+      await logSync(
+        env,
+        upcoming ? `sync:${competition}:upcoming` : `sync:${competition}`,
+        0,
+        error,
+      );
       return {
         competition,
         year: Number(String(season).slice(0, 4)),

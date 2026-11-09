@@ -10,8 +10,23 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 Every lifecycle the Worker persists now has one owning module, listed in
 `docs/state-machines.md`. The `code` sandbox does not change.
 
+### Added
+
+- The steady-state sync also covers each competition's next season, so a new
+  fixture, its lineups and its forecasts load before the opening match. The
+  provider names a season current only from its first bounce, so the 2027
+  opener would otherwise have had none of them. `matches` therefore holds
+  `Upcoming` rows for a season that has not started.
+- If the provider cannot name a competition's current season, the latest
+  stored season that has started stands in (`sync:season-fallback`), so a
+  newly listed season without round dates cannot halt every sync.
+
 ### Changed
 
+- The `schema` rounds note says Opening Round exists for AFLM 2024 to 2026
+  only. AFLM 2027 starts at Round 1.
+- The hourly coaching refresh follows the sync's current AFLM season, not the
+  calendar year, so it no longer polls a season that has not started.
 - `seasons.is_complete` is 1 when a season has matches and every one is
   `Complete` or `Cancelled`. Migration `0046` recomputes it, so AFLM 2015,
   VFL 2021 and VFLW 2021, each held open by a cancelled match, become

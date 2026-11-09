@@ -53,7 +53,8 @@ Never filter or group match data by round name or `round_number` alone — use
 date-based or total match-count comparisons. The season includes special
 rounds outside standard numeric ordering:
 
-- **Opening Round** before Round 1 (4-5 games, AFLM 2024+), stored as
+- **Opening Round** before Round 1 (2-5 games, AFLM 2024 to 2026 only; the
+  AFL dropped it for 2027), stored as
   `round = 'Opening Round'`, `round_abbreviation = 'OR'`, `round_number = 0`.
   The 2026 Opening Round had 5 games.
 - Numbered rounds: `round = 'Round N'`, `round_abbreviation = 'Rd N'`.

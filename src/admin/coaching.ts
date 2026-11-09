@@ -491,13 +491,18 @@ export async function backfillCoaches(
  * three hours. All work runs inside the caller's existing sync lease.
  *
  * @param env - Worker bindings.
- * @param now - Shared clock instant used for season and cadence decisions.
+ * @param now - Shared clock instant used for cadence decisions.
+ * @param season - The AFLM season to refresh. The sync passes its current
+ * season, which is not the calendar year before a season starts.
  * @returns A promise that resolves after the best-effort refresh.
  * @example
  * await refreshActiveCoaches(env, new Date());
  */
-export async function refreshActiveCoaches(env: Env, now: Date = new Date()): Promise<void> {
-  const season = now.getUTCFullYear();
+export async function refreshActiveCoaches(
+  env: Env,
+  now: Date = new Date(),
+  season: number = now.getUTCFullYear(),
+): Promise<void> {
   const last = await env.DB.prepare(
     "SELECT status, last_checked_at FROM coach_import_pages WHERE provider = 'afl-tables' AND season = ?1 AND scope = 'season'",
   )

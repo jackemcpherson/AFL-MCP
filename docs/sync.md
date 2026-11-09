@@ -39,6 +39,17 @@ season for each competition.
 Backfills accept explicit season keys, including `2022-S6` and `2022-S7` for
 AFLW.
 
+Each competition syncs its current season, the latest one that has started,
+plus every later season. The provider only names a season current from its
+first bounce, so the later seasons are what load a new fixture, its lineups
+and its forecasts before the opening match. The provider is asked for new
+seasons on hourly ticks; a later season already stored with unsettled matches
+stays in scope on every tick. A fetch failure for a season that has not
+started logs under `sync:<competition>:upcoming` and does not affect health.
+
+If the provider cannot name the current season, the latest stored season that
+has started stands in and the sync logs `sync:season-fallback`.
+
 1. Fetch the season inventory from `afl-api`. Store its raw snapshot separately
    from reviewed fixture corrections.
 2. Resolve the competition and season IDs. Preserve existing IDs and record the
@@ -204,7 +215,7 @@ labels directly, no cross-competition normalisation.
 
 Two round-string columns on `matches`:
 
-- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024+,
+- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024 to 2026 only,
   `round_number = 0`), `Wildcard` (VFL before finals, through 2025), and a
   finals name that varies by competition and era. AFLW 2024 is the
   exception for numbered rounds: the API labels them `Week 1` to `Week 10`,
@@ -296,8 +307,9 @@ vote. Brownlow votes are AFLM-only - the medal is not awarded for AFLW/VFL/VFLW.
 
 ## Match Coaches
 
-The hourly path may refresh AFL Tables match-coach facts for the active AFLM
-season while holding the existing sync lease. Successful checks recur every 24
+The hourly path may refresh AFL Tables match-coach facts for the sync's
+current AFLM season, not the calendar year, while holding the existing sync
+lease. Successful checks recur every 24
 hours. Incomplete or failed checks retry every three hours. Five-minute cron
 ticks do not fetch coach career pages again.
 The sync logs coaching failures and continues score, lineup, statistics,

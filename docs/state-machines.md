@@ -51,8 +51,9 @@ lifecycle: a season is complete when it has matches and none is unsettled.
 
 ## Sync tick
 
-Owner: `sync` in `src/sync/sync.ts`. The tick's scheduled time decides its
-stages: every tick syncs fixtures and lineups and rebuilds queued PAV;
+Owner: `sync` in `src/sync/sync.ts`. `steadySeasons` decides its scope: each
+competition's current season plus any later season, so a new fixture loads
+before its first match. The tick's scheduled time decides its stages: every tick syncs fixtures and lineups and rebuilds queued PAV;
 `isHourlyTick` adds statistics refresh, coaching and weather.
 
 Lineup polling is derived per tick, with no stored state: none more than five
