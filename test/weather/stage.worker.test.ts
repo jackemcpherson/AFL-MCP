@@ -549,7 +549,7 @@ describe("runWeatherStage — failure and hygiene", () => {
     }
   });
 
-  it("persists an API failure and retries on the next daily pass", async () => {
+  it("persists a forecast failure and retries it an hour later", async () => {
     const seasonId = await seedSeason();
     await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
     const match = await seedMatch({ seasonId, date: "2026-07-16" });
@@ -561,12 +561,32 @@ describe("runWeatherStage — failure and hygiene", () => {
     const log = await syncLogRows();
     expect(log.some((r) => r.type === "sync:weather" && r.error !== null)).toBe(true);
 
-    // Hourly passes respect persisted backoff; a daily pass can recover.
+    // A forecast is only useful before kickoff: it backs off for an hour, not a day.
     const working = stubFetch();
-    await runWeatherStage(env, working.impl, new Date("2026-07-13T03:00:00Z"));
+    await runWeatherStage(env, working.impl, new Date("2026-07-13T02:30:00Z"));
     expect(working.calls).toHaveLength(0);
-    await runWeatherStage(env, working.impl, new Date("2026-07-14T02:00:00Z"));
+    await runWeatherStage(env, working.impl, new Date("2026-07-13T03:00:00Z"));
     expect(await weatherRows(match)).toHaveLength(1);
+  });
+
+  it("does not let a backing-off forecast take a fetch slot from another match", async () => {
+    const seasonId = await seedSeason();
+    await seedVenue({ id: MCG.id, lat: MCG.lat, lon: MCG.lon });
+    const blocked = await seedMatch({ seasonId, date: "2026-07-15" });
+    await env.DB.prepare(
+      `INSERT INTO weather_refresh_state(match_id,kind,source,attempted_at,next_retry_at,failures,diagnostic)
+       VALUES(?1,'forecast','best_match',?2,?3,1,'Open-Meteo 503')`,
+    )
+      .bind(blocked, NOW.toISOString(), "2026-07-13T03:00:00.000Z")
+      .run();
+    const open = await seedMatch({ seasonId, date: "2026-07-16" });
+
+    const working = stubFetch();
+    await runWeatherStage(env, working.impl, NOW);
+
+    expect(working.calls).toHaveLength(1);
+    expect(await weatherRows(blocked)).toHaveLength(0);
+    expect(await weatherRows(open)).toHaveLength(1);
   });
 
   it("records a malformed payload with the Open-Meteo payload prefix", async () => {

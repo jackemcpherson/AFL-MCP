@@ -170,7 +170,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
       tables: {
         competitions: "id INTEGER PRIMARY KEY, code TEXT (AFLM/AFLW/VFL/VFLW), name TEXT",
         seasons:
-          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, season_key TEXT (canonical selector, AFLW 2022-S6 or 2022-S7), display_name TEXT, is_complete INTEGER (1 when the season has matches and all have home_points, else 0)",
+          "id INTEGER PRIMARY KEY, competition_id INTEGER REFERENCES competitions(id), year INTEGER, season_key TEXT (canonical selector, AFLW 2022-S6 or 2022-S7), display_name TEXT, is_complete INTEGER (1 when the season has matches and every one is played or cancelled, else 0)",
         season_provider_ids:
           "season_id INTEGER, provider TEXT, provider_season_id TEXT. Verified provider season mappings.",
         player_provider_ids:

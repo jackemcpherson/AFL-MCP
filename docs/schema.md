@@ -33,8 +33,9 @@ One row per `(competition, season_key)`, the unique key. `season_key` is the
 year, except AFLW 2022, which has two seasons, `2022-S6` and `2022-S7`, sharing
 `year = 2022`. A `CHECK` constraint allows only those two split keys.
 
-- `is_complete` is 1 when the season has matches and every match has
-  `home_points`.
+- `is_complete` is 1 when the season has matches and none is unsettled:
+  every match is `Complete` or `Cancelled`. Scores do not decide it, because
+  a `Live` row has a partial score and a `Cancelled` row has none.
 
 ### `teams`
 
@@ -284,7 +285,7 @@ coach remain present.
   `in_progress` and `write_started_at` let a publisher reject reads during a
   shared-lease write. Read the marker before and after a snapshot. Retry when
   revisions differ or when a write is active. The scheduled sync resumes a
-  marker left by its own interrupted run on the next tick. Any other marker
+  marker left by an interrupted steady-state run on the next tick. Any other marker
   older than the ten-minute lease window requires operator recovery before
   publication.
 

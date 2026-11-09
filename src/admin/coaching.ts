@@ -1,12 +1,7 @@
 import type { MatchCoachAssignment, MatchCoachFailure } from "fitzroy";
 import { fetchMatchCoaches } from "fitzroy";
 import { Effect, Schema } from "effect";
-import {
-  beginPublicInputWrite,
-  finishPublicInputWrite,
-  protectOperationWrites,
-  resumePublicInputWrite,
-} from "../db/public-inputs";
+import { runOperation } from "../db/operation";
 import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 import { runFitzroy } from "../lib/fitzroy";
 import { type Decoder, looseDecoder } from "../lib/decode";
@@ -17,7 +12,6 @@ import {
   UrlStringSchema,
 } from "../lib/schemas";
 import { normaliseTeamForMatch } from "../lib/normalise";
-import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
 
@@ -478,28 +472,16 @@ export async function backfillCoaches(
   dryRun: boolean,
   resume = false,
 ): Promise<{ readonly busy: boolean; readonly summary?: CoachingImportSummary }> {
-  const holder = crypto.randomUUID();
-  if (!(await acquireOperationLease(env, holder))) return { busy: true };
-  let marked = false;
-  let consistent = false;
-  try {
-    if (!dryRun) {
-      const operation = `coaching:${source}:${season}`;
-      if (resume) await resumePublicInputWrite(env, holder, operation);
-      else await beginPublicInputWrite(env, holder, new Date(), operation);
-      marked = true;
-    }
-    const writer = dryRun ? env : protectOperationWrites(env, holder);
-    const summary = await runCoachBatch(writer, season, source, dryRun);
-    consistent = true;
-    return { busy: false, summary };
-  } finally {
-    try {
-      if (marked && consistent) await finishPublicInputWrite(env, holder);
-    } finally {
-      await releaseOperationLease(env, holder);
-    }
-  }
+  return runOperation<{ readonly busy: boolean; readonly summary?: CoachingImportSummary }>(
+    env,
+    () => ({ busy: true }),
+    async (operation) => {
+      const writer = dryRun
+        ? env
+        : await operation.write(`coaching:${source}:${season}`, { resume });
+      return { busy: false, summary: await runCoachBatch(writer, season, source, dryRun) };
+    },
+  );
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   normaliseTeamForMatch,
   normaliseVenue,
 } from "../lib/normalise";
+import { playedMatch, unsettledMatch } from "../lib/match-state";
 import { toMelbourneDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
 import {
@@ -300,42 +301,9 @@ export async function ensureVenues(
   return new Map(results.map((r) => [r.name, r.id]));
 }
 
-/** Number of completed matches in the season. Counts rows with non-null `home_points`. */
-export async function selectCompletedCount(env: Env, seasonId: number): Promise<number> {
-  const row = await env.DB.prepare(
-    "SELECT COUNT(*) as n FROM matches WHERE season_id = ? AND home_points IS NOT NULL",
-  )
-    .bind(seasonId)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
-}
-
 /**
- * True when at least one completed match in the season has no `player_match_stats`
- * rows. Used as a self-healing fallback so the stats fetch fires after a partial
- * write failure or when a previous tick skipped the fetch (e.g., multiple
- * matches completing on the same calendar date).
- */
-export async function selectHasCompletedMatchWithoutStats(
-  env: Env,
-  seasonId: number,
-): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT 1 FROM matches m
-     WHERE m.season_id = ?
-       AND m.home_points IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM player_match_stats ps WHERE ps.match_id = m.id)
-     LIMIT 1`,
-  )
-    .bind(seasonId)
-    .first();
-  return row !== null;
-}
-
-/**
- * Distinct `round_number`s in the season where every match is completed
- * (`home_points IS NOT NULL`) but at least one match has no `match_lineups`
- * row. Used as a self-healing fallback so lineups backfill for past rounds
+ * Distinct `round_number`s in the season with a played match that has no
+ * `match_lineups` row. Used as a self-healing fallback so lineups backfill for past rounds
  * whose Thursday-night release window the sync missed (e.g. an upstream
  * error blocked the lineup fetch). Capped via `limit` so historical
  * seasons that legitimately have no lineups don't refetch on every tick.
@@ -357,7 +325,7 @@ export async function selectCompletedRoundsWithoutLineups(
   const stmt = env.DB.prepare(
     `SELECT DISTINCT m.round_number FROM matches m
      WHERE m.season_id = ?
-       AND m.home_points IS NOT NULL
+       AND ${playedMatch("m")}
        AND NOT EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
        ${recencyFilter}
      ORDER BY m.round_number DESC
@@ -371,61 +339,16 @@ export async function selectCompletedRoundsWithoutLineups(
   return results.map((r) => r.round_number);
 }
 
-/** Earliest match date (ISO `YYYY-MM-DD`) in the given round, or null if the round has no matches. */
-export async function selectRoundFirstDate(
-  env: Env,
-  seasonId: number,
-  round: number,
-): Promise<string | null> {
-  const row = await env.DB.prepare(
-    "SELECT MIN(date) AS first FROM matches WHERE season_id = ? AND round_number = ?",
-  )
-    .bind(seasonId, round)
-    .first<{ first: string | null }>();
-  return row?.first ?? null;
-}
-
-/** Whether any match in the given round already has lineup rows stored. */
-export async function selectRoundHasAnyLineups(
-  env: Env,
-  seasonId: number,
-  round: number,
-): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT 1 AS present FROM matches m
-     WHERE m.season_id = ?1 AND m.round_number = ?2
-       AND EXISTS (SELECT 1 FROM match_lineups ml WHERE ml.match_id = m.id)
-     LIMIT 1`,
-  )
-    .bind(seasonId, round)
-    .first();
-  return row !== null;
-}
-
-/**
- * Smallest `round_number` with at least one not-yet-played match. Opening Round
- * is `round_number = 0` and is correctly returned ahead of R1 when unfinished.
- * Returns null when every match in the season is completed.
- */
-export async function selectNextRound(env: Env, seasonId: number): Promise<number | null> {
-  const row = await env.DB.prepare(
-    "SELECT MIN(round_number) as next FROM matches WHERE season_id = ? AND home_points IS NULL AND round_number IS NOT NULL",
-  )
-    .bind(seasonId)
-    .first<{ next: number | null }>();
-  return row?.next ?? null;
-}
-
 /**
  * Recompute and persist `seasons.is_complete` for the given season. A season
- * is complete iff it has at least one match AND every match has a non-null
- * `home_points`. Idempotent; safe to call after every sync.
+ * is complete when it has at least one match and none is unsettled: every
+ * match was either played or cancelled. Idempotent; safe to call after every sync.
  */
 export async function updateSeasonCompleteness(env: Env, seasonId: number): Promise<void> {
   await env.DB.prepare(
     `UPDATE seasons SET is_complete = (
        CASE WHEN EXISTS (SELECT 1 FROM matches WHERE season_id = ?1)
-              AND NOT EXISTS (SELECT 1 FROM matches WHERE season_id = ?1 AND home_points IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM matches m WHERE m.season_id = ?1 AND ${unsettledMatch("m")})
             THEN 1 ELSE 0 END
      ) WHERE id = ?1`,
   )

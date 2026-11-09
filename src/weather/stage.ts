@@ -13,10 +13,15 @@
  *   identical provenance to the backfill, so `match_weather` converges.
  * - Cancelled matches get any stray weather rows deleted.
  *
- * Provider failures are isolated per match and persisted for daily retries.
- * After three failed retries, missing values retain an explicit diagnostic.
+ * Each (match, kind, source) has a retry state in `weather_refresh_state`:
+ * clear, backing off until `next_retry_at`, or unavailable (failed with no
+ * retry left). {@link nextWeatherRetry} is the whole policy, and the
+ * needs-work queries skip anything backing off or unavailable, so a blocked
+ * match never takes a fetch slot.
  */
+import { backoffMs, DAY_MS } from "../lib/backoff";
 import { describeError, logError } from "../lib/errors";
+import { cancelledMatch, playedMatch, unsettledMatch } from "../lib/match-state";
 import { addDaysToIsoDate, toMelbourneDate, toMelbourneTime } from "../lib/time";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
@@ -47,6 +52,44 @@ const ERA5_LAG_DAYS = 6;
  */
 const MAX_FETCHES_PER_QUERY = 25;
 
+/** Daily retries an observed row gets after its first failed attempt. */
+const OBSERVED_RETRY_LIMIT = 3;
+
+/**
+ * When to retry a weather fetch after `failures` consecutive failures.
+ *
+ * A forecast is only useful before kickoff, so it retries on the shared
+ * backoff (1, 2, 4 ... 24 hours) and never gives up: one bad hour on match
+ * day costs one refresh, not the rest of the day. An observed value is
+ * historical, so it retries daily and becomes unavailable after
+ * {@link OBSERVED_RETRY_LIMIT} retries, until an operator retries it.
+ *
+ * @param kind - Forecast or observed.
+ * @param failures - Consecutive failures including the latest; zero after success.
+ * @param now - The attempt's timestamp.
+ * @returns The next retry time, or null when none is scheduled.
+ * @example
+ * nextWeatherRetry("forecast", 1, now); // one hour later
+ */
+export function nextWeatherRetry(kind: WeatherKind, failures: number, now: Date): string | null {
+  if (failures === 0) return null;
+  if (kind === "forecast") return new Date(now.getTime() + backoffMs(failures)).toISOString();
+  return failures <= OBSERVED_RETRY_LIMIT ? new Date(now.getTime() + DAY_MS).toISOString() : null;
+}
+
+/** Excludes a match whose fetch for this kind and source is backing off or unavailable. */
+function notBlocked(kind: WeatherKind, source: string, now: string): string {
+  return `NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
+    AND r.kind='${kind}' AND r.source=${source} AND r.failures>0
+    AND (r.next_retry_at IS NULL OR r.next_retry_at > ${now}))`;
+}
+
+/** Consecutive failures recorded for a match's fetch of this kind and source. */
+function failureCount(kind: WeatherKind, source: string): string {
+  return `COALESCE((SELECT r.failures FROM weather_refresh_state r WHERE r.match_id=m.id
+    AND r.kind='${kind}' AND r.source=${source}), 0) AS failures`;
+}
+
 interface CandidateRow {
   readonly match_id: number;
   readonly date: string;
@@ -54,6 +97,7 @@ interface CandidateRow {
   readonly latitude: number;
   readonly longitude: number;
   readonly fetched_at: string | null;
+  readonly failures: number;
 }
 
 interface WeatherJob {
@@ -92,23 +136,11 @@ export async function runWeatherStage(
     // Sequential on purpose: one in-flight request at a time keeps the
     // stage gentle on Open-Meteo's free tier (not a Promise.all candidate).
     for (const job of jobs) {
-      const retry = await env.DB.prepare(`SELECT failures,next_retry_at FROM weather_refresh_state
-        WHERE match_id=?1 AND kind=?2 AND source=?3`)
-        .bind(job.candidate.match_id, job.kind, job.source)
-        .first<{ failures: number; next_retry_at: string | null }>();
-      if (
-        retry &&
-        retry.failures > 0 &&
-        (!retry.next_retry_at || retry.next_retry_at > now.toISOString())
-      )
-        continue;
       const diagnostic = await fetchAndStore(env, fetchImpl, job, now);
       if (diagnostic) await logSync(env, "sync:weather", 0, diagnostic);
       else written++;
-      const failures = diagnostic ? (retry?.failures ?? 0) + 1 : 0;
-      // Initial attempt plus three daily retries, then retain the source limitation.
-      const nextRetry =
-        failures > 0 && failures <= 3 ? new Date(now.getTime() + 86400000).toISOString() : null;
+      const failures = diagnostic ? job.candidate.failures + 1 : 0;
+      const nextRetry = nextWeatherRetry(job.kind, failures, now);
       await env.DB.prepare(`INSERT INTO weather_refresh_state(match_id,kind,source,attempted_at,next_retry_at,failures,diagnostic)
         VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(match_id,kind,source) DO UPDATE SET
         attempted_at=excluded.attempted_at,next_retry_at=excluded.next_retry_at,failures=excluded.failures,diagnostic=excluded.diagnostic`)
@@ -119,7 +151,9 @@ export async function runWeatherStage(
           now.toISOString(),
           nextRetry,
           failures,
-          failures > 3 ? `unavailable-after-three-retries: ${diagnostic}` : diagnostic,
+          failures > 0 && nextRetry === null
+            ? `unavailable-after-three-retries: ${diagnostic}`
+            : diagnostic,
         )
         .run();
     }
@@ -138,7 +172,7 @@ export async function runWeatherStage(
 
 async function cleanupCancelledWeather(env: Env, matchId: number | null): Promise<number> {
   const result = await env.DB.prepare(
-    "DELETE FROM match_weather WHERE match_id IN (SELECT id FROM matches WHERE status = 'Cancelled' AND (?1 IS NULL OR id=?1))",
+    `DELETE FROM match_weather WHERE match_id IN (SELECT m.id FROM matches m WHERE ${cancelledMatch("m")} AND (?1 IS NULL OR m.id=?1))`,
   )
     .bind(matchId)
     .run();
@@ -191,18 +225,20 @@ async function selectForecastCandidates(
   const nowMelbourne = `${today} ${toMelbourneTime(now)}`;
   const horizon = addDaysToIsoDate(today, FORECAST_HORIZON_DAYS);
   const rows = await env.DB.prepare(
-    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, w.fetched_at
+    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, w.fetched_at,
+       ${failureCount("forecast", "'best_match'")}
      FROM matches m
      ${CANONICAL_VENUE_JOIN}
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'forecast'
-     WHERE (m.status IS NULL OR m.status NOT IN ('Complete', 'Cancelled'))
+     WHERE ${unsettledMatch("m")}
        AND m.date || ' ' || COALESCE(m.local_time, '23:59:59') > ?1
        AND m.date <= ?2
        AND (?3 IS NULL OR m.id=?3)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
+       AND ${notBlocked("forecast", "'best_match'", "?4")}
      ORDER BY m.date, m.id`,
   )
-    .bind(nowMelbourne, horizon, matchId)
+    .bind(nowMelbourne, horizon, matchId, now.toISOString())
     .all<CandidateRow>();
   return rows.results.filter((row) => forecastIsStale(row, now)).slice(0, MAX_FETCHES_PER_QUERY);
 }
@@ -238,18 +274,17 @@ async function selectFastObservedCandidates(
   matchId: number | null,
 ): Promise<CandidateRow[]> {
   const rows = await env.DB.prepare(
-    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
+    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at,
+       ${failureCount("observed", "'historical_forecast'")}
      FROM matches m
      ${CANONICAL_VENUE_JOIN}
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
-     WHERE m.status = 'Complete'
+     WHERE ${playedMatch("m")}
        AND (w.match_id IS NULL OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND m.date > ?1
        AND (?4 IS NULL OR m.id=?4)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
-         AND r.kind='observed' AND r.source='historical_forecast' AND r.failures>0
-         AND (r.next_retry_at IS NULL OR r.next_retry_at > ?3))
+       AND ${notBlocked("observed", "'historical_forecast'", "?3")}
      ORDER BY m.date DESC, m.id
      LIMIT ?2`,
   )
@@ -270,8 +305,7 @@ function finalCutoffDate(now: Date): string {
 /**
  * Completed matches past the ERA5 lag whose observed row is missing or not
  * yet on the final `era5_land+era5` provenance: one idempotent (re)write
- * from the archive API. Pre-status legacy rows count as completed when they
- * have points.
+ * from the archive API.
  */
 async function selectFinalObservedCandidates(
   env: Env,
@@ -279,18 +313,17 @@ async function selectFinalObservedCandidates(
   matchId: number | null,
 ): Promise<CandidateRow[]> {
   const rows = await env.DB.prepare(
-    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at
+    `SELECT m.id AS match_id, m.date, m.local_time, cv.latitude, cv.longitude, NULL AS fetched_at,
+       ${failureCount("observed", "?2")}
      FROM matches m
      ${CANONICAL_VENUE_JOIN}
      LEFT JOIN match_weather w ON w.match_id = m.id AND w.kind = 'observed'
-     WHERE (m.status = 'Complete' OR (m.status IS NULL AND m.home_points IS NOT NULL))
+     WHERE ${playedMatch("m")}
        AND m.date <= ?1
        AND (?5 IS NULL OR m.id=?5)
        AND (w.match_id IS NULL OR w.source <> ?2 OR w.temp_c IS NULL OR w.precip_mm IS NULL OR w.precip_24h_prior_mm IS NULL OR w.wind_speed_kmh IS NULL OR w.wind_gust_kmh IS NULL OR w.humidity_pct IS NULL)
        AND cv.latitude IS NOT NULL AND cv.longitude IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM weather_refresh_state r WHERE r.match_id=m.id
-         AND r.kind='observed' AND r.source=?2 AND r.failures>0
-         AND (r.next_retry_at IS NULL OR r.next_retry_at > ?4))
+       AND ${notBlocked("observed", "?2", "?4")}
      ORDER BY m.date DESC, m.id
      LIMIT ?3`,
   )

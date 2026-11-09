@@ -215,7 +215,7 @@ it.each(["time_on_ground_pct", "disposals"])(
   },
 );
 
-it("keeps historical queued work outside cron while allowing an exact-season operator", async () => {
+it("keeps historical queued work outside cron and ends it after one operator fetch", async () => {
   const seasonId = await seed();
   const now = new Date("2026-09-02T00:00:00Z");
   await queueRecentStatsRefresh(env, now);
@@ -245,6 +245,12 @@ it("keeps historical queued work outside cron while allowing an exact-season ope
   ).toBe(1);
   expect((await refreshDueStats(env, now, fetchStats, seasonId)).attempted).toBe(1);
   expect(calls).toBe(1);
+  // A historical import has no revisions to follow: one fetch ends its schedule.
+  expect(
+    await env.DB.prepare(
+      "SELECT succeeded_at IS NOT NULL AS fetched, next_retry_at FROM match_stats_refresh",
+    ).first(),
+  ).toEqual({ fetched: 1, next_retry_at: null });
 });
 
 it("retains a scheduled day-30 refresh after delayed completion observation", async () => {

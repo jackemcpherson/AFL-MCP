@@ -12,6 +12,17 @@ describe("statistics refresh schedule", () => {
     expect(nextStatsRefresh(completed, atDay(14), 0)).toBe(atDay(30).toISOString());
     expect(nextStatsRefresh(completed, atDay(30), 0)).toBeNull();
   });
+  it("ends a historical import after one successful fetch, but still retries its failures", () => {
+    expect(nextStatsRefresh(completed, completed, 0, "2015-09-01")).toBeNull();
+    expect(nextStatsRefresh(completed, completed, 1, "2015-09-01")).toBe(
+      "2026-09-26T08:00:00.000Z",
+    );
+  });
+  it("keeps the full schedule when completion was observed late", () => {
+    expect(nextStatsRefresh(completed, completed, 0, "2026-09-13")).toBe(
+      "2026-09-26T08:00:00.000Z",
+    );
+  });
   it("backs off failures, including failed final fetches, with a 24-hour cap", () => {
     expect(nextStatsRefresh(completed, atDay(30), 1)).toBe("2026-10-26T08:00:00.000Z");
     expect(nextStatsRefresh(completed, atDay(30), 99)).toBe(atDay(31).toISOString());

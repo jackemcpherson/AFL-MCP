@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { COMPETITION_CODES, type CompetitionCode } from "../lib/competitions";
 import { batchRow, batchRows } from "../lib/decode";
+import { playedMatch } from "../lib/match-state";
+import { LEASE_TTL_MINUTES } from "../sync/lease";
 import type { Env } from "../types";
 
 const DEGRADATION_WINDOW_HOURS = 24;
@@ -40,7 +42,10 @@ export interface AdminStatusResponse {
     readonly inputWriteOperation: string | null;
     readonly auditScopesUnresolved: number;
     readonly inputWriteAgeSeconds: number | null;
+    /** Scheduled matches the cron will fetch on its next hourly pass. */
     readonly statisticsDue: number;
+    /** Operator-queued matches waiting for a backfill or approved refresh. */
+    readonly statisticsAwaitingOperator: number;
     readonly statisticsFailed: number;
     readonly statisticsUnresolved: number;
     readonly weatherUnresolved: number;
@@ -93,6 +98,7 @@ const RemediationRowSchema = Schema.Struct({
   write_operation: TextColumn,
   auditScopesUnresolved: NumberColumn,
   statisticsDue: NumberColumn,
+  statisticsAwaitingOperator: NumberColumn,
   statisticsFailed: NumberColumn,
   statisticsUnresolved: NumberColumn,
   weatherUnresolved: NumberColumn,
@@ -121,8 +127,8 @@ export async function getAdminStatus(
   const results = await env.DB.batch([
     env.DB.prepare(
       `SELECT
-         CASE WHEN holder IS NOT NULL AND julianday(acquired_at) >= julianday(?1, '-10 minutes') THEN 1 ELSE 0 END AS held,
-         CASE WHEN holder IS NOT NULL AND julianday(acquired_at) >= julianday(?1, '-10 minutes')
+         CASE WHEN holder IS NOT NULL AND julianday(acquired_at) >= julianday(?1, '-${LEASE_TTL_MINUTES} minutes') THEN 1 ELSE 0 END AS held,
+         CASE WHEN holder IS NOT NULL AND julianday(acquired_at) >= julianday(?1, '-${LEASE_TTL_MINUTES} minutes')
               THEN MAX(0, CAST(ROUND((julianday(?1) - julianday(acquired_at)) * 86400) AS INTEGER))
               ELSE NULL END AS ageSeconds
        FROM sync_lease WHERE id = 1`,
@@ -141,7 +147,7 @@ export async function getAdminStatus(
        FROM competitions c
        LEFT JOIN seasons s ON s.competition_id = c.id
        LEFT JOIN matches m ON m.season_id = s.id
-         AND m.home_points IS NOT NULL AND m.away_points IS NOT NULL
+         AND ${playedMatch("m")}
        WHERE c.code IN ('AFLM', 'AFLW', 'VFL', 'VFLW')
        GROUP BY c.code`,
     ),
@@ -182,12 +188,13 @@ export async function getAdminStatus(
        FROM competitions c JOIN seasons s ON s.competition_id = c.id
        JOIN matches m ON m.season_id = s.id
        LEFT JOIN match_coaches mc ON mc.match_id = m.id AND mc.team_id IN (m.home_team_id, m.away_team_id)
-       WHERE c.code = 'AFLM' AND s.year = ?1 AND m.home_points IS NOT NULL AND m.away_points IS NOT NULL`,
+       WHERE c.code = 'AFLM' AND s.year = ?1 AND ${playedMatch("m")}`,
     ).bind(now.getUTCFullYear()),
     env.DB.prepare(`SELECT in_progress, write_started_at, write_operation,
       (SELECT COUNT(*) FROM sync_log a WHERE a.type LIKE 'audit:season:%' AND a.error IS NOT NULL
        AND a.id=(SELECT MAX(b.id) FROM sync_log b WHERE b.type=a.type)) AS auditScopesUnresolved,
-      (SELECT count(*) FROM match_stats_refresh WHERE next_retry_at <= ?1) AS statisticsDue,
+      (SELECT count(*) FROM match_stats_refresh WHERE next_retry_at <= ?1 AND origin='scheduled') AS statisticsDue,
+      (SELECT count(*) FROM match_stats_refresh WHERE next_retry_at <= ?1 AND origin='operator') AS statisticsAwaitingOperator,
       (SELECT count(*) FROM match_stats_refresh WHERE failures > 0) AS statisticsFailed,
       (SELECT count(*) FROM match_stats_refresh WHERE diagnostic IS NOT NULL) AS statisticsUnresolved,
       (SELECT count(*) FROM weather_refresh_state WHERE diagnostic IS NOT NULL) AS weatherUnresolved,
@@ -251,6 +258,7 @@ export async function getAdminStatus(
       auditScopesUnresolved: countOrZero(remediation?.auditScopesUnresolved),
       inputWriteAgeSeconds: ageSeconds(remediation?.write_started_at ?? null, now),
       statisticsDue: countOrZero(remediation?.statisticsDue),
+      statisticsAwaitingOperator: countOrZero(remediation?.statisticsAwaitingOperator),
       statisticsFailed: countOrZero(remediation?.statisticsFailed),
       statisticsUnresolved: countOrZero(remediation?.statisticsUnresolved),
       weatherUnresolved: countOrZero(remediation?.weatherUnresolved),

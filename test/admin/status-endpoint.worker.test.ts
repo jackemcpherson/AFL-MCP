@@ -249,11 +249,11 @@ async function seedIntegrityViolations(): Promise<void> {
         home_q1_goals, home_q1_behinds, home_q2_goals, home_q2_behinds,
         home_q3_goals, home_q3_behinds, home_q4_goals, home_q4_behinds,
         away_q1_goals, away_q1_behinds, away_q2_goals, away_q2_behinds,
-        away_q3_goals, away_q3_behinds, away_q4_goals, away_q4_behinds)
+        away_q3_goals, away_q3_behinds, away_q4_goals, away_q4_behinds, status)
      VALUES (?1, 'Round 1', 'Regular', '2026-07-11', ?2, ?3,
        1, 1, 99, 1, 1, 7, 0,
        0, 0, 0, 0, 0, 0, 0, 0,
-       0, 0, 0, 0, 0, 0, 0, 0)`,
+       0, 0, 0, 0, 0, 0, 0, 0, 'Complete')`,
   )
     .bind(season.id, home, away)
     .run();

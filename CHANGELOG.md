@@ -5,6 +5,40 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Every lifecycle the Worker persists now has one owning module, listed in
+`docs/state-machines.md`. The `code` sandbox does not change.
+
+### Changed
+
+- `seasons.is_complete` is 1 when a season has matches and every one is
+  `Complete` or `Cancelled`. Migration `0046` recomputes it, so AFLM 2015,
+  VFL 2021 and VFLW 2021, each held open by a cancelled match, become
+  complete. A season no longer reads complete while its last match is live.
+- "Played" means `status = 'Complete'` everywhere (`src/lib/match-state.ts`).
+  PAV, weather, coverage, health and status no longer infer it from scores
+  or accept a NULL status.
+- A failed forecast fetch retries after an hour (then 2, 4, 8, 16 and 24),
+  not a day, and a match that is backing off no longer takes a fetch slot.
+- The cron's scheduled time decides which stages a tick runs, so a late
+  start cannot drop the hourly statistics, coaching and weather work.
+- A steady-state sync writes under `sync:steady:<competitions>`, so the cron
+  recovers its own stranded write across a default-season rollover. A marker
+  stranded by the previous Worker under the old name needs one manual
+  `resume`.
+- Repeating a completed identity repair whose write marker is still held now
+  fails until repeated with `resume`, as weather repair already did.
+- An operator-queued historical statistics request ends after one successful
+  fetch. Migration `0046` ends the ones already fetched.
+- `/mcp/admin/status` splits `statisticsDue` (scheduled) from the new
+  `statisticsAwaitingOperator`. Backfill results add `statsPending`, and an
+  approved statistics refresh adds `nextRetryAt`.
+
+### Removed
+
+- Five unused completion helpers in `src/sync/upserts.ts`.
+
 ## [5.0.1] - 2026-10-17
 
 This patch corrects `schema` tool examples and notes from an external v5

@@ -7,20 +7,14 @@ import {
   resolveDefaultSeasonForCompetition,
 } from "fitzroy";
 import { refreshActiveCoaches } from "../admin/coaching";
-import {
-  beginPublicInputWrite,
-  findStrandedWrite,
-  finishPublicInputWrite,
-  protectOperationWrites,
-  resumePublicInputWrite,
-} from "../db/public-inputs";
+import { runOperation } from "../db/operation";
 import { seasonKey } from "../db/seasons";
 import { describeError, logError, type MessageFields, type TaggedErrorBase } from "../lib/errors";
 import { runFitzroy, runFitzroyOrThrow } from "../lib/fitzroy";
+import { playedMatch } from "../lib/match-state";
 import { toIsoDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
-import { acquireOperationLease, releaseOperationLease } from "./lease";
 import { logSync } from "./log";
 import { correctVerifiedMatch } from "./source-corrections";
 import { queueRecentStatsRefresh, rebuildQueuedStatsPav, refreshDueStats } from "./stats-refresh";
@@ -59,6 +53,8 @@ export interface BackfillResult {
   readonly seasonKey?: string;
   readonly matches: number;
   readonly stats: number;
+  /** Backfills only: matches still queued for statistics. Repeat the backfill until zero. */
+  readonly statsPending?: number;
   readonly lineups: number;
   readonly error?: string;
 }
@@ -92,6 +88,8 @@ export interface SyncOptions {
   readonly toYear?: number;
   /** Skip the cadence gate; for backfills triggered manually. */
   readonly skipShouldRunNow?: boolean;
+  /** The tick's instant. The cron passes its scheduled time; defaults to the current time. */
+  readonly now?: Date;
 }
 
 /**
@@ -111,23 +109,21 @@ export async function sync(
   competitions: readonly CompetitionCode[],
   options?: SyncOptions,
 ): Promise<BackfillResult[]> {
-  const now = new Date();
+  const now = options?.now ?? new Date();
   if (!options?.skipShouldRunNow && !(await shouldRunNow(now, env))) return [];
+  const isBackfill =
+    options?.season !== undefined ||
+    (options?.fromYear !== undefined && options.toYear !== undefined);
+  const fixturesOnly = options?.fixturesOnly ?? false;
+  const hourly = !isBackfill && isHourlyTick(now);
 
-  // Cron ticks and admin syncs previously had no mutual exclusion —
-  // overlapping runs double-fetched upstream data and interleaved PAV
-  // recalcs (COR-11). A stale lease (holder crashed) expires after 10 min.
-  const holder = crypto.randomUUID();
-  if (!(await acquireOperationLease(env, holder))) {
+  // Cron ticks and admin syncs share one lease, so overlapping runs cannot
+  // double-fetch upstream data or interleave PAV recalcs (COR-11).
+  const skipped = async (): Promise<BackfillResult[]> => {
     await logSync(env, "sync:lease", 0, "skipped: another sync holds the lease");
     return [];
-  }
-
-  let consistent = false;
-  try {
-    const isBackfill =
-      options?.season !== undefined ||
-      (options?.fromYear !== undefined && options.toYear !== undefined);
+  };
+  return runOperation(env, skipped, async (operation) => {
     const scopes: { competition: CompetitionCode; season: SeasonSelector }[] = [];
     for (const competition of competitions) {
       const seasons: readonly SeasonSelector[] =
@@ -141,32 +137,30 @@ export async function sync(
         scopes.push({ competition, season });
       }
     }
-    const operation = `sync:${options?.fixturesOnly ? "fixtures:" : ""}${JSON.stringify(scopes)}`;
+    const identity = syncIdentity(competitions, isBackfill ? scopes : null, fixturesOnly);
     // A run that dies mid-write (e.g. a D1 connection drop) keeps the marker so
-    // readers never see partial inputs. The scheduled path re-runs the same
-    // idempotent scope, so it resumes its own stranded write instead of
-    // failing every tick until an operator resumes it. Markers from any other
-    // operation still require explicit recovery.
-    const stranded = options?.resume || isBackfill ? null : await findStrandedWrite(env, operation);
-    if (options?.resume || stranded !== null) {
-      await resumePublicInputWrite(env, holder, operation);
-      if (stranded !== null)
-        await logSync(
-          env,
-          "sync:recovered",
-          0,
-          `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
-        );
-    } else await beginPublicInputWrite(env, holder, now, operation);
-    const writer = protectOperationWrites(env, holder);
+    // readers never see partial inputs. A steady-state run is idempotent and
+    // finishes all derived work, so it resumes a stranded steady-state write
+    // instead of failing every tick until an operator steps in. Markers from
+    // any other operation still require explicit recovery.
+    const stranded = options?.resume || isBackfill ? null : await operation.stranded(identity);
+    const writer = await operation.write(identity, {
+      resume: options?.resume === true || stranded !== null,
+      startedAt: now,
+    });
+    if (stranded !== null)
+      await logSync(
+        env,
+        "sync:recovered",
+        0,
+        `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
+      );
     const results: BackfillResult[] = [];
     for (const { competition, season } of scopes)
-      results.push(
-        await syncCompetition(writer, competition, season, isBackfill, options?.fixturesOnly),
-      );
+      results.push(await syncCompetition(writer, competition, season, isBackfill, fixturesOnly));
 
     if (!isBackfill) await queueRecentStatsRefresh(writer, now);
-    if (!isBackfill && now.getUTCMinutes() === 0) {
+    if (hourly) {
       const refresh = await refreshDueStats(writer, now);
       await logSync(
         env,
@@ -174,20 +168,15 @@ export async function sync(
         refresh.changedRows,
         refresh.failed ? `${refresh.failed} match fetches failed; retries persisted` : undefined,
       );
+      // Coach profiles are expensive season-wide reads; the import module
+      // enforces its own retry cadence.
+      if (competitions.includes("AFLM")) await refreshActiveCoaches(writer, now);
     }
 
-    // Coach profiles are expensive season-wide reads. Refresh only in the
-    // hourly path, with the import module enforcing a 24-hour retry cadence.
-    if (!isBackfill && now.getUTCMinutes() === 0 && competitions.includes("AFLM")) {
-      await refreshActiveCoaches(writer, now);
-    }
-
-    // Weather rides the same lease as match data but self-gates to
-    // top-of-hour passes so the 5-minute cron adds no wasted Open-Meteo
-    // calls (#138). Provider failures retry; database failures retain the marker.
-    if (!options?.fixturesOnly && now.getUTCMinutes() === 0) {
-      await runWeatherStage(writer, fetch, now);
-    }
+    // Weather rides the same lease as match data but only on hourly ticks, so
+    // the 5-minute cron adds no wasted Open-Meteo calls (#138). Provider
+    // failures retry; database failures retain the marker.
+    if (!fixturesOnly && isHourlyTick(now)) await runWeatherStage(writer, fetch, now);
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
     // debugging horizon while keeping the table tiny.
@@ -199,16 +188,45 @@ export async function sync(
       });
 
     // Fixture score/status changes also invalidate PAV on five-minute ticks.
-    await rebuildQueuedStatsPav(writer, undefined, holder);
-    consistent = true;
+    await rebuildQueuedStatsPav(writer, undefined, operation.holder);
     return results;
-  } finally {
-    try {
-      if (consistent) await finishPublicInputWrite(env, holder);
-    } finally {
-      await releaseOperationLease(env, holder);
-    }
-  }
+  });
+}
+
+/**
+ * Whether a tick carries the hourly stages (statistics refresh, coaching,
+ * weather). Callers pass the tick's scheduled time, so a late start still
+ * counts for the hour it was scheduled in.
+ *
+ * @param now - The tick's scheduled instant.
+ * @returns True at the top of the hour.
+ */
+export function isHourlyTick(now: Date): boolean {
+  return now.getUTCMinutes() === 0;
+}
+
+/**
+ * The persisted identity a sync writes under, matched exactly on recovery.
+ *
+ * A steady-state sync is named by its competitions alone. Naming the resolved
+ * seasons would stop the cron recovering its own stranded write whenever a
+ * competition's default season rolls over in between. A backfill is named by
+ * its exact scopes, because resuming it must repeat the same reviewed work.
+ *
+ * @param competitions - Competitions in this sync.
+ * @param scopes - Exact competition-seasons of a backfill, or null in steady state.
+ * @param fixturesOnly - Whether player appearances are skipped.
+ * @returns The `write_operation` value.
+ */
+export function syncIdentity(
+  competitions: readonly CompetitionCode[],
+  scopes: readonly { competition: CompetitionCode; season: SeasonSelector }[] | null,
+  fixturesOnly: boolean,
+): string {
+  const kind = fixturesOnly ? "sync:fixtures:" : "sync:";
+  return scopes === null
+    ? `${kind}steady:${competitions.join(",")}`
+    : `${kind}${JSON.stringify(scopes)}`;
 }
 
 /**
@@ -219,7 +237,7 @@ export async function sync(
  * window keeps polling through games that have just finished.
  */
 export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
-  if (now.getUTCMinutes() === 0) return true;
+  if (isHourlyTick(now)) return true;
   const dayMs = 24 * 60 * 60 * 1000;
   const from = toIsoDate(new Date(now.getTime() - BACKWARD_DAYS * dayMs));
   const to = toIsoDate(new Date(now.getTime() + FORWARD_DAYS * dayMs));
@@ -371,13 +389,21 @@ async function syncCompetition(
     const matchMap = await buildMatchAflIdMap(env, seasonId);
 
     let statsAffected = 0;
+    let statsPending: number | null = null;
     if (isBackfill && !fixturesOnly) {
       await env.DB.prepare(`INSERT INTO match_stats_refresh(match_id, completed_observed_at, next_retry_at)
-        SELECT id, ?1, ?1 FROM matches WHERE season_id = ?2 AND status = 'Complete' AND external_afl_id IS NOT NULL
+        SELECT m.id, ?1, ?1 FROM matches m WHERE m.season_id = ?2 AND ${playedMatch("m")} AND m.external_afl_id IS NOT NULL
         ON CONFLICT(match_id) DO NOTHING`)
         .bind(new Date().toISOString(), seasonId)
         .run();
       statsAffected = (await refreshDueStats(env, new Date(), undefined, seasonId)).changedRows;
+      // One pass fetches a bounded batch, so say how much of the season is left.
+      statsPending = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM match_stats_refresh r JOIN matches m ON m.id = r.match_id
+         WHERE m.season_id = ?1 AND r.next_retry_at IS NOT NULL`,
+      )
+        .bind(seasonId)
+        .first<number>("n");
     }
     let lineupsAffected = 0;
     if (lineups.length > 0) {
@@ -394,6 +420,7 @@ async function syncCompetition(
       seasonKey: String(season),
       matches: matchesAffected,
       stats: statsAffected,
+      ...(statsPending !== null && { statsPending }),
       lineups: lineupsAffected,
     };
   } catch (err) {

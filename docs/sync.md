@@ -56,7 +56,8 @@ AFLW.
 6. Queue recent completed matches for statistics refresh. Hourly passes fetch at
    most 20 due matches across competitions.
    Admin backfills queue their exact season and also fetch at most 20 matches
-   per pass.
+   per pass. Their result reports `statsPending`, the matches still queued,
+   so repeat the backfill until it reaches zero.
    Each match has persisted success, failure and retry checkpoints. Match-count
    increases do not gate corrections.
 7. Rebuild changed statistics' PAV seasons before clearing the public write
@@ -72,10 +73,16 @@ AFLW.
 
 Provider statistics failures retain successful match results and persist
 retries.
-Database failures retain the public write marker. The next scheduled sync
-resumes a marker left by its own identical operation scope and logs
+Database failures retain the public write marker. A steady-state sync is
+named by its competitions (`sync:steady:AFLM,AFLW,VFL,VFLW`), not by the
+seasons it resolved, so the next scheduled sync resumes a marker left by an
+earlier tick even when a default season rolled over in between, and logs
 `sync:recovered`. Backfills and every other operation still require explicit
 recovery with the identical operation scope.
+
+The cron passes its scheduled time to the sync, and that one instant decides
+which stages run. A tick that starts late still runs the hourly stages for the
+hour it was scheduled in.
 
 ## Publication Inputs
 
@@ -131,9 +138,13 @@ date bounds and `timeformat=unixtime` for UTC epoch hourly timestamps. Distinct
 epochs preserve both repeated daylight-saving hours. Existing retry deadlines
 remain unchanged.
 
-Provider weather failures persist diagnostics and daily retry schedules.
-After the initial failure and three unsuccessful daily retries, observations
-remain unavailable.
+Provider weather failures persist diagnostics and a retry time in
+`weather_refresh_state`. `nextWeatherRetry` is the whole policy. A forecast
+retries after 1, 2, 4, 8 and 16 hours, then daily, and never gives up, so a
+failed hour on match day costs one refresh. An observation retries daily and
+remains unavailable after the initial failure and three unsuccessful retries.
+The needs-work queries skip a match that is backing off or unavailable, so it
+never takes one of the 25 fetch slots.
 The authenticated `retry-weather` operation previews an exact match before
 scheduling another attempt.
 Database failures propagate and retain the public marker.
@@ -368,12 +379,24 @@ inputs.
 
 ### Historical Statistics Queue
 
-The recent 30-day queue marks admitted fixtures as scheduled work without
-resetting existing retry deadlines. Those fixtures retain their full schedule
-from first observed completion, including day 30 and failure retries.
-Historical checkpoints default to operator work and remain available to
+`match_stats_refresh.origin` names who drives a queued match. The recent
+30-day queue marks admitted fixtures as `scheduled` without resetting existing
+retry deadlines. Those fixtures retain their full schedule from first observed
+completion, including day 30 and failure retries.
+Historical checkpoints default to `operator` work and remain available to
 exact-season and approved requests. They cannot consume the hourly refresh
 budget or trigger a historical import when scheduled writes resume.
+
+An operator request is one-off. A match that was already more than 30 days
+old when first observed has no revisions left to follow, so one successful
+fetch ends its schedule (`next_retry_at` NULL). `/mcp/admin/status` reports
+the two drivers separately: `statisticsDue` counts scheduled matches the cron
+will fetch, and `statisticsAwaitingOperator` counts operator requests.
+
+A successful fetch completes every pending operation entry for that match,
+whichever operation triggered it. An approved refresh reports `remaining` and
+`nextRetryAt`, the earliest time a pending match becomes due again after a
+failed fetch.
 
 ## Fenced Read Retries
 

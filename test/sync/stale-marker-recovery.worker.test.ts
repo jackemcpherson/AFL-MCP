@@ -1,12 +1,12 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { requestUrl } from "#test/fixtures";
-import { sync } from "../../src/sync/sync";
+import { sync, syncIdentity } from "../../src/sync/sync";
 import matchItem from "../fixtures/fixture-only-match.json";
 
 const API = "https://aflapi.afl.com.au/afl/v2";
 const CFS = "https://api.afl.com.au/cfs/afl";
-const SCHEDULED_OPERATION = 'sync:[{"competition":"AFLM","season":2026}]';
+const SCHEDULED_OPERATION = syncIdentity(["AFLM"], null, false);
 
 beforeEach(() => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -67,6 +67,14 @@ it("recovers a scheduled sync stranded by its own crashed run", async () => {
       "SELECT COUNT(*) AS n FROM sync_log WHERE type='sync:recovered' AND error LIKE '%crashed-holder%'",
     ).first("n"),
   ).toBe(1);
+});
+
+it("names a steady-state sync by its competitions, not its resolved seasons", () => {
+  // A default season that rolls over between ticks must not orphan the marker.
+  expect(SCHEDULED_OPERATION).toBe("sync:steady:AFLM");
+  expect(syncIdentity(["AFLM"], [{ competition: "AFLM", season: 2026 }], true)).toBe(
+    'sync:fixtures:[{"competition":"AFLM","season":2026}]',
+  );
 });
 
 it("still refuses a stranded marker from a different operation", async () => {

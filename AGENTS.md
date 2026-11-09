@@ -13,6 +13,8 @@ For deeper context, read the appropriate doc:
 - [`docs/sync.md`](./docs/sync.md) — Single-cron orchestrator, `shouldRunNow`
   gate, PAV recalc, AFL season structure.
 - [`docs/schema.md`](./docs/schema.md) — D1 table reference.
+- [`docs/state-machines.md`](./docs/state-machines.md) — Every lifecycle the
+  Worker persists, its states, and the one module that owns its transitions.
 
 ## Commands
 
@@ -89,6 +91,11 @@ full pipeline.
 - `src/sandbox/executor.ts` — Dynamic Worker loader and result handling.
 - `src/sandbox/db-proxy.ts` — `DbProxy` read-only RPC bridge (re-exported
   from `src/index.ts`).
+- `src/db/operation.ts` — `runOperation`: the lease and public write marker
+  around every cron tick and admin operation. Do not call the lease or
+  marker primitives directly.
+- `src/lib/match-state.ts` — The played, cancelled and unsettled match
+  predicates. Never test `home_points` to decide whether a match finished.
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
 - `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
   weather stage writes `match_weather` itself from `src/weather/stage.ts`).

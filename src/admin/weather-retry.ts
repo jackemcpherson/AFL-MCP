@@ -9,7 +9,8 @@ import {
   SeasonSelectorSchema,
   Sha256HexSchema,
 } from "../lib/schemas";
-import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
+import { runOperation } from "../db/operation";
+import { leaseHeldBy } from "../sync/lease";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
@@ -62,41 +63,40 @@ export async function retryWeather(
   env: Env,
   request: WeatherRetryRequest,
 ): Promise<WeatherRetryResult> {
-  const holder = crypto.randomUUID();
-  if (!(await acquireOperationLease(env, holder))) return { busy: true };
-  try {
-    const season = await resolveStoredSeason(env, request.competition, request.season);
-    const rows =
-      await env.DB.prepare(`SELECT r.* FROM weather_refresh_state r JOIN matches m ON m.id=r.match_id
+  return runOperation<WeatherRetryResult>(
+    env,
+    () => ({ busy: true }),
+    async (operation) => {
+      const season = await resolveStoredSeason(env, request.competition, request.season);
+      const rows =
+        await env.DB.prepare(`SELECT r.* FROM weather_refresh_state r JOIN matches m ON m.id=r.match_id
       WHERE m.id=?1 AND m.season_id=?2 AND r.diagnostic IS NOT NULL ORDER BY r.kind,r.source`)
-        .bind(request.matchId, season.id)
-        .all();
-    const digest = await sha256Hex(JSON.stringify({ season, rows: rows.results }));
-    if (request.dryRun)
-      return {
-        busy: false,
-        dryRun: true,
-        season,
-        observations: rows.results,
-        manifestDigest: digest,
-      };
-    if (!rows.results.length)
-      throw new OperationConflictError({
-        message: "No unresolved weather observations in this exact match scope",
-      });
-    if (request.manifestDigest !== digest)
-      throw new OperationConflictError({ message: "Weather retry preview missing or stale" });
-    const result =
-      await env.DB.prepare(`UPDATE weather_refresh_state SET failures=0,next_retry_at=?1
+          .bind(request.matchId, season.id)
+          .all();
+      const digest = await sha256Hex(JSON.stringify({ season, rows: rows.results }));
+      if (request.dryRun)
+        return {
+          busy: false,
+          dryRun: true,
+          season,
+          observations: rows.results,
+          manifestDigest: digest,
+        };
+      if (!rows.results.length)
+        throw new OperationConflictError({
+          message: "No unresolved weather observations in this exact match scope",
+        });
+      if (request.manifestDigest !== digest)
+        throw new OperationConflictError({ message: "Weather retry preview missing or stale" });
+      const result =
+        await env.DB.prepare(`UPDATE weather_refresh_state SET failures=0,next_retry_at=?1
       WHERE match_id=?2 AND diagnostic IS NOT NULL
-      AND EXISTS(SELECT 1 FROM sync_lease WHERE id=1 AND holder=?3
-        AND acquired_at>=datetime('now','-10 minutes')) RETURNING match_id`)
-        .bind(new Date().toISOString(), request.matchId, holder)
-        .all();
-    if (result.results.length !== rows.results.length)
-      throw new OperationConflictError({ message: "Weather retry lease lost or scope changed" });
-    return { busy: false, dryRun: false, queued: result.results.length };
-  } finally {
-    await releaseOperationLease(env, holder);
-  }
+      AND ${leaseHeldBy("?3")} RETURNING match_id`)
+          .bind(new Date().toISOString(), request.matchId, operation.holder)
+          .all();
+      if (result.results.length !== rows.results.length)
+        throw new OperationConflictError({ message: "Weather retry lease lost or scope changed" });
+      return { busy: false, dryRun: false, queued: result.results.length };
+    },
+  );
 }

@@ -1,6 +1,7 @@
 import { publicInputWriteFence } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
+import { playedMatch } from "../lib/match-state";
 import type { Env } from "../types";
 import { logSync } from "./log";
 
@@ -9,6 +10,9 @@ export type PavCompetition = keyof typeof MIN_PAV_YEAR_BY_COMPETITION;
 
 // D1 does not support CTEs combined with INSERT...ON CONFLICT in a single
 // statement, so we split into a SELECT (with CTEs) and a parameterised UPSERT.
+
+/** Only played matches are PAV inputs; live and cancelled matches never count. */
+const PLAYED = playedMatch("m");
 
 const PAV_SELECT_SQL = `
 WITH
@@ -26,7 +30,7 @@ input_completeness AS (
     SELECT NOT EXISTS (
       SELECT 1 FROM matches m
       JOIN target_season ts ON m.season_id = ts.season_id
-      WHERE (m.status = 'Complete' OR m.status IS NULL)
+      WHERE ${PLAYED}
         AND (
           m.home_points IS NULL OR m.away_points IS NULL OR
           NOT EXISTS (SELECT 1 FROM player_match_stats pms
@@ -47,7 +51,7 @@ team_match_i50 AS (
     JOIN matches m ON pms.match_id = m.id
     JOIN target_season ts ON m.season_id = ts.season_id
     WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
-      AND (m.status = 'Complete' OR m.status IS NULL)
+      AND ${PLAYED}
     GROUP BY pms.match_id, pms.team_id
 ),
 
@@ -72,7 +76,7 @@ team_season AS (
         JOIN team_match_i50 a
             ON a.match_id = m.id AND a.team_id = m.away_team_id
         WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
-      AND (m.status = 'Complete' OR m.status IS NULL)
+      AND ${PLAYED}
         UNION ALL
         -- Away games
         SELECT m.away_team_id,
@@ -85,7 +89,7 @@ team_season AS (
         JOIN team_match_i50 a
             ON a.match_id = m.id AND a.team_id = m.away_team_id
         WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
-      AND (m.status = 'Complete' OR m.status IS NULL)
+      AND ${PLAYED}
     ) sub
     GROUP BY sub.team_id
 ),
@@ -165,7 +169,7 @@ player_match AS (
     JOIN matches m ON pms.match_id = m.id
     JOIN target_season ts ON m.season_id = ts.season_id
     WHERE m.home_points IS NOT NULL AND m.away_points IS NOT NULL
-      AND (m.status = 'Complete' OR m.status IS NULL)
+      AND ${PLAYED}
       AND (pms.time_on_ground_pct > 0 OR pms.disposals > 0)
 ),
 
