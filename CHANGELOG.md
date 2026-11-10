@@ -26,6 +26,8 @@ Round. It also gives every lifecycle the Worker persists one owning module.
 
 - The `schema` rounds note says Opening Round exists for AFLM 2024 to 2026
   only. AFLM 2027 starts at Round 1.
+- fitzroy moves to 7.0.1, which renumbers AFL Tables rounds for an Opening
+  Round in 2024 to 2026 only.
 - The hourly coaching refresh follows the sync's current AFLM season, not the
   calendar year, so it no longer polls a season that has not started.
 - `seasons.is_complete` is 1 when a season has matches and every one is

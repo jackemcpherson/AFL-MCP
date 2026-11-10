@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "effect": "4.1.2",
-    "fitzroy": "7.0.0"
+    "fitzroy": "7.0.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",
