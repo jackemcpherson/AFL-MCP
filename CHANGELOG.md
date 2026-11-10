@@ -5,12 +5,13 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.1.0] - 2026-11-10
 
-Every lifecycle the Worker persists now has one owning module, listed in
-`docs/state-machines.md`. The `code` sandbox does not change.
+This release prepares the Worker for the 2027 season, which has no Opening
+Round, and gives every lifecycle the Worker persists one owning module, listed
+in `docs/state-machines.md`. The `code` sandbox does not change.
 
-### Added
+### Added in 5.1.0
 
 - The steady-state sync also covers each competition's next season, so a new
   fixture, its lineups and its forecasts load before the opening match. The
@@ -21,7 +22,7 @@ Every lifecycle the Worker persists now has one owning module, listed in
   stored season that has started stands in (`sync:season-fallback`), so a
   newly listed season without round dates cannot halt every sync.
 
-### Changed
+### Changed in 5.1.0
 
 - The `schema` rounds note says Opening Round exists for AFLM 2024 to 2026
   only. AFLM 2027 starts at Round 1.
@@ -50,7 +51,7 @@ Every lifecycle the Worker persists now has one owning module, listed in
   `statisticsAwaitingOperator`. Backfill results add `statsPending`, and an
   approved statistics refresh adds `nextRetryAt`.
 
-### Removed
+### Removed in 5.1.0
 
 - Five unused completion helpers in `src/sync/upserts.ts`.
 
