@@ -17,9 +17,9 @@ const AuditSeasonRowSchema = Schema.Struct({
  * Inspect one competition-season per hourly pass without changing public inputs.
  * Rotate by the least recently audited season. Log bounded, actionable record IDs;
  * findings are investigation candidates, never automatic repair instructions.
+ *
  * @param env - Worker bindings.
  * @param now - Audit observation time.
-
  * @returns Resolves after persisting a bounded audit or skipping changing inputs.
  * @throws If a database query or audit write fails.
  * @example

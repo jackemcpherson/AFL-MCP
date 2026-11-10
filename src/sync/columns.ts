@@ -20,7 +20,8 @@
  *   `table.col IS NOT excluded.col`.
  * - `"coalesce"` — `col = COALESCE(excluded.col, table.col)` so a NULL in
  *   the incoming row never clobbers existing data; detected via
- *   `table.col IS NOT COALESCE(excluded.col, table.col)`.
+ *   `table.col IS NOT COALESCE(excluded.col, table.col)`. A
+ *   {@link ColumnDef.replaceWhen} condition switches it to replace.
  */
 export type UpsertColumnKind = "key" | "replace" | "coalesce";
 
@@ -30,6 +31,12 @@ export interface ColumnDef {
   readonly name: string;
   /** Update / change-detection semantics for the generated fragments. */
   readonly kind: UpsertColumnKind;
+  /**
+   * `"coalesce"` only: a SQL condition over the existing row and `excluded`
+   * under which the incoming value replaces the stored one, NULL included.
+   * Otherwise the column coalesces.
+   */
+  readonly replaceWhen?: string;
 }
 
 /**
@@ -54,6 +61,18 @@ export function placeholderList(columns: readonly ColumnDef[]): string {
 }
 
 /**
+ * The value a non-`"key"` column takes on update, shared by the SET and
+ * change-detection fragments so they cannot disagree.
+ */
+function updatedValue(table: string, c: ColumnDef): string {
+  if (c.kind !== "coalesce") return `excluded.${c.name}`;
+  const coalesced = `COALESCE(excluded.${c.name}, ${table}.${c.name})`;
+  return c.replaceWhen === undefined
+    ? coalesced
+    : `CASE WHEN ${c.replaceWhen} THEN excluded.${c.name} ELSE ${coalesced} END`;
+}
+
+/**
  * `DO UPDATE SET` assignments for every non-`"key"` column, in manifest
  * order. `"coalesce"` columns use `COALESCE(excluded.col, table.col)` so a
  * NULL re-fetch never clobbers existing data.
@@ -63,11 +82,7 @@ export function placeholderList(columns: readonly ColumnDef[]): string {
 export function updateSetClause(table: string, columns: readonly ColumnDef[]): string {
   return columns
     .filter((c) => c.kind !== "key")
-    .map((c) =>
-      c.kind === "coalesce"
-        ? `${c.name} = COALESCE(excluded.${c.name}, ${table}.${c.name})`
-        : `${c.name} = excluded.${c.name}`,
-    )
+    .map((c) => `${c.name} = ${updatedValue(table, c)}`)
     .join(",\n      ");
 }
 
@@ -82,11 +97,7 @@ export function updateSetClause(table: string, columns: readonly ColumnDef[]): s
 export function changeDetectionWhere(table: string, columns: readonly ColumnDef[]): string {
   return columns
     .filter((c) => c.kind !== "key")
-    .map((c) =>
-      c.kind === "coalesce"
-        ? `${table}.${c.name} IS NOT COALESCE(excluded.${c.name}, ${table}.${c.name})`
-        : `${table}.${c.name} IS NOT excluded.${c.name}`,
-    )
+    .map((c) => `${table}.${c.name} IS NOT ${updatedValue(table, c)}`)
     .join(" OR\n      ");
 }
 

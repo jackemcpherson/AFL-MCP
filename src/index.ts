@@ -1,6 +1,5 @@
 import { Result, Schema } from "effect";
 import {
-  type BackfillRequest,
   decodeBackfillRequest,
   decodeExactSeasonBackfillRequest,
   describeBackfillIssue,
@@ -13,7 +12,8 @@ import {
 } from "./admin/brownlow";
 import { decodeBearsRepairRequest, reconcileBearsIdentity } from "./admin/club-identities";
 import { backfillCoaches, decodeCoachingBackfillRequest } from "./admin/coaching";
-import { OperationConflictError } from "./admin/errors";
+import { MIN_COACHING_YEAR } from "./lib/coaching-queries";
+import { OperationConflictError, OperationRequestError } from "./admin/errors";
 import { decodePavRepairRequest, repairPav } from "./admin/pav";
 import { decodeIdentityRepairRequest, repairPlayerIdentity } from "./admin/player-identities";
 import { decodeStatsRefreshRequest, operateStatsRefresh } from "./admin/stats-refresh";
@@ -22,8 +22,8 @@ import { decodeWeatherRefreshRequest, refreshWeather } from "./admin/weather-ref
 import { decodeWeatherRetryRequest, retryWeather } from "./admin/weather-retry";
 import { SeasonSelectionError, seasonKey } from "./db/seasons";
 import { COMPETITION_CODES } from "./lib/competitions";
-import { decodeRow } from "./lib/decode";
-import { logError } from "./lib/errors";
+import { type Decoder, decodeRow, describeIssue } from "./lib/decode";
+import { boundedErrorText, logError } from "./lib/errors";
 import { toSeasonSelector } from "./lib/schemas";
 import { playedMatch } from "./lib/match-state";
 import { handleMcpRequest } from "./mcp/protocol";
@@ -131,7 +131,9 @@ export default {
       }
     }
 
-    if (path === "/mcp" || path.startsWith("/mcp/")) {
+    // Only the MCP endpoint itself (with or without a trailing slash) reaches
+    // the protocol handler. Any other /mcp/* path is unknown and must 404.
+    if (path === "/mcp" || path === "/mcp/") {
       return handleMcpRequest(request, env, ctx);
     }
 
@@ -164,7 +166,7 @@ export default {
             await env.DB.prepare(
               "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?, 'sync:fatal', 0, ?)",
             )
-              .bind(new Date().toISOString(), err instanceof Error ? err.message : String(err))
+              .bind(new Date().toISOString(), boundedErrorText(err))
               .run();
           } catch (logErr) {
             logError("sync_fatal_log_failed", logErr);
@@ -177,8 +179,9 @@ export default {
 /**
  * Map a failure thrown by an admin route to its HTTP response.
  *
- * Tagged selection and conflict errors carry application-written messages
- * and become 4xx bodies. Anything else is logged without its message and
+ * Tagged selection, request and conflict errors carry application-written
+ * messages and become 4xx bodies: an invalid request is 400, a missing
+ * season 404 and a state conflict 409. Anything else is logged without its message and
  * becomes a generic 500.
  *
  * @param path - Admin route path, recorded in the failure log.
@@ -191,6 +194,8 @@ function adminErrorResponse(path: string, error: unknown): Response {
       { error: error.message, code: error.code, validSelectors: error.validSelectors },
       { status: error.code === "SEASON_NOT_FOUND" ? 404 : 400 },
     );
+  if (error instanceof OperationRequestError)
+    return Response.json({ error: error.message, code: error.code }, { status: 400 });
   if (error instanceof OperationConflictError)
     return Response.json({ error: error.message, code: error.code }, { status: 409 });
   logError("admin_route_error", error, { path });
@@ -232,37 +237,89 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** Longest caller-facing request error returned in a 400 body. */
+const MAX_REQUEST_ERROR_CHARS = 200;
+
+/**
+ * The 400 reply for a request the route cannot accept.
+ *
+ * @param message - Application-written description of the first problem.
+ *   It may quote a key the caller sent, so it is cut to a bounded length.
+ * @returns The 400 response.
+ */
+function invalidRequest(message: string): Response {
+  const error =
+    message.length > MAX_REQUEST_ERROR_CHARS
+      ? `${message.slice(0, MAX_REQUEST_ERROR_CHARS)}…`
+      : message;
+  return Response.json({ error }, { status: 400 });
+}
+
+/**
+ * The single 409 reply every admin route gives while another operation
+ * holds the lease.
+ *
+ * @returns The 409 response.
+ */
+function leaseBusy(): Response {
+  return Response.json(
+    { error: "operation lease held", code: "OPERATION_BUSY", busy: true },
+    { status: 409 },
+  );
+}
+
+/**
+ * Parse and decode a JSON request body.
+ *
+ * @param request - The admin request.
+ * @param decode - The route's strict body decoder.
+ * @param describe - Maps a decode failure to its caller-facing message.
+ * @returns The decoded body, or the 400 response to return.
+ */
+async function decodeBody<A>(
+  request: Request,
+  decode: Decoder<A>,
+  describe: (error: Schema.SchemaError) => string = describeIssue,
+): Promise<Result.Result<A, Response>> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return Result.fail(invalidRequest("invalid JSON body"));
+  }
+  const parsed = decode(raw);
+  return Result.isFailure(parsed)
+    ? Result.fail(invalidRequest(describe(parsed.failure)))
+    : Result.succeed(parsed.success);
+}
+
 async function handleAdmin(path: string, request: Request, env: Env): Promise<Response> {
   if (path === "/mcp/admin/repair-player-identity" && request.method === "POST") {
-    const parsed = decodeIdentityRepairRequest(await request.json().catch(() => null));
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid identity repair request" }, { status: 400 });
+    const parsed = await decodeBody(request, decodeIdentityRepairRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await repairPlayerIdentity(env, parsed.success);
-    return Response.json(result, { status: result.busy ? 409 : 200 });
+    return result.busy ? leaseBusy() : Response.json(result);
   }
 
   if (path === "/mcp/admin/refresh-statistics" && request.method === "POST") {
-    const parsed = decodeStatsRefreshRequest(await request.json().catch(() => null));
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid statistics refresh request" }, { status: 400 });
+    const parsed = await decodeBody(request, decodeStatsRefreshRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await operateStatsRefresh(env, parsed.success);
-    return Response.json(result, { status: result.busy ? 409 : 200 });
+    return result.busy ? leaseBusy() : Response.json(result);
   }
 
   if (path === "/mcp/admin/refresh-weather" && request.method === "POST") {
-    const parsed = decodeWeatherRefreshRequest(await request.json().catch(() => null));
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid weather refresh request" }, { status: 400 });
+    const parsed = await decodeBody(request, decodeWeatherRefreshRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await refreshWeather(env, parsed.success);
-    return Response.json(result, { status: result.busy ? 409 : 200 });
+    return result.busy ? leaseBusy() : Response.json(result);
   }
 
   if (path === "/mcp/admin/retry-weather" && request.method === "POST") {
-    const parsed = decodeWeatherRetryRequest(await request.json().catch(() => null));
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid weather retry request" }, { status: 400 });
+    const parsed = await decodeBody(request, decodeWeatherRetryRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await retryWeather(env, parsed.success);
-    return Response.json(result, { status: result.busy ? 409 : 200 });
+    return result.busy ? leaseBusy() : Response.json(result);
   }
 
   if (path === "/mcp/admin/status" && request.method === "GET") {
@@ -270,42 +327,28 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/backfill-coaches" && request.method === "POST") {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400 });
-    }
-    const parsed = decodeCoachingBackfillRequest(raw);
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid coaching backfill request" }, { status: 400 });
-    const { fromYear, toYear, source, dryRun } = parsed.success;
-    const currentYear = new Date().getUTCFullYear();
-    if (fromYear !== toYear || fromYear < 1990 || toYear > currentYear) {
+    const parsed = await decodeBody(request, decodeCoachingBackfillRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
+    const { fromYear, toYear, source, dryRun, resume } = parsed.success;
+    // The body names a year range for symmetry with the other backfills,
+    // but one request imports exactly one season.
+    const rangeError = validateYearRange(fromYear, toYear, MIN_COACHING_YEAR, 1);
+    if (rangeError !== null) return invalidRequest(rangeError);
+    const result = await backfillCoaches(env, fromYear, source, dryRun, resume);
+    if (result.busy) return leaseBusy();
+    if (result.sourceFailed)
       return Response.json(
-        {
-          error: `fromYear and toYear must be the same year between 1990 and ${currentYear}`,
-        },
-        { status: 400 },
+        { error: "coaching source fetch failed; retry later", code: "SOURCE_UNAVAILABLE" },
+        { status: 502 },
       );
-    }
-    const result = await backfillCoaches(env, fromYear, source, dryRun, parsed.success.resume);
-    if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
     return Response.json({ status: "ok", ...result.summary });
   }
 
   if (path === "/mcp/admin/reconcile-bears" && request.method === "POST") {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400 });
-    }
-    const parsed = decodeBearsRepairRequest(raw);
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid Bears repair request" }, { status: 400 });
+    const parsed = await decodeBody(request, decodeBearsRepairRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await reconcileBearsIdentity(env, parsed.success.dryRun, parsed.success);
-    if (result.busy) return Response.json({ error: "operation lease held" }, { status: 409 });
+    if (result.busy) return leaseBusy();
     return Response.json({
       status: "ok",
       ...result.report,
@@ -315,45 +358,25 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/backfill-brownlow" && request.method === "POST") {
-    let raw: unknown;
-    try {
-      raw = await request.json();
-    } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400 });
-    }
-    const parsed = decodeBrownlowBackfillRequest(raw);
-    if (Result.isFailure(parsed)) {
-      return Response.json(
-        { error: describeBrownlowBackfillIssue(parsed.failure) },
-        { status: 400 },
-      );
-    }
-    const rangeError = validateBrownlowYearRange(parsed.success.fromYear, parsed.success.toYear);
-    if (rangeError !== null) {
-      return Response.json({ error: rangeError }, { status: 400 });
-    }
-    const result = await backfillBrownlow(
-      env,
-      parsed.success.fromYear,
-      parsed.success.toYear,
-      parsed.success.dryRun,
-      parsed.success.resume,
+    const parsed = await decodeBody(
+      request,
+      decodeBrownlowBackfillRequest,
+      describeBrownlowBackfillIssue,
     );
-    if (result.body.status === "blocked" && result.body.seasons.length === 0) {
-      return Response.json({ error: "operation lease held" }, { status: 409 });
-    }
+    if (Result.isFailure(parsed)) return parsed.failure;
+    const { fromYear, toYear, dryRun, resume } = parsed.success;
+    const rangeError = validateYearRange(fromYear, toYear, MIN_BROWNLOW_YEAR, MAX_BROWNLOW_YEARS);
+    if (rangeError !== null) return invalidRequest(rangeError);
+    const result = await backfillBrownlow(env, fromYear, toYear, dryRun, resume);
+    if (result.busy) return leaseBusy();
     return Response.json(result.body, { status: result.httpStatus });
   }
 
   if (path === "/mcp/admin/recalculate-pav" && request.method === "POST") {
-    const parsed = decodePavRepairRequest(await request.json().catch(() => null));
-    if (Result.isFailure(parsed))
-      return Response.json(
-        { error: "PAV requires competition, season and a reviewed preview" },
-        { status: 400 },
-      );
+    const parsed = await decodeBody(request, decodePavRepairRequest);
+    if (Result.isFailure(parsed)) return parsed.failure;
     const result = await repairPav(env, parsed.success);
-    return Response.json(result, { status: result.busy ? 409 : 200 });
+    return result.busy ? leaseBusy() : Response.json(result);
   }
 
   if (path === "/mcp/admin/recalculate-all-pav" && request.method === "POST") {
@@ -364,16 +387,16 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   }
 
   if (path === "/mcp/admin/sync" && request.method === "POST") {
+    // An empty body is a plain sync with the defaults.
     const text = await request.text();
     let raw: unknown;
     try {
       raw = text.trim() ? JSON.parse(text) : {};
     } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      return invalidRequest("invalid JSON body");
     }
     const parsed = decodeSyncRequest(raw);
-    if (Result.isFailure(parsed))
-      return Response.json({ error: "invalid sync request" }, { status: 400 });
+    if (Result.isFailure(parsed)) return invalidRequest(describeIssue(parsed.failure));
     const results = await sync(env, COMPETITION_CODES, {
       skipShouldRunNow: true,
       resume: parsed.success.resume,
@@ -386,20 +409,16 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     try {
       raw = await request.json();
     } catch {
-      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      return invalidRequest("invalid JSON body");
     }
 
     if (Result.isSuccess(decodeSeasonPresence(raw))) {
       const exact = decodeExactSeasonBackfillRequest(raw);
-      if (Result.isFailure(exact))
-        return Response.json({ error: "invalid exact-season backfill request" }, { status: 400 });
+      if (Result.isFailure(exact)) return invalidRequest(describeIssue(exact.failure));
       const key = seasonKey(exact.success.competition, exact.success.season);
       const year = Number(key.slice(0, 4));
       if (year < MIN_BACKFILL_YEAR || year > new Date().getUTCFullYear())
-        return Response.json(
-          { error: "season is outside the historical backfill range" },
-          { status: 400 },
-        );
+        return invalidRequest("season is outside the historical backfill range");
       const results = await sync(env, [exact.success.competition], {
         season: toSeasonSelector(exact.success.season),
         fixturesOnly: exact.success.fixturesOnly,
@@ -410,18 +429,25 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
     }
 
     const parsed = decodeBackfillRequest(raw);
-    if (Result.isFailure(parsed)) {
-      return Response.json({ error: describeBackfillIssue(parsed.failure) }, { status: 400 });
-    }
+    if (Result.isFailure(parsed)) return invalidRequest(describeBackfillIssue(parsed.failure));
     const body = parsed.success;
 
-    const rangeError = validateYearRange(body);
-    if (rangeError !== null) {
-      return Response.json({ error: rangeError }, { status: 400 });
-    }
+    const rangeError = validateYearRange(
+      body.fromYear,
+      body.toYear,
+      MIN_BACKFILL_YEAR,
+      MAX_BACKFILL_YEARS,
+    );
+    if (rangeError !== null) return invalidRequest(rangeError);
 
+    // AFLW played two 2022 seasons (2022-S6 and 2022-S7), so a calendar-year
+    // range cannot name one of them. The caller must use the exact-season form.
     if (body.competitions.includes("AFLW") && body.fromYear <= 2022 && body.toYear >= 2022)
-      seasonKey("AFLW", 2022);
+      throw new SeasonSelectionError({
+        message: "Ambiguous AFLW season 2022; choose 2022-S6 or 2022-S7",
+        code: "AMBIGUOUS_SEASON",
+        validSelectors: ["2022-S6", "2022-S7"],
+      });
 
     const results = await sync(env, body.competitions, {
       fromYear: body.fromYear,
@@ -435,29 +461,33 @@ async function handleAdmin(path: string, request: Request, env: Env): Promise<Re
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
-function validateBrownlowYearRange(fromYear: number, toYear: number): string | null {
+/**
+ * Cross-field clamps on a year-range request (SEC-02). Shape validation
+ * lives in each route's request schema.
+ *
+ * @param fromYear - First season, inclusive.
+ * @param toYear - Final season, inclusive.
+ * @param minYear - Earliest season the operation supports.
+ * @param maxYears - Most seasons one request may cover.
+ * @returns The caller-facing problem, or null when the range is accepted.
+ * @example
+ * validateYearRange(2024, 2025, MIN_BROWNLOW_YEAR, MAX_BROWNLOW_YEARS); // null
+ */
+function validateYearRange(
+  fromYear: number,
+  toYear: number,
+  minYear: number,
+  maxYears: number,
+): string | null {
   if (toYear < fromYear) return "toYear must be >= fromYear";
   const currentYear = new Date().getUTCFullYear();
-  if (fromYear < MIN_BROWNLOW_YEAR || toYear > currentYear) {
-    return `years must be between ${MIN_BROWNLOW_YEAR} and ${currentYear}`;
+  if (fromYear < minYear || toYear > currentYear) {
+    return `years must be between ${minYear} and ${currentYear}`;
   }
-  if (toYear - fromYear + 1 > MAX_BROWNLOW_YEARS) {
-    return `year range too large: max ${MAX_BROWNLOW_YEARS} years per request`;
-  }
-  return null;
-}
-
-/** Cross-field clamps (SEC-02); shape validation lives in BackfillRequestSchema. */
-function validateYearRange(body: BackfillRequest): string | null {
-  if (body.toYear < body.fromYear) {
-    return "toYear must be >= fromYear";
-  }
-  const currentYear = new Date().getUTCFullYear();
-  if (body.fromYear < MIN_BACKFILL_YEAR || body.toYear > currentYear) {
-    return `years must be between ${MIN_BACKFILL_YEAR} and ${currentYear}`;
-  }
-  if (body.toYear - body.fromYear + 1 > MAX_BACKFILL_YEARS) {
-    return `year range too large: max ${MAX_BACKFILL_YEARS} years per request`;
+  if (toYear - fromYear + 1 > maxYears) {
+    return maxYears === 1
+      ? "fromYear and toYear must be the same year"
+      : `year range too large: max ${maxYears} years per request`;
   }
   return null;
 }

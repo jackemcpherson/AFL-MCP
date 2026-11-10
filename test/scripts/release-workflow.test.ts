@@ -5,11 +5,11 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const script = resolve("scripts/resolve-release.sh");
-let directory;
-let checkout;
-let tagSha;
+let directory: string;
+let checkout: string;
+let tagSha: string;
 
-function git(cwd, ...args) {
+function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
@@ -26,7 +26,13 @@ function git(cwd, ...args) {
   }).trim();
 }
 
-function run(tag, ref = "refs/heads/main") {
+/** Exit status and GITHUB_OUTPUT contents of one resolve-release.sh run. */
+interface RunResult {
+  readonly status: number | null;
+  readonly output: string;
+}
+
+function run(tag: string, ref = "refs/heads/main"): RunResult {
   const output = join(directory, "output");
   writeFileSync(output, "");
   const result = spawnSync("bash", [script], {

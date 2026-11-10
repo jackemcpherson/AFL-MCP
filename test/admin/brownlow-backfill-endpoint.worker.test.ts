@@ -388,7 +388,11 @@ describe("POST /mcp/admin/backfill-brownlow", () => {
       stubCtx,
     );
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "operation lease held" });
+    expect(await response.json()).toEqual({
+      error: "operation lease held",
+      code: "OPERATION_BUSY",
+      busy: true,
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

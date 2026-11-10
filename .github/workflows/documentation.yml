@@ -13,7 +13,7 @@ concurrency:
 
 env:
   RUMDL_VERSION: 0.2.43
-  VALE_GLOB: "!{vendor/**,tools/oxlint/anti-slop/**,generated/**,.venv/**,venv/**,node_modules/**,.terraform/**,**/.terraform/**,.pytest_cache/**,.mypy_cache/**,.ruff_cache/**,.obsidian/**,.worktrees/**,.wrangler/**,.playwright-mcp/**,.clinerules/**,.cursor/**,.opencode/**,.windsurf/**,htmlcov/**,dist/**,build/**,coverage/**,archive/**,**/archive/**,.scratch/**,.claude/**,.agents/**,.github/instructions/**,.github/copilot-instructions.md,plans/**,analysis/**,sources/**,logs/**,skills/**,docs/agents/**,AGENTS.md,CLAUDE.md,CONTEXT.md,HANDOFF.md,SECRETS.md,DEBUGGING_LOG.md,README_AGENTS.md,SPEC.md,TEST_SPEC.md,**/*-spec.md,**/SKILL.md,**/SKILL_TEMPLATE.md,**/REVIEWER_TEMPLATE.md,documentation/PRD.md,documentation/DESIGN.md,documentation/IMPLEMENTATION.md}"
+  VALE_GLOB: "!{node_modules/**,.wrangler/**,.claude/**,plans/**,archive/**,tools/oxlint/anti-slop/**,AGENTS.md,CLAUDE.md,HANDOFF.md}"
 
 jobs:
   lint:
@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3

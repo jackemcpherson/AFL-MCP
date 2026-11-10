@@ -1,33 +1,26 @@
-import { execSync } from "node:child_process";
+import { Schema } from "effect";
 import { fetchPlayerStats } from "fitzroy";
 import { runFitzroy } from "../src/lib/fitzroy";
 import { normaliseTeam } from "../src/lib/normalise";
+import { queryD1 } from "./lib/d1";
 
 const COMPETITION = "AFLM" as const;
 
-interface DbMatch {
-  id: number;
-  date: string;
-  home: string;
-  away: string;
-}
+const DbMatchSchema = Schema.Struct({
+  id: Schema.Number,
+  date: Schema.String,
+  home: Schema.String,
+  away: Schema.String,
+});
 
-interface DbRoster {
-  match_id: number;
-  player_id: number;
-  first_name: string | null;
-  surname: string;
-  team: string;
-}
-
-function queryD1<T>(sql: string): T[] {
-  const escaped = sql.replace(/"/g, '\\"');
-  const raw = execSync(`npx wrangler d1 execute afl-stats --remote --command "${escaped}" --json`, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  return JSON.parse(raw)[0]?.results ?? [];
-}
+const DbRosterSchema = Schema.Struct({
+  match_id: Schema.Number,
+  player_id: Schema.Number,
+  first_name: Schema.NullOr(Schema.String),
+  surname: Schema.String,
+  team: Schema.String,
+});
+type DbRoster = typeof DbRosterSchema.Type;
 
 function teamDateKey(date: string, team: string): string {
   return `${date}|${normaliseTeam(team)}`;
@@ -46,13 +39,14 @@ function extractStatsDate(statsMatchId: string): string | null {
 async function main() {
   for (const year of [2022, 2023, 2024, 2025]) {
     console.log(`\n=== ${year} ===`);
-    const matches = queryD1<DbMatch>(
+    const matches = queryD1(
       `SELECT m.id, m.date, t1.name AS home, t2.name AS away
        FROM matches m
        JOIN seasons s ON s.id = m.season_id
        JOIN teams t1 ON t1.id = m.home_team_id
        JOIN teams t2 ON t2.id = m.away_team_id
        WHERE s.year = ${year}`,
+      DbMatchSchema,
     );
     const matchByTeamDate = new Map<string, number>();
     for (const m of matches) {
@@ -60,7 +54,7 @@ async function main() {
       matchByTeamDate.set(teamDateKey(m.date, m.away), m.id);
     }
 
-    const roster = queryD1<DbRoster>(
+    const roster = queryD1(
       `SELECT pms.match_id, pms.player_id, p.first_name, p.surname, t.name AS team
        FROM player_match_stats pms
        JOIN matches m ON m.id = pms.match_id
@@ -68,6 +62,7 @@ async function main() {
        JOIN players p ON p.id = pms.player_id
        JOIN teams t ON t.id = pms.team_id
        WHERE s.year = ${year}`,
+      DbRosterSchema,
     );
     const rosterMap = new Map<string, number>();
     const teamRosterByMatch = new Map<string, DbRoster[]>();

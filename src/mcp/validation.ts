@@ -1,6 +1,7 @@
 /**
  * `effect/Schema` schemas for the MCP endpoint's boundaries (MNT-02). Admin
- * request schemas live next to their handlers in `src/admin/`.
+ * request schemas live next to their handlers in `src/admin/`, except the
+ * `/mcp/admin/sync` schema, which lives here.
  *
  * Per the fleet style guide, external input is decoded at the boundary
  * and trusted internally; types are derived from the schemas.

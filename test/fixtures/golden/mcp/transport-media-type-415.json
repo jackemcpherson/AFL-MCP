@@ -7,7 +7,7 @@
     "jsonrpc": "2.0",
     "id": null,
     "error": {
-      "code": -32700,
+      "code": -32600,
       "message": "Content-Type must be application/json"
     }
   }

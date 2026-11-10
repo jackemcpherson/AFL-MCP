@@ -1,9 +1,9 @@
 # Coaching Release Operations
 
-Version 3.8.0 consumes published fitzroy 5.0.0. It introduces additive coaching
-storage, native input revisions and repeatable venue reference seeds.
-Deploy the reviewed Worker through cloudflare-infra before historical writes.
-Worker deployment does not authorise historical identity repair or backfill.
+Coaching storage, native input revisions and repeatable venue reference seeds
+ship with the Worker. Deploy the reviewed Worker through cloudflare-infra before
+historical writes. Worker deployment does not authorise historical identity
+repair or backfill.
 
 ## Release Verification
 

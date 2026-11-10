@@ -1,7 +1,7 @@
 # Venue Geodata Notes
 
 **Date:** 2026-07-13 **Dataset:**
-[`data/venue-geodata.csv`](../data/venue-geodata.csv) (106 rows, one per D1
+[`data/venue-geodata.csv`](../../data/venue-geodata.csv) (106 rows, one per D1
 venue id) **Author:** Claude Code (executor)
 
 ---

@@ -64,7 +64,6 @@ export type SchemaTable =
   | "public_input_revision";
 
 /** A named example query in the `schema` tool response. */
-/** A named example query in the `schema` tool response. */
 export type CommonJoin =
   | "match_with_teams_venue"
   | "team_season_pav"
@@ -466,7 +465,7 @@ export async function getSchemaInfo(options: CoverageOptions = {}, env?: Env): P
           "JOIN competitions c ON t.competition_id = c.id",
           "JOIN matches m ON t.id = m.home_team_id OR t.id = m.away_team_id",
           "JOIN seasons s ON m.season_id = s.id",
-          "WHERE c.code = ? AND s.season_key = ? AND m.round_type = 'Regular' AND m.round <> 'Wildcard'",
+          "WHERE c.code = ? AND s.season_key = ? AND m.round_type = 'Regular' AND m.round_abbreviation IS NOT 'WC'",
           "  AND m.status = 'Complete'",
           "GROUP BY t.id",
           "ORDER BY premiership_points DESC, percentage DESC",

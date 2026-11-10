@@ -55,10 +55,10 @@ export interface WeatherRetryResult {
  * @param env - Worker bindings.
  * @param request - Validated exact match and season scope.
  * @returns Diagnostic preview or count of reset retry schedules.
-
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(body))); */
+ * await retryWeather(env, Result.getOrThrow(decodeWeatherRetryRequest(body)));
+ */
 export async function retryWeather(
   env: Env,
   request: WeatherRetryRequest,

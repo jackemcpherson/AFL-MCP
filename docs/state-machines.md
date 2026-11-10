@@ -30,6 +30,10 @@ stranded marker. Identities are `sync:steady:<competitions>`,
 `brownlow:<from>:<to>` and `coaching:<source>:<season>`. The steady-state
 sync resumes its own. Everything else needs an explicit `resume`.
 
+An operation body that catches an expected source failure and returns clears
+the marker instead. A coaching backfill does this when its upstream fetch
+fails, so the admin route answers 502 without stranding the marker.
+
 `operation.settle()` covers the one gap between an operation's last write and
 clearing the marker: repeating a completed operation fails until the caller
 passes `resume`.
@@ -42,7 +46,7 @@ sync stores it as delivered.
 | Question                     | Predicate        | Status        |
 | ---------------------------- | ---------------- | ------------- |
 | Did it finish with a result? | `playedMatch`    | `Complete`    |
-| Will it never be played?     | `cancelledMatch` | `Cancelled`   |
+| Will nobody ever play it?    | `cancelledMatch` | `Cancelled`   |
 | Is its outcome still open?   | `unsettledMatch` | anything else |
 
 Scores are not a lifecycle signal. A `Live` row has a partial score and a
@@ -55,12 +59,14 @@ Owner: `sync` in `src/sync/sync.ts`. `steadySeasons` decides its scope: each
 competition's current season plus any later season, so a new fixture loads
 before its first match. The tick's scheduled time decides its stages. Every
 tick syncs fixtures and lineups and rebuilds queued PAV. `isHourlyTick` adds
-statistics refresh, coaching and weather.
+statistics refresh (which drains the PAV queue itself), coaching, weather and
+the `sync_log` purge.
 
 Each tick derives lineup polling, with no stored state. It fetches nothing
 more than five days out, then every 15 minutes, then every five minutes in the
 last 90 minutes. A backlog retry covers played matches without lineups (three
-rounds, 14 days).
+rounds, 14 days). Seasons before 2023, except AFLW `2022-S7`, fetch no
+lineups (`lineupSyncSupported`).
 
 ## Statistics Refresh Schedule
 
@@ -69,14 +75,16 @@ Owner: `nextStatsRefresh` in `src/sync/stats-refresh.ts`. Stored in
 
 | Phase   | Condition                         | Next fetch                   |
 | ------- | --------------------------------- | ---------------------------- |
-| retry   | `failures > 0`                    | 1, 2, 4, 8, 16, 24 hours     |
+| retry   | `failures > 0`, before day 37     | 1, 2, 4, 8, 16, 24 hours     |
+| gave up | `failures > 0`, from day 37       | never (`next_retry_at` NULL) |
 | hourly  | under 2 days since first observed | in an hour                   |
 | daily   | under 14 days                     | in a day                     |
 | final   | under 30 days                     | at day 30                    |
 | done    | otherwise, or a historical import | never (`next_retry_at` NULL) |
 
 `origin` names the driver. The cron fetches `scheduled` rows. An `operator`
-row waits for a backfill or an approved refresh.
+row waits for a backfill or an approved refresh. A row that gave up keeps its
+failure count and diagnostic, and an approved refresh queues it again.
 
 ## Weather
 
@@ -98,7 +106,9 @@ or unavailable. `nextWeatherRetry` is the whole policy.
 Owner: database triggers enqueue, `rebuildQueuedStatsPav` drains. A row in
 `pav_rebuild_queue` means the season's PAV is stale. `reason` is `statistics`
 or `identity:<digest>`. A season's PAV values are absent, NULL (inputs
-incomplete) or computed.
+incomplete) or computed. The matches trigger enqueues only when the old or new
+status is `Complete`, so live score updates do not queue a rebuild. A rebuild
+whose rows equal the stored rows writes nothing.
 
 ## Operator Operations
 

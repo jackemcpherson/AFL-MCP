@@ -1,12 +1,11 @@
-import { publicInputWriteFence } from "../db/public-inputs";
 import { resolveStoredSeason } from "../db/seasons";
+import type { PavCompetitionSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { playedMatch } from "../lib/match-state";
 import type { Env } from "../types";
-import { logSync } from "./log";
 
 /** Competitions for which the canonical HPN PAV formula can be computed. */
-export type PavCompetition = keyof typeof MIN_PAV_YEAR_BY_COMPETITION;
+export type PavCompetition = typeof PavCompetitionSchema.Type;
 
 // D1 does not support CTEs combined with INSERT...ON CONFLICT in a single
 // statement, so we split into a SELECT (with CTEs) and a parameterised UPSERT.
@@ -239,21 +238,46 @@ interface PavRow {
   total_pav: number | null;
 }
 
+/** Order-free fingerprint of a season's PAV rows. */
+function pavFingerprint(rows: readonly PavRow[]): string {
+  return rows
+    .map((r) =>
+      JSON.stringify([
+        r.player_id,
+        r.season_id,
+        r.team_id,
+        r.off_pav,
+        r.mid_pav,
+        r.def_pav,
+        r.total_pav,
+      ]),
+    )
+    .sort()
+    .join("\n");
+}
+
 /**
- * Calculate PAV for a single (competition, year) and upsert results into
- * `player_season_pav`.
+ * Calculate PAV for a single (competition, year) and replace the season's
+ * rows in `player_season_pav`. When the calculated rows equal the stored
+ * ones the season is left untouched, so an unchanged recalculation neither
+ * rewrites the table nor bumps the public input revision.
+ *
+ * Callers inside an operation pass its writer bindings, which fence every
+ * batch to the operation lease.
  *
  * @param env - Worker env with the D1 binding.
- * @param year - Season year.
+ * @param selector - Season year or season key.
  * @param competition - PAV-supported competition (AFLM or AFLW).
- * @returns Number of upsert rows that succeeded.
+ * @param _holder - Unused. The writer bindings already fence the batch;
+ *   kept so existing callers compile.
+ * @returns Number of calculated rows, whether or not they were rewritten.
  * @throws if `year` is below the competition's `MIN_PAV_YEAR_BY_COMPETITION` floor.
  */
 export async function calculatePav(
   env: Env,
   selector: number | string,
   competition: PavCompetition,
-  holder?: string,
+  _holder?: string,
 ): Promise<number> {
   const year = Number(String(selector).slice(0, 4));
   const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
@@ -268,8 +292,14 @@ export async function calculatePav(
   const { results } = await env.DB.prepare(PAV_SELECT_SQL)
     .bind(seasonId, competition)
     .all<PavRow>();
+  const stored = await env.DB.prepare(
+    `SELECT player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav
+     FROM player_season_pav WHERE season_id = ?1`,
+  )
+    .bind(seasonId)
+    .all<PavRow>();
+  if (pavFingerprint(stored.results) === pavFingerprint(results)) return results.length;
   await env.DB.batch([
-    ...(holder ? [publicInputWriteFence(env, holder)] : []),
     env.DB.prepare("DELETE FROM player_season_pav WHERE season_id = ?1").bind(seasonId),
     env.DB.prepare(`INSERT INTO player_season_pav
       (player_id, season_id, team_id, off_pav, mid_pav, def_pav, total_pav)
@@ -279,59 +309,4 @@ export async function calculatePav(
       FROM json_each(?1)`).bind(JSON.stringify(results)),
   ]);
   return results.length;
-}
-
-/**
- * Recalculate PAV for a single (competition, year), defaulting to the
- * current calendar year. Logs success or failure to `sync_log`; does not
- * throw on calculation errors.
- */
-export async function recalculatePav(
-  env: Env,
-  competition: PavCompetition,
-  year: number | string = new Date().getFullYear(),
-): Promise<void> {
-  try {
-    const changes = await calculatePav(env, year, competition);
-    await logSync(env, `pav_recalculation:${competition}`, changes);
-  } catch (err) {
-    await logSync(
-      env,
-      `pav_recalculation:${competition}`,
-      0,
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-}
-
-/**
- * Recalculate PAV for every (competition, year) pair available, returning a
- * nested map of upsert counts. Used by the
- * `/mcp/admin/recalculate-all-pav` endpoint.
- *
- * @param competitions - Defaults to all PAV-supported competitions.
- */
-export async function calculateAllPav(
-  env: Env,
-  competitions: readonly PavCompetition[] = ["AFLM", "AFLW"] as const,
-): Promise<Record<PavCompetition, Record<string, number>>> {
-  const out: Record<PavCompetition, Record<string, number>> = { AFLM: {}, AFLW: {} };
-
-  for (const competition of competitions) {
-    const minYear = MIN_PAV_YEAR_BY_COMPETITION[competition];
-    const { results } = await env.DB.prepare(
-      `SELECT s.season_key FROM seasons s
-       JOIN competitions c ON s.competition_id = c.id
-       WHERE c.code = ? AND s.year >= ?
-       ORDER BY s.year, s.season_key`,
-    )
-      .bind(competition, minYear)
-      .all<{ season_key: string }>();
-
-    for (const row of results) {
-      out[competition][row.season_key] = await calculatePav(env, row.season_key, competition);
-    }
-  }
-
-  return out;
 }

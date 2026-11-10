@@ -1,6 +1,5 @@
 import { Effect, Predicate, Schema } from "effect";
 import { runOperation } from "../db/operation";
-import { protectOperationWrites, publicInputWriteFence } from "../db/public-inputs";
 import { CompetitionCodeSchema } from "../lib/competitions";
 import { MIN_PAV_YEAR_BY_COMPETITION } from "../lib/constants";
 import { type Decoder, strictDecoder } from "../lib/decode";
@@ -16,7 +15,7 @@ import {
 } from "../lib/schemas";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
-import { OperationConflictError } from "./errors";
+import { OperationConflictError, OperationRequestError } from "./errors";
 
 const RepairEvidenceSchema: EvidenceSchema = evidenceSchema(20);
 
@@ -98,7 +97,9 @@ export const IdentityRepairRequestSchema: Schema.Struct<{
       value: Schema.Union([Schema.Number, Schema.String]),
       evidence: RepairEvidenceSchema,
     }),
-  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  )
+    .check(Schema.isMaxLength(500))
+    .pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   dryRun: booleanDefault(true),
   resume: booleanDefault(false),
   manifestDigest: Schema.optionalKey(Sha256HexSchema),
@@ -266,7 +267,8 @@ export interface IdentityRepairResult {
  * @param env - Worker bindings.
  * @param request - Validated identity scope, evidence and approval digest.
  * @returns Preview, completed repair report or lease contention result.
- * @throws {OperationConflictError} If scope, evidence, conflicts or approval prevent a repair.
+ * @throws {OperationRequestError} If the request names an invalid identity group or scope.
+ * @throws {OperationConflictError} If stored rows, conflicts or approval prevent a repair.
  * @example
  * await repairPlayerIdentity(env, Result.getOrThrow(decodeIdentityRepairRequest(body)));
  */
@@ -277,26 +279,26 @@ export async function repairPlayerIdentity(
   const ids = [...new Set(request.playerIds)].sort((a, b) => a - b);
   const scoped = request.kind === "reassign-appearances";
   if (request.canonicalId !== undefined && (!scoped || !ids.includes(request.canonicalId)))
-    throw new OperationConflictError({
+    throw new OperationRequestError({
       message: "An explicit target must belong to an appearance reassignment group",
     });
   const canonicalId = request.canonicalId ?? ids[0];
   if (request.newPerson && (!scoped || request.canonicalId === undefined))
-    throw new OperationConflictError({
+    throw new OperationRequestError({
       message: "A new person requires an explicit scoped reassignment target",
     });
   if (ids.length < 2 || canonicalId === undefined)
-    throw new OperationConflictError({ message: "At least two distinct player IDs are required" });
+    throw new OperationRequestError({ message: "At least two distinct player IDs are required" });
   if (
     scoped &&
     (ids.length !== 2 || !request.matchIds.length || !request.providerIdentities.length)
   )
-    throw new OperationConflictError({
+    throw new OperationRequestError({
       message:
         "Appearance reassignment requires two separate people, exact matches and verified provider identities",
     });
   if (!scoped && request.matchIds.length)
-    throw new OperationConflictError({
+    throw new OperationRequestError({
       message: "Whole-person merges cannot specify a partial match scope",
     });
   const scope = scoped
@@ -306,7 +308,6 @@ export async function repairPlayerIdentity(
     env,
     () => ({ busy: true }),
     async (operation) => {
-      const holder = operation.holder;
       let prepared = false;
       if (request.manifestDigest && !request.dryRun) {
         const prior = await env.DB.prepare(
@@ -348,7 +349,7 @@ export async function repairPlayerIdentity(
             WHERE q.reason=?1 ORDER BY s.id`)
                 .bind(identity)
                 .all();
-            await rebuildIdentityPav(env, decodePavSeasonRows(seasons.results), holder);
+            await rebuildIdentityPav(writer, decodePavSeasonRows(seasons.results));
             await writer.DB.prepare(
               "UPDATE identity_repair_operations SET status='complete' WHERE manifest_digest=?1",
             )
@@ -511,10 +512,12 @@ export async function repairPlayerIdentity(
       const writer = await operation.write(`identity:${digest}`, {
         resume: (prepared || request.resume) && marker === 1,
       });
-      const statements: D1PreparedStatement[] = [publicInputWriteFence(env, holder)];
+      // The writer prepends the lease fence to its batch, so every statement
+      // below commits only while this operation still owns the marker.
+      const statements: D1PreparedStatement[] = [];
       if (request.newPerson)
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             "INSERT INTO players(id,first_name,surname,date_of_birth) VALUES(?1,?2,?3,?4)",
           ).bind(
             canonicalId,
@@ -530,7 +533,7 @@ export async function repairPlayerIdentity(
       ] as const) {
         const retained = JSON.stringify(merged.rows.map((row) => row["id"]));
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             `DELETE FROM ${table} WHERE player_id IN (${selectors}) AND id NOT IN (SELECT value FROM json_each(?))
            AND (? IS NULL OR match_id IN (SELECT value FROM json_each(?)))`,
           ).bind(...ids, retained, scope, scope),
@@ -540,7 +543,7 @@ export async function repairPlayerIdentity(
         if (first) {
           const columns = Object.keys(first).filter((column) => column !== "id");
           statements.push(
-            env.DB.prepare(
+            writer.DB.prepare(
               `UPDATE ${table} SET (${columns.join(",")}) = (
             SELECT ${columns.map((column) => `json_extract(j.value, '$.${column}')`).join(",")}
             FROM json_each(?1) j WHERE json_extract(j.value, '$.id')=${table}.id
@@ -551,13 +554,13 @@ export async function repairPlayerIdentity(
       }
       if (!scoped)
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             `UPDATE player_provider_ids SET player_id=? WHERE player_id IN (${selectors})`,
           ).bind(canonicalId, ...ids),
         );
       for (const identity of request.providerIdentities) {
         statements.push(
-          env.DB.prepare(`INSERT INTO player_provider_ids(provider,provider_id,player_id,evidence_json)
+          writer.DB.prepare(`INSERT INTO player_provider_ids(provider,provider_id,player_id,evidence_json)
         VALUES(?1,?2,?3,?4) ON CONFLICT(provider,provider_id) DO UPDATE SET
         player_id=excluded.player_id,evidence_json=excluded.evidence_json`).bind(
             identity.provider,
@@ -572,14 +575,14 @@ export async function repairPlayerIdentity(
           (item) => item.provider === "afl-api",
         )) {
           statements.push(
-            env.DB.prepare(`UPDATE players SET external_afl_player_id=NULL
+            writer.DB.prepare(`UPDATE players SET external_afl_player_id=NULL
           WHERE id IN (${selectors}) AND external_afl_player_id=?`).bind(
               ...ids,
               identity.providerId,
             ),
           );
           statements.push(
-            env.DB.prepare("UPDATE players SET external_afl_player_id=?1 WHERE id=?2").bind(
+            writer.DB.prepare("UPDATE players SET external_afl_player_id=?1 WHERE id=?2").bind(
               identity.providerId,
               canonicalId,
             ),
@@ -588,19 +591,19 @@ export async function repairPlayerIdentity(
       }
       if (!scoped && datesOfBirth.length === 1)
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             "UPDATE players SET date_of_birth=COALESCE(date_of_birth,?1) WHERE id=?2",
           ).bind(datesOfBirth[0], canonicalId),
         );
       if (!scoped)
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             `UPDATE player_id_redirects SET canonical_id=? WHERE canonical_id IN (${selectors})`,
           ).bind(canonicalId, ...ids),
         );
       for (const retired of scoped ? [] : ids.slice(1)) {
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             "INSERT INTO player_id_redirects(retired_id, canonical_id, manifest_digest) VALUES(?1,?2,?3)",
           ).bind(retired, canonicalId, digest),
         );
@@ -608,18 +611,18 @@ export async function repairPlayerIdentity(
       const affectedSeasons = decodePavSeasonRows(snapshots[5]?.results ?? []);
       for (const season of affectedSeasons) {
         statements.push(
-          env.DB.prepare(
+          writer.DB.prepare(
             "INSERT INTO pav_rebuild_queue(season_id, reason) VALUES(?1,?2) ON CONFLICT(season_id) DO UPDATE SET reason=excluded.reason",
           ).bind(season.id, `identity:${digest}`),
         );
       }
       statements.push(
-        env.DB.prepare(
+        writer.DB.prepare(
           "UPDATE identity_repair_operations SET status='reparented' WHERE manifest_digest=?1",
         ).bind(digest),
       );
-      await env.DB.batch(statements);
-      await rebuildIdentityPav(env, affectedSeasons, holder);
+      await writer.DB.batch(statements);
+      await rebuildIdentityPav(writer, affectedSeasons);
       await writer.DB.prepare(
         "UPDATE identity_repair_operations SET status='complete' WHERE manifest_digest=?1",
       )
@@ -636,18 +639,20 @@ export async function repairPlayerIdentity(
   );
 }
 
-async function rebuildIdentityPav(
-  env: Env,
-  seasons: readonly PavSeasonRow[],
-  holder: string,
-): Promise<void> {
-  const writer = protectOperationWrites(env, holder);
+/**
+ * Recalculate or clear PAV for each season an identity repair touched, then
+ * drop its rebuild queue entry.
+ *
+ * @param writer - Fenced bindings returned by `operation.write`.
+ * @param seasons - Seasons queued by the repair.
+ */
+async function rebuildIdentityPav(writer: Env, seasons: readonly PavSeasonRow[]): Promise<void> {
   for (const season of seasons) {
     if (
       (season.code === "AFLM" || season.code === "AFLW") &&
       Number(season.season_key.slice(0, 4)) >= MIN_PAV_YEAR_BY_COMPETITION[season.code]
     )
-      await calculatePav(writer, season.season_key, season.code, holder);
+      await calculatePav(writer, season.season_key, season.code);
     else
       await writer.DB.prepare("DELETE FROM player_season_pav WHERE season_id=?1")
         .bind(season.id)

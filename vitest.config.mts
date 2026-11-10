@@ -25,7 +25,7 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
         {
           test: {
             name: "unit",
-            include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
+            include: ["test/**/*.test.ts"],
             exclude: [...configDefaults.exclude, "**/*.worker.test.ts"],
           },
         },
@@ -33,8 +33,6 @@ const config: ViteUserConfigFnPromise = defineConfig(async () => {
           plugins: [
             cloudflareTest({
               miniflare: {
-                compatibilityDate: "2026-04-01",
-                compatibilityFlags: ["nodejs_compat"],
                 d1Databases: ["DB", "UPGRADE_DB", "GUARD_DB", "FRESH_DB", "CONTRACT_DB"],
                 bindings: {
                   TEST_MIGRATIONS: migrations,

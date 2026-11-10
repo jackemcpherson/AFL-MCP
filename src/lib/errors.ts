@@ -84,3 +84,26 @@ export function logError(
       : [];
   console.error(JSON.stringify({ event, ...fields, errorType: errorType(error), frames }));
 }
+
+/** Longest error text stored in a `sync_log` row. */
+const MAX_LOGGED_ERROR_CHARS = 500;
+
+/** A URL with a query string or fragment, which may carry a token. */
+const URL_WITH_QUERY = /\b(https?:\/\/[^\s?#]+)[?#]\S*/g;
+
+/**
+ * Reduce a thrown value to text safe to store in `sync_log`, which the
+ * sandbox can read: its first line, URL query strings and fragments removed,
+ * cut to {@link MAX_LOGGED_ERROR_CHARS}.
+ *
+ * @param err - The thrown value.
+ * @returns Bounded error text.
+ * @example
+ * boundedErrorText(new Error("GET https://x.test/a?key=s failed")); // "GET https://x.test/a failed"
+ */
+export function boundedErrorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const line = (raw.split("\n")[0] ?? "").replace(URL_WITH_QUERY, "$1").trim();
+  const text = line === "" ? "sync failed" : line;
+  return text.length > MAX_LOGGED_ERROR_CHARS ? `${text.slice(0, MAX_LOGGED_ERROR_CHARS)}…` : text;
+}

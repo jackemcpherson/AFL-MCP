@@ -63,12 +63,10 @@ describe("strict admin routes reject undeclared keys", () => {
     {
       path: "repair-player-identity",
       body: { playerIds: [1, 2], evidence: [evidence("x".repeat(20))] },
-      error: "invalid identity repair request",
     },
     {
       path: "refresh-statistics",
       body: { competition: "AFLM", season: 2026, operationId: OPERATION_ID },
-      error: "invalid statistics refresh request",
     },
     {
       path: "refresh-weather",
@@ -78,34 +76,38 @@ describe("strict admin routes reject undeclared keys", () => {
         matchId: 1,
         evidence: [evidence("x")],
       },
-      error: "invalid weather refresh request",
     },
     {
       path: "retry-weather",
       body: { competition: "AFLM", season: 2026, matchId: 1 },
-      error: "invalid weather retry request",
     },
     {
       path: "reconcile-bears",
       body: {},
-      error: "invalid Bears repair request",
     },
     {
       path: "recalculate-pav",
       body: { competition: "AFLM", season: 2026 },
-      error: "PAV requires competition, season and a reviewed preview",
     },
     {
       path: "backfill",
       body: { competition: "AFLM", season: 1800 },
-      error: "invalid exact-season backfill request",
     },
     {
       path: "backfill",
       body: { competitions: ["AFLM"], fromYear: 1800, toYear: 1800 },
-      error: 'Expected no excess property at "unexpected"',
     },
-  ])("$path $body", async ({ path, body, error }) => {
+    {
+      path: "backfill-brownlow",
+      body: { fromYear: 1800, toYear: 1800 },
+    },
+    {
+      path: "backfill-coaches",
+      body: { fromYear: 1800, toYear: 1800 },
+    },
+  ])("$path $body", async ({ path, body }) => {
+    // Every route names the first problem, here the undeclared key.
+    const error = 'Expected no excess property at "unexpected"';
     const control = await post(path, body);
     expect(control.body["error"]).not.toBe(error);
 
@@ -181,5 +183,55 @@ describe("reviewed repairs preview unless dryRun is false", () => {
       ),
     ).toBe(0);
     expect(await revision()).toBe(before);
+  });
+});
+
+describe("admin contract shapes", () => {
+  it("answers every lease-holding route with one busy shape", async () => {
+    await env.DB.prepare(
+      "UPDATE sync_lease SET holder = 'other', acquired_at = datetime('now') WHERE id = 1",
+    ).run();
+    try {
+      for (const [path, body] of [
+        ["refresh-statistics", { competition: "AFLM", season: 2026, operationId: OPERATION_ID }],
+        ["reconcile-bears", {}],
+        ["backfill-brownlow", { fromYear: 2025, toYear: 2025 }],
+        ["backfill-coaches", { fromYear: 2024, toYear: 2024 }],
+        ["recalculate-pav", { competition: "AFLM", season: 2026 }],
+      ] as const) {
+        expect(await post(path, body)).toEqual({
+          status: 409,
+          body: { error: "operation lease held", code: "OPERATION_BUSY", busy: true },
+        });
+      }
+    } finally {
+      await env.DB.prepare(
+        "UPDATE sync_lease SET holder = NULL, acquired_at = NULL WHERE id = 1",
+      ).run();
+    }
+  });
+
+  it("rejects an identity group that names one player with 400, not 409", async () => {
+    const reply = await post("repair-player-identity", {
+      playerIds: [5, 5],
+      evidence: [evidence("x".repeat(20))],
+    });
+    expect(reply).toEqual({
+      status: 400,
+      body: { error: "At least two distinct player IDs are required", code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("bounds a 400 body that quotes a caller-supplied key", async () => {
+    const reply = await post("refresh-weather", { ["k".repeat(1_000)]: 1 });
+    expect(reply.status).toBe(400);
+    expect(String(reply.body["error"]).length).toBeLessThanOrEqual(201);
+  });
+
+  it("rejects a coaching range wider than one season", async () => {
+    expect(await post("backfill-coaches", { fromYear: 2023, toYear: 2024 })).toEqual({
+      status: 400,
+      body: { error: "fromYear and toYear must be the same year" },
+    });
   });
 });

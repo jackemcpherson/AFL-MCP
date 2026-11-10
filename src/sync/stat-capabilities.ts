@@ -19,9 +19,9 @@ export interface StatFieldCapabilities {
  * Return source-backed support for an exact competition-season sample.
  * Support demonstrates that the source can supply a field, not that every row
  * must contain it. An all-null sample cannot establish source absence.
+ *
  * @param competition - Separate competition discriminator.
  * @param seasonKey - Canonical season selector, preserving AFLW season six/seven.
-
  * @returns Verified field support, unknown fields and exact capture evidence.
  * @example
  * statFieldCapabilities("AFLW", "2022-S7");

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { testCtx, testEnv } from "#test/fixtures";
+import { SeasonSelectionError } from "../../src/db/seasons";
+import { CoverageObservationError } from "../../src/mcp/errors";
 import { defaultDeps, handleMcpRequest, type McpDeps } from "../../src/mcp/protocol";
+import { SCHEMA_TOOL_CONTRACT } from "../../src/mcp/validation";
 
 // A schema tool that throws exercises the top-level error boundary.
 const throwingDeps: McpDeps = {
@@ -55,5 +58,60 @@ describe("handleMcpRequest error boundary", () => {
     expect(json.error?.code).toBe(-32603);
     // Internal detail must never leak to the client.
     expect(JSON.stringify(json)).not.toContain("boom");
+  });
+});
+
+describe("schema tool expected failures", () => {
+  function depsThrowing(error: unknown): McpDeps {
+    return {
+      ...defaultDeps,
+      getSchemaInfo: () => {
+        throw error;
+      },
+    };
+  }
+
+  async function callSchema(deps: McpDeps): Promise<JsonRpcTestResponse> {
+    const res = await handleMcpRequest(
+      makeRequest({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: { name: "schema", arguments: {} },
+      }),
+      stubEnv,
+      stubCtx,
+      deps,
+    );
+    expect(res.status).toBe(200);
+    return parseJson(res);
+  }
+
+  it("returns a missing season as an isError tool result with the usage hint", async () => {
+    const json = await callSchema(
+      depsThrowing(
+        new SeasonSelectionError({
+          message: "No AFLM season 1800 exists",
+          code: "SEASON_NOT_FOUND",
+          validSelectors: [],
+        }),
+      ),
+    );
+    expect(json.error).toBeUndefined();
+    expect(json.result).toEqual({
+      content: [{ type: "text", text: `No AFLM season 1800 exists. ${SCHEMA_TOOL_CONTRACT}` }],
+      isError: true,
+    });
+  });
+
+  it("returns a blocked observation as a retryable isError tool result", async () => {
+    const json = await callSchema(
+      depsThrowing(new CoverageObservationError({ message: "Retry shortly" })),
+    );
+    expect(json.error).toBeUndefined();
+    expect(json.result).toEqual({
+      content: [{ type: "text", text: "Retry shortly" }],
+      isError: true,
+    });
   });
 });

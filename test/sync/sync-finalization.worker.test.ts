@@ -70,23 +70,39 @@ it("logs a failed sync_log purge without its message and still finishes", async 
         return (sql: string) => {
           const statement = target.prepare(sql);
           if (!sql.startsWith("DELETE FROM sync_log")) return statement;
-          return new Proxy(statement, {
-            get(inner, key) {
-              if (key === "run")
-                return async () => {
-                  throw new Error("raw-d1-purge-secret");
-                };
-              const value = Reflect.get(inner, key);
-              return Predicate.isFunction(value) ? value.bind(inner) : value;
-            },
-          });
+          const failing = (prepared: D1PreparedStatement): D1PreparedStatement =>
+            new Proxy(prepared, {
+              get(inner, key) {
+                if (key === "run")
+                  return async () => {
+                    throw new Error("raw-d1-purge-secret");
+                  };
+                if (key === "bind") return (...values: unknown[]) => failing(inner.bind(...values));
+                const value = Reflect.get(inner, key);
+                return Predicate.isFunction(value) ? value.bind(inner) : value;
+              },
+            });
+          return failing(statement);
         };
       const value = Reflect.get(target, property);
       return Predicate.isFunction(value) ? value.bind(target) : value;
     },
   });
   try {
-    await expect(sync({ ...env, DB }, [], { skipShouldRunNow: true })).resolves.toEqual([]);
+    // The purge runs on hourly ticks only.
+    await expect(
+      sync({ ...env, DB }, [], {
+        skipShouldRunNow: true,
+        now: new Date("2026-11-10T03:05:00Z"),
+      }),
+    ).resolves.toEqual([]);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("sync_log_purge_failed");
+    await expect(
+      sync({ ...env, DB }, [], {
+        skipShouldRunNow: true,
+        now: new Date("2026-11-10T03:00:00Z"),
+      }),
+    ).resolves.toEqual([]);
     const logged = JSON.stringify(errorSpy.mock.calls);
     expect(logged).toContain("sync_log_purge_failed");
     expect(logged).not.toContain("raw-d1-purge-secret");

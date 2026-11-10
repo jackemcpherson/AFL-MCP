@@ -9,6 +9,6 @@ fi
 git fetch --no-tags origin main
 sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
 git merge-base --is-ancestor "$sha" origin/main
-version=$(git show "$sha:package.json" | node -e 'let text="";process.stdin.on("data",chunk=>text+=chunk);process.stdin.on("end",()=>console.log(JSON.parse(text).version));')
+version=$(git show "$sha:package.json" | jq -er .version)
 [[ "$RELEASE_TAG" == "v$version" ]]
 { printf 'sha=%s\n' "$sha"; printf 'tag=%s\n' "$RELEASE_TAG"; } >> "$GITHUB_OUTPUT"

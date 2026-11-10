@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { CompetitionCode, SeasonSelector } from "fitzroy";
+import type { CompetitionCode, CompetitionSeason, Match, SeasonSelector } from "fitzroy";
 import {
   fetchLineup,
   fetchMatches,
@@ -10,10 +10,10 @@ import { refreshActiveCoaches } from "../admin/coaching";
 import { runOperation } from "../db/operation";
 import { seasonKey } from "../db/seasons";
 import { describeError, logError, type MessageFields, type TaggedErrorBase } from "../lib/errors";
-import { runFitzroy } from "../lib/fitzroy";
+import { type FitzroyOutcome, runFitzroy } from "../lib/fitzroy";
 import { playedMatch, unsettledMatch } from "../lib/match-state";
 import { toSeasonSelector } from "../lib/schemas";
-import { toIsoDate } from "../lib/time";
+import { toIsoDate, toMelbourneDate } from "../lib/time";
 import type { Env } from "../types";
 import { runWeatherStage } from "../weather/stage";
 import { logSync } from "./log";
@@ -22,6 +22,7 @@ import { queueRecentStatsRefresh, rebuildQueuedStatsPav, refreshDueStats } from 
 import {
   buildMatchAflIdMap,
   ensureCompetition,
+  lineupSyncSupported,
   ensureSeason,
   ensureTeams,
   ensureVenues,
@@ -37,6 +38,9 @@ import {
 const FORWARD_DAYS = 3;
 const BACKWARD_DAYS = 1;
 const SOURCE = "afl-api" as const;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** `sync_log` rows older than this are purged on hourly ticks. */
+const SYNC_LOG_RETENTION_DAYS = 90;
 
 /** Cron ticks retry lineup-less completed rounds this many days after the match; older gaps are backfill territory. */
 const LINEUP_BACKLOG_MAX_AGE_DAYS = 14;
@@ -66,14 +70,19 @@ const SyncSourceErrorBase: TaggedErrorBase<SyncSourceError, "SyncSourceError", M
   });
 
 /**
- * The provider's season data cannot be imported as delivered.
+ * The provider's season data cannot be fetched or imported as delivered.
  *
- * The message is application-written and lands in `sync_log`.
+ * The message is application-written and lands in `sync_log`. The sync logs
+ * it and moves on to the next competition-season; database errors still
+ * propagate.
  *
  * @example
  * throw new SyncSourceError({ message: "Provider season inventory contains duplicate match IDs" });
  */
-export class SyncSourceError extends SyncSourceErrorBase {}
+class SyncSourceError extends SyncSourceErrorBase {}
+
+/** One competition's season discovery, fetched once per sync pass. */
+type SeasonDiscovery = FitzroyOutcome<readonly CompetitionSeason[]>;
 
 /** Optional knobs for the backfill / admin entry points. */
 export interface SyncOptions {
@@ -97,8 +106,8 @@ export interface SyncOptions {
  * The single sync entry point. Called from the scheduled() cron handler in
  * steady state and from `/mcp/admin/backfill` for one-shot historical loads.
  *
- * - Steady-state: pass `competitions` only; current calendar year is synced
- *   subject to the `shouldRunNow` cadence gate.
+ * - Steady-state: pass `competitions` only; the current and upcoming seasons
+ *   (`steadySeasons`) sync subject to the `shouldRunNow` cadence gate.
  * - Backfill: pass `fromYear`/`toYear` (inclusive) and `skipShouldRunNow:
  *   true` to iterate per-year per-competition.
  *
@@ -127,13 +136,17 @@ export async function sync(
   return runOperation(env, skipped, async (operation) => {
     const scopes: SyncScope[] = [];
     let coachingSeason: number | null = null;
+    // Every scope of a competition shares one season discovery per pass.
+    const discoveries = new Map<CompetitionCode, SeasonDiscovery>();
     for (const competition of competitions) {
+      const discovery: SeasonDiscovery = await runFitzroy(fetchSeasons(competition));
+      discoveries.set(competition, discovery);
       if (options?.season !== undefined) scopes.push({ competition, season: options.season });
       else if (options?.fromYear !== undefined && options.toYear !== undefined)
         for (const season of rangeInclusive(options.fromYear, options.toYear))
           scopes.push({ competition, season });
       else {
-        const steady = await steadySeasons(env, competition, hourly);
+        const steady = await steadySeasons(env, competition, hourly ? discovery : null, now);
         if (competition === "AFLM") coachingSeason = seasonYear(steady.current);
         scopes.push({ competition, season: steady.current });
         for (const season of steady.upcoming) scopes.push({ competition, season, upcoming: true });
@@ -159,8 +172,13 @@ export async function sync(
         `resumed write left by ${stranded.holder ?? "unknown holder"} since ${stranded.startedAt ?? "unknown time"}`,
       );
     const results: BackfillResult[] = [];
-    for (const scope of scopes)
-      results.push(await syncCompetition(writer, scope, isBackfill, fixturesOnly));
+    for (const scope of scopes) {
+      const discovery = discoveries.get(scope.competition);
+      if (discovery === undefined) throw new Error(`No season discovery for ${scope.competition}`);
+      results.push(
+        await syncCompetition(writer, scope, discovery, now, { isBackfill, fixturesOnly }),
+      );
+    }
 
     if (!isBackfill) await queueRecentStatsRefresh(writer, now);
     if (hourly) {
@@ -179,19 +197,23 @@ export async function sync(
     // Weather rides the same lease as match data but only on hourly ticks, so
     // the 5-minute cron adds no wasted Open-Meteo calls (#138). Provider
     // failures retry; database failures retain the marker.
-    if (!fixturesOnly && isHourlyTick(now)) await runWeatherStage(writer, fetch, now);
+    if (!fixturesOnly && hourly) await runWeatherStage(writer, fetch, now);
 
     // sync_log grew unboundedly (OPT-03); 90 days comfortably covers any
-    // debugging horizon while keeping the table tiny.
+    // debugging horizon while keeping the table tiny. Once an hour is enough.
     // The purge is best-effort, but a failure must stay visible.
-    await env.DB.prepare("DELETE FROM sync_log WHERE timestamp < datetime('now', '-90 days')")
-      .run()
-      .catch((error) => {
-        logError("sync_log_purge_failed", error);
-      });
+    if (hourly)
+      await env.DB.prepare("DELETE FROM sync_log WHERE timestamp < ?1")
+        .bind(new Date(now.getTime() - SYNC_LOG_RETENTION_DAYS * DAY_MS).toISOString())
+        .run()
+        .catch((error) => {
+          logError("sync_log_purge_failed", error);
+        });
 
     // Fixture score/status changes also invalidate PAV on five-minute ticks.
-    await rebuildQueuedStatsPav(writer, undefined, operation.holder);
+    // An hourly tick already drained the queue inside refreshDueStats, after
+    // every fixture write; nothing since then queues PAV.
+    if (!hourly) await rebuildQueuedStatsPav(writer, undefined, operation.holder);
     return results;
   });
 }
@@ -223,16 +245,22 @@ function seasonYear(season: SeasonSelector): number {
  * without round dates fails the whole resolution), the latest stored season
  * that has started stands in, so one undated season cannot halt every sync.
  *
+ * Stored match dates are Melbourne-local calendar dates, so "has started"
+ * compares against the tick's Melbourne date.
+ *
  * @param env - Worker bindings.
  * @param competition - Competition to resolve.
- * @param hourly - Whether this tick may ask the provider for new seasons.
+ * @param discovery - This pass's season discovery on hourly ticks, or null
+ *   when this tick must not add newly listed seasons.
+ * @param now - The tick's instant.
  * @returns The current season and any seasons after it.
  * @throws The provider's error when no stored season can stand in.
  */
 async function steadySeasons(
   env: Env,
   competition: CompetitionCode,
-  hourly: boolean,
+  discovery: SeasonDiscovery | null,
+  now: Date,
 ): Promise<{ readonly current: SeasonSelector; readonly upcoming: readonly SeasonSelector[] }> {
   const resolved = await runFitzroy(resolveDefaultSeasonForCompetition(competition));
   let current: SeasonSelector;
@@ -241,10 +269,10 @@ async function steadySeasons(
     const stored = await env.DB.prepare(
       `SELECT s.season_key FROM seasons s JOIN competitions c ON c.id = s.competition_id
        WHERE c.code = ?1 AND EXISTS (
-         SELECT 1 FROM matches m WHERE m.season_id = s.id AND m.date <= date('now'))
+         SELECT 1 FROM matches m WHERE m.season_id = s.id AND m.date <= ?2)
        ORDER BY s.year DESC, s.season_key DESC LIMIT 1`,
     )
-      .bind(competition)
+      .bind(competition, toMelbourneDate(now))
       .first<string>("season_key");
     if (stored === null) throw resolved.error;
     await logSync(
@@ -265,13 +293,9 @@ async function steadySeasons(
     .bind(competition, year)
     .all<{ season_key: string }>();
   const upcoming = new Set(later.results.map((row) => row.season_key));
-  if (hourly) {
-    // A discovery failure is not fatal here: syncing the current season makes
-    // the same call and reports it.
-    const discovered = await runFitzroy(fetchSeasons(competition));
-    if (discovered.success)
-      for (const entry of discovered.data) if (entry.year > year) upcoming.add(entry.seasonKey);
-  }
+  // A discovery failure is not fatal here: syncing the current season reports it.
+  if (discovery?.success)
+    for (const entry of discovery.data) if (entry.year > year) upcoming.add(entry.seasonKey);
   return { current, upcoming: [...upcoming].sort().map((key) => toSeasonSelector(key)) };
 }
 
@@ -317,6 +341,13 @@ export function syncIdentity(
  * past + `FORWARD_DAYS` future). The forward window is wide enough to catch
  * Thursday-evening lineup releases for the upcoming weekend; the backward
  * window keeps polling through games that have just finished.
+ *
+ * `matches.date` is the Melbourne-local calendar date. The window bounds are
+ * UTC dates, which the day of slack on each side absorbs.
+ *
+ * @param now - The tick's scheduled instant.
+ * @param env - Worker bindings.
+ * @returns Whether this tick should sync.
  */
 export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
   if (isHourlyTick(now)) return true;
@@ -329,67 +360,149 @@ export async function shouldRunNow(now: Date, env: Env): Promise<boolean> {
   return row !== null;
 }
 
+/** How {@link syncCompetition} runs one scope. */
+interface ScopeMode {
+  readonly isBackfill: boolean;
+  readonly fixturesOnly: boolean;
+}
+
+/** One competition-season as the provider delivered it. */
+interface ProviderSeason {
+  readonly identity: CompetitionSeason;
+  readonly providerMatches: readonly Match[];
+  readonly matches: readonly Match[];
+}
+
+/**
+ * Fetch and validate one competition-season from the provider, before any
+ * database write.
+ *
+ * @param scope - The competition-season.
+ * @param discovery - This pass's season discovery for the competition.
+ * @returns The season's identity, raw fixtures and reviewed fixtures.
+ * @throws SyncSourceError for every provider or source-data failure.
+ */
+async function loadProviderSeason(
+  { competition, season }: SyncScope,
+  discovery: SeasonDiscovery,
+): Promise<ProviderSeason> {
+  if (!discovery.success)
+    throw new SyncSourceError({
+      message: `fetchSeasons failed: ${describeError(discovery.error)}`,
+    });
+  const identity = discovery.data.find((entry) => entry.seasonKey === String(season));
+  if (!identity)
+    throw new SyncSourceError({
+      message: `No exact ${competition} season ${season}; use season discovery`,
+    });
+  const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
+  if (!matchResult.success)
+    throw new SyncSourceError({
+      message: `fetchMatches failed: ${describeError(matchResult.error)}`,
+    });
+  const providerMatches = matchResult.data;
+  if (new Set(providerMatches.map((match) => match.matchId)).size !== providerMatches.length)
+    throw new SyncSourceError({
+      message: "Provider season inventory contains duplicate match IDs",
+    });
+  let matches: readonly Match[];
+  try {
+    matches = providerMatches.map(correctVerifiedMatch);
+  } catch (error) {
+    throw new SyncSourceError({ message: describeError(error) });
+  }
+  return { identity, providerMatches, matches };
+}
+
+/**
+ * Whether the latest `sync_log` row of this type recorded an error.
+ *
+ * @param env - Worker bindings.
+ * @param type - The `sync_log` type.
+ * @returns True when the most recent row has a non-null error.
+ */
+async function lastSyncFailed(env: Env, type: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT error FROM sync_log WHERE type = ?1 ORDER BY timestamp DESC, id DESC LIMIT 1",
+  )
+    .bind(type)
+    .first<{ error: string | null }>();
+  return row !== null && row.error !== null;
+}
+
+/**
+ * Sync one competition-season.
+ *
+ * Provider and source-data failures log under `sync:<competition>` (or
+ * `sync:<competition>:upcoming` for a season that has not started) and
+ * return an error result, so the remaining scopes still sync. Database and
+ * lease failures log under `sync:<competition>` and propagate, retaining
+ * the write marker.
+ *
+ * A pass that changed statistics or lineups logs a success row, under
+ * `sync:<competition>:upcoming` for a season that has not started. So does a
+ * steady-state pass of the current season whose previous row was an error,
+ * which lets health clear the failure; other no-op passes log nothing.
+ *
+ * @param env - Fenced writer bindings.
+ * @param scope - The competition-season.
+ * @param discovery - This pass's season discovery for the competition.
+ * @param now - The tick's instant.
+ * @param mode - Backfill and fixtures-only switches.
+ * @returns The scope's outcome.
+ * @throws Database and lease errors.
+ */
 async function syncCompetition(
   env: Env,
-  { competition, season, upcoming = false }: SyncScope,
-  isBackfill: boolean,
-  fixturesOnly = false,
+  scope: SyncScope,
+  discovery: SeasonDiscovery,
+  now: Date,
+  { isBackfill, fixturesOnly }: ScopeMode,
 ): Promise<BackfillResult> {
+  const { competition, season, upcoming = false } = scope;
+  // A season that has not started logs apart from the competition, so it can
+  // neither page health nor clear a current-season failure.
+  const logType = upcoming ? `sync:${competition}:upcoming` : `sync:${competition}`;
+  const outcome = {
+    competition,
+    year: seasonYear(season),
+    seasonKey: String(season),
+  };
   try {
-    const discovered = await runFitzroy(fetchSeasons(competition));
-    if (!discovered.success) throw discovered.error;
-    const identity = discovered.data.find((entry) => entry.seasonKey === String(season));
-    if (!identity)
-      throw new SyncSourceError({
-        message: `No exact ${competition} season ${season}; use season discovery`,
-      });
-    const matchResult = await runFitzroy(fetchMatches({ source: SOURCE, season, competition }));
-    if (!matchResult.success) {
-      const error = `fetchMatches failed: ${describeError(matchResult.error)}`;
+    let provider: ProviderSeason;
+    try {
+      provider = await loadProviderSeason(scope, discovery);
+    } catch (err) {
+      if (!(err instanceof SyncSourceError)) throw err;
       // A season that has not started may have no usable fixture yet. That is
       // not a failure of the competition's sync and must not page.
-      await logSync(
-        env,
-        upcoming ? `sync:${competition}:upcoming` : `sync:${competition}`,
-        0,
-        error,
-      );
-      return {
-        competition,
-        year: Number(String(season).slice(0, 4)),
-        seasonKey: String(season),
-        matches: 0,
-        stats: 0,
-        lineups: 0,
-        error,
-      };
+      await logSync(env, logType, 0, err.message);
+      return { ...outcome, matches: 0, stats: 0, lineups: 0, error: err.message };
     }
-    const providerMatches = matchResult.data;
-    const allMatches = providerMatches.map(correctVerifiedMatch);
+    const { identity, providerMatches, matches: allMatches } = provider;
 
     const competitionId = await ensureCompetition(env, competition);
     const seasonId = await ensureSeason(env, competitionId, season);
     await env.DB.batch([
-      env.DB.prepare("UPDATE seasons SET display_name = ?1 WHERE id = ?2").bind(
-        identity.displayName,
-        seasonId,
-      ),
       env.DB.prepare(
-        "INSERT INTO season_provider_ids(season_id, provider, provider_season_id) VALUES (?1, 'afl-api', ?2) ON CONFLICT(season_id, provider) DO UPDATE SET provider_season_id = excluded.provider_season_id",
+        "UPDATE seasons SET display_name = ?1 WHERE id = ?2 AND display_name IS NOT ?1",
+      ).bind(identity.displayName, seasonId),
+      env.DB.prepare(
+        `INSERT INTO season_provider_ids(season_id, provider, provider_season_id) VALUES (?1, 'afl-api', ?2)
+         ON CONFLICT(season_id, provider) DO UPDATE SET provider_season_id = excluded.provider_season_id
+         WHERE season_provider_ids.provider_season_id IS NOT excluded.provider_season_id`,
       ).bind(seasonId, String(identity.providerSeasonId)),
     ]);
 
-    if (new Set(allMatches.map((match) => match.matchId)).size !== allMatches.length) {
-      throw new SyncSourceError({
-        message: "Provider season inventory contains duplicate match IDs",
-      });
-    }
+    // The snapshot is rewritten only when the provider's inventory changed, so
+    // `observed_at` records when this inventory was first observed.
     await env.DB.prepare(`INSERT INTO season_provider_inventory(season_id, provider, observed_at, matches_json)
       VALUES (?1, 'afl-api', ?2, ?3) ON CONFLICT(season_id, provider) DO UPDATE SET
-      observed_at = excluded.observed_at, matches_json = excluded.matches_json`)
+      observed_at = excluded.observed_at, matches_json = excluded.matches_json
+      WHERE season_provider_inventory.matches_json IS NOT excluded.matches_json`)
       .bind(
         seasonId,
-        new Date().toISOString(),
+        now.toISOString(),
         JSON.stringify(
           providerMatches.map((match) => ({
             matchId: match.matchId,
@@ -404,37 +517,42 @@ async function syncCompetition(
       )
       .run();
 
-    const lineupBacklogRounds = fixturesOnly
-      ? []
-      : await selectCompletedRoundsWithoutLineups(
+    // Seasons whose lineups upsertLineups would discard are not fetched.
+    const fetchLineups =
+      !fixturesOnly && lineupSyncSupported(competition, seasonKey(competition, season));
+    const lineupBacklogRounds = fetchLineups
+      ? await selectCompletedRoundsWithoutLineups(
           env,
           seasonId,
           isBackfill ? BACKFILL_LINEUP_BACKLOG_LIMIT : LINEUP_BACKLOG_LIMIT,
           isBackfill ? null : LINEUP_BACKLOG_MAX_AGE_DAYS,
-        );
+          now,
+        )
+      : [];
 
     const lineupRounds = new Set<number>(lineupBacklogRounds);
     const locked =
       await env.DB.prepare(`SELECT m.external_afl_id FROM matches m JOIN tipper_predictions p ON p.match_id=m.id
-      WHERE m.season_id=? AND p.run_id=(SELECT MAX(q.run_id) FROM tipper_predictions q WHERE q.match_id=m.id)
-      AND julianday(p.kickoff_at)<=julianday('now')`)
-        .bind(seasonId)
+      WHERE m.season_id=?1 AND p.run_id=(SELECT MAX(q.run_id) FROM tipper_predictions q WHERE q.match_id=m.id)
+      AND julianday(p.kickoff_at)<=julianday(?2)`)
+        .bind(seasonId, now.toISOString())
         .all<{ external_afl_id: string }>();
     const lockedIds = new Set(locked.results.map((m) => m.external_afl_id));
-    const now = Date.now();
+    const nowMs = now.getTime();
     for (const match of allMatches) {
-      const remaining = match.date.getTime() - now;
+      const remaining = match.date.getTime() - nowMs;
       if (
-        fixturesOnly ||
+        !fetchLineups ||
         lockedIds.has(match.matchId) ||
         match.status !== "Upcoming" ||
+        !Number.isFinite(remaining) ||
         remaining <= 0 ||
-        remaining > LINEUP_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000
+        remaining > LINEUP_LOOKAHEAD_DAYS * DAY_MS
       )
         continue;
       // Include later fixtures in rounds already underway. Every five-minute tick
       // refreshes the last 90 minutes; earlier snapshots refresh each 15 minutes.
-      if (remaining <= 90 * 60 * 1000 || new Date(now).getUTCMinutes() % 15 < 5)
+      if (remaining <= 90 * 60 * 1000 || now.getUTCMinutes() % 15 < 5)
         lineupRounds.add(match.roundNumber);
     }
 
@@ -443,16 +561,8 @@ async function syncCompetition(
     );
     const lineups = lineupBatches.flat();
 
-    if (allMatches.length === 0 && lineups.length === 0) {
-      return {
-        competition,
-        year: Number(String(season).slice(0, 4)),
-        seasonKey: String(season),
-        matches: 0,
-        stats: 0,
-        lineups: 0,
-      };
-    }
+    if (allMatches.length === 0 && lineups.length === 0)
+      return { ...outcome, matches: 0, stats: 0, lineups: 0 };
 
     // Unresolved finals fixtures ("1st" vs "4th") must not become team or
     // match rows — see quarantinePlaceholderMatches.
@@ -482,9 +592,9 @@ async function syncCompetition(
       await env.DB.prepare(`INSERT INTO match_stats_refresh(match_id, completed_observed_at, next_retry_at)
         SELECT m.id, ?1, ?1 FROM matches m WHERE m.season_id = ?2 AND ${playedMatch("m")} AND m.external_afl_id IS NOT NULL
         ON CONFLICT(match_id) DO NOTHING`)
-        .bind(new Date().toISOString(), seasonId)
+        .bind(now.toISOString(), seasonId)
         .run();
-      statsAffected = (await refreshDueStats(env, new Date(), undefined, seasonId)).changedRows;
+      statsAffected = (await refreshDueStats(env, now, undefined, seasonId)).changedRows;
       // One pass fetches a bounded batch, so say how much of the season is left.
       statsPending = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM match_stats_refresh r JOIN matches m ON m.id = r.match_id
@@ -498,22 +608,22 @@ async function syncCompetition(
       lineupsAffected = await upsertLineups(env, lineups, matchMap, playerMap, teamMap);
     }
     const didWork = statsAffected > 0 || lineupsAffected > 0;
-    if (didWork) {
-      await logSync(env, `sync:${competition}`, matchesAffected + statsAffected + lineupsAffected);
+    // A no-op pass is not logged, except the first success after a failure:
+    // health clears a competition error only on a later success row.
+    if (didWork || (!isBackfill && !upcoming && (await lastSyncFailed(env, logType)))) {
+      await logSync(env, logType, matchesAffected + statsAffected + lineupsAffected);
     }
 
     return {
-      competition,
-      year: Number(String(season).slice(0, 4)),
-      seasonKey: String(season),
+      ...outcome,
       matches: matchesAffected,
       stats: statsAffected,
       ...(statsPending !== null && { statsPending }),
       lineups: lineupsAffected,
     };
   } catch (err) {
-    const error = describeError(err);
-    await logSync(env, `sync:${competition}`, 0, error);
+    // Database and lease failures always count against the competition.
+    await logSync(env, `sync:${competition}`, 0, describeError(err));
     throw err;
   }
 }

@@ -5,31 +5,12 @@ Version 4 uses explicit competition seasons and coverage contract v4. Fitzroy
 string. AFLW's two 2022 seasons require `2022-S6` or `2022-S7`. An ambiguous
 AFLW `2022` request returns an error listing those selectors.
 
-## Deployment Order
+## Failed Operations
 
-Version 4.0.0 expanded production through migration `0039`. Version 4.0.1
-includes the contract migration `0040` after Tipper 4 and footyBot 0.12 deployed.
-Existing AFLW 2022 keeps its internal ID and becomes season six.
-
-1. Publish the candidate through the application repository's normal pipeline.
-2. Promote the pinned artefact through cloudflare-infra. Set `SYNC_PAUSED` to
-   `true` for the expansion deployment so scheduled writes wait for reader
-   updates.
-3. Deploy Tipper and other consumers that understand explicit season keys and
-   reject active or stale public write markers.
-4. Promote the `src/db/migrations/0040_season_key_contract.sql`
-   through GitOps after verifying consumers. This transition preserves IDs,
-   removes calendar-year uniqueness, and permits season-seven ingestion.
-5. Review repair previews, then apply the approved digests through authenticated
-   admin operations. Reconcile Bears before historical coaching imports.
-6. Restore scheduled writes through GitOps. Verify hourly refresh and daily
-   retry observations before accepting production.
-
-Keep the expansion release separate from the contract release. Do not
-restore the database automatically after a failed operation. Retain its marker
-and checkpoint, diagnose the failure, and resume the same scope. The one
-exception is the scheduled sync. It re-runs its own idempotent scope on the
-next tick and logs `sync:recovered`.
+Do not restore the database automatically after a failed operation. Retain its
+marker and checkpoint, diagnose the failure, and resume the same scope. The one
+exception is the scheduled sync. It re-runs its own idempotent scope on the next
+tick and logs `sync:recovered`.
 
 ## Fixture Corrections
 

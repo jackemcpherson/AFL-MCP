@@ -10,7 +10,7 @@
  */
 import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
-import { testCtx, testEnv } from "#test/fixtures";
+import { scriptedD1, testCtx, testEnv } from "#test/fixtures";
 import pkg from "../../package.json";
 import { defaultDeps, handleMcpRequest, type McpDeps } from "../../src/mcp/protocol";
 import type { ExecuteResult } from "../../src/sandbox/executor";
@@ -183,6 +183,20 @@ describe("MCP contract: schema tool", () => {
 
   it.each(argumentErrors)("returns pinned error text for %s", async (name, args) => {
     await expectGolden(`schema-error-${name}`, await serve(toolCall("schema", args)));
+  });
+
+  it("returns a season the database does not hold as an isError tool result", async () => {
+    // The season lookup matches no row, so the season is not stored.
+    const env = testEnv({ DB: scriptedD1([null]).db });
+    await expectGolden(
+      "schema-error-season-not-stored",
+      await serve(
+        toolCall("schema", { competition: "AFLM", season: 2025, includeObserved: true }),
+        {
+          env,
+        },
+      ),
+    );
   });
 });
 

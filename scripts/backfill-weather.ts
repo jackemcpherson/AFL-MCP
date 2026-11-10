@@ -1,8 +1,8 @@
 /**
  * One-off local backfill of observed match-window weather for every eligible
  * completed match, from Open-Meteo's free reanalysis archive (#138, spec
- * locked in #128). Follows the backfill-lineups.ts pattern: fetch locally,
- * generate batched SQL artifacts for review. Production writes use the
+ * locked in #128). Fetches locally and generates batched SQL artifacts for
+ * review. Production writes use the
  * authenticated retry-weather operation and the leased weather stage.
  *
  * Phases (resume is free at every phase):
@@ -30,17 +30,9 @@
  * placeholder venue (17748). Coordinates resolve through
  * venues.canonical_venue_id.
  */
-import { execSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Predicate, Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import {
   aggregateWeatherWindow,
   decodeOpenMeteoPayload,
@@ -54,59 +46,22 @@ import {
   openMeteoUrl,
   weatherMetricValues,
 } from "../src/weather/openmeteo";
+import { queryD1, writeBatchedSQL } from "./lib/d1";
 
 const SQL_DIR = join(__dirname, "..", "data", "sql-weather");
 const CACHE_DIR = join(__dirname, "..", "data", "weather-cache");
 mkdirSync(SQL_DIR, { recursive: true });
 mkdirSync(CACHE_DIR, { recursive: true });
 
-const BATCH_SIZE = 200;
 const THROTTLE_MS = 350; // ~3 req/s
 const SPOT_CHECK_ROWS = 30;
 
-// ── Helpers (backfill-lineups.ts pattern) ────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────
 
 function escapeSQL(value: string | number | null | undefined): string {
   if (value == null) return "NULL";
   if (Predicate.isNumber(value)) return String(value);
   return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function writeBatchedSQL(prefix: string, statements: string[]): number {
-  for (const f of readdirSync(SQL_DIR).filter((f) => f.startsWith(`${prefix}_`))) {
-    unlinkSync(join(SQL_DIR, f));
-  }
-  let fileIndex = 0;
-  for (let i = 0; i < statements.length; i += BATCH_SIZE) {
-    const batch = statements.slice(i, i + BATCH_SIZE);
-    const sql = `${batch.join(";\n")};\n`;
-    const path = join(SQL_DIR, `${prefix}_${String(fileIndex).padStart(4, "0")}.sql`);
-    writeFileSync(path, sql);
-    fileIndex++;
-  }
-  return fileIndex;
-}
-
-/** Envelope of `wrangler d1 execute --json`: one result set per statement. */
-const D1ExecuteOutputSchema = Schema.fromJsonString(
-  Schema.Array(
-    Schema.Struct({
-      results: Schema.Array(Schema.Unknown).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
-    }),
-  ),
-);
-
-function queryD1<S extends Schema.ConstraintDecoder<unknown>>(
-  sql: string,
-  rowSchema: S,
-): readonly S["Type"][] {
-  const escaped = sql.replace(/\n/g, " ").replace(/"/g, '\\"');
-  const raw = execSync(`npx wrangler d1 execute afl-stats --remote --command "${escaped}" --json`, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  const output = Schema.decodeUnknownSync(D1ExecuteOutputSchema)(raw);
-  return Schema.decodeUnknownSync(Schema.Array(rowSchema))(output[0]?.results ?? []);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -260,7 +215,7 @@ function generatePhase(matches: readonly EligibleMatch[]): number {
     const { metrics, fetchedAt } = metricsFromCache(match);
     statements.push(upsertStatement(match.id, metrics, fetchedAt));
   }
-  const files = writeBatchedSQL("weather", statements);
+  const files = writeBatchedSQL(SQL_DIR, "weather", statements);
   console.log(`Generated ${statements.length} upserts in ${files} files under ${SQL_DIR}`);
   if (missing > 0) console.log(`Skipped ${missing} matches with no cached payload`);
   return files;

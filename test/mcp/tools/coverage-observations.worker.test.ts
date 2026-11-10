@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { expect, it } from "vitest";
 import { testCache } from "#test/fixtures";
+import { CoverageObservationError } from "../../../src/mcp/errors";
 import { observeCoverage } from "../../../src/mcp/tools/coverage";
 import { ensureCompetition, ensureSeason } from "../../../src/sync/upserts";
 
@@ -42,5 +43,6 @@ it("rejects a coverage observation during an abandoned public input write", asyn
   await env.DB.prepare(
     "UPDATE public_input_revision SET in_progress=1,write_started_at='2000-01-01'",
   ).run();
-  await expect(observeCoverage(env, "VFL", 2026)).rejects.toThrow("unfinished input write");
+  await expect(observeCoverage(env, "VFL", 2026)).rejects.toBeInstanceOf(CoverageObservationError);
+  await expect(observeCoverage(env, "VFL", 2026)).rejects.toThrow("data update is in progress");
 });

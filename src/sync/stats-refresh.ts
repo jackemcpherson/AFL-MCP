@@ -10,7 +10,10 @@ import { statFieldCapabilities } from "./stat-capabilities";
 import { STAT_COLUMNS, upsertPlayers, upsertStats } from "./upserts";
 
 /** Maximum matches in an hourly refresh, across all competitions. */
-export const MAX_STATS_REFRESH_MATCHES = 20;
+const MAX_STATS_REFRESH_MATCHES = 20;
+
+/** Maximum PAV seasons one {@link rebuildQueuedStatsPav} call rebuilds. */
+const MAX_PAV_REBUILD_SEASONS = 20;
 
 interface RefreshMatch {
   readonly id: number;
@@ -39,11 +42,15 @@ export interface StatsRefreshReport {
 /** Provider revisions are followed for this long after a match. */
 const FOLLOW_UP_DAYS = 30;
 
+/** Failed fetches keep retrying this long after the follow-up window closes. */
+const RETRY_GRACE_DAYS = 7;
+
 /**
  * The refresh schedule of one played match, as a function of its row:
  *
  * | Phase     | Condition                          | Next fetch          |
  * | --------- | ---------------------------------- | ------------------- |
+ * | gave up   | `failures > 0`, from day 37        | never (`null`)      |
  * | backoff   | `failures > 0`                     | 1, 2, 4 ... 24 hours |
  * | hourly    | under 2 days since first observed  | in an hour          |
  * | daily     | under 14 days                      | in a day            |
@@ -54,10 +61,17 @@ const FOLLOW_UP_DAYS = 30;
  * invented completion time. A match that was already more than 30 days old
  * when first observed is a historical import with no revisions left to
  * follow, so one successful fetch ends its schedule.
+ *
+ * A failing match keeps backing off until seven days after its 30-day
+ * follow-up window closes, so the day-30 fetch still gets retries. After
+ * that the next failure ends the schedule instead of retrying daily
+ * forever. The row keeps its failure count and diagnostic; an operator
+ * stats refresh queues it again.
+ *
  * @param completedAt - First observed completed status.
  * @param now - Fetch timestamp.
  * @param failures - Consecutive failures, zero after success.
- * @param playedOn - The match's calendar date (`YYYY-MM-DD`), when known.
+ * @param playedOn - The match's Melbourne-local `matches.date` (`YYYY-MM-DD`), when known.
  * @returns Next retry time, or null once the schedule is done.
  */
 export function nextStatsRefresh(
@@ -66,7 +80,10 @@ export function nextStatsRefresh(
   failures: number,
   playedOn?: string,
 ): string | null {
-  if (failures > 0) return new Date(now.getTime() + backoffMs(failures)).toISOString();
+  if (failures > 0)
+    return now.getTime() >= completedAt.getTime() + (FOLLOW_UP_DAYS + RETRY_GRACE_DAYS) * DAY
+      ? null
+      : new Date(now.getTime() + backoffMs(failures)).toISOString();
   if (
     playedOn !== undefined &&
     completedAt.getTime() - Date.parse(`${playedOn}T00:00:00Z`) > (FOLLOW_UP_DAYS + 1) * DAY
@@ -89,9 +106,9 @@ export function nextStatsRefresh(
  * one-off request that waits for a backfill or an approved refresh, so a
  * historical import never spends the hourly budget or rewrites old seasons
  * unreviewed.
+ *
  * @param env - Worker bindings.
  * @param now - Observation time.
-
  * @returns Resolves after persisting recent completed matches without resetting checkpoints.
  * @throws If the queue write fails.
  * @example
@@ -101,7 +118,8 @@ export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void
   await env.DB.prepare(`INSERT INTO match_stats_refresh (match_id, completed_observed_at, next_retry_at, origin)
     SELECT m.id, ?1, ?1, 'scheduled' FROM matches m WHERE ${playedMatch("m")} AND m.external_afl_id IS NOT NULL
     AND m.date >= date(?1, '-${FOLLOW_UP_DAYS} days') AND m.date <= date(?1)
-    ON CONFLICT(match_id) DO UPDATE SET origin='scheduled'`)
+    ON CONFLICT(match_id) DO UPDATE SET origin='scheduled'
+    WHERE match_stats_refresh.origin IS NOT 'scheduled'`)
     .bind(now.toISOString())
     .run();
 }
@@ -112,6 +130,7 @@ export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void
  * scoped call is an operator and also takes the `operator` rows in its scope.
  * Call under the shared lease and public write marker. Database failures
  * propagate, retaining that marker.
+ *
  * @param env - Worker bindings.
  * @param now - Timestamp for attempts, successful fetches and retries.
  * @param fetchStats - Provider fetch function; injected for captured-fixture tests.
@@ -119,10 +138,10 @@ export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void
  * @param operationId - Persisted operation whose pending matches restrict the fetch.
  * @param holder - Lease owner used to fence explicit PAV replacements.
  * @returns Counts of independently completed fetches and changed statistic rows.
-
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await refreshDueStats(writer, new Date(), undefined, seasonId, operationId, holder); */
+ * await refreshDueStats(writer, new Date(), undefined, seasonId, operationId, holder);
+ */
 export async function refreshDueStats(
   env: Env,
   now: Date,
@@ -254,6 +273,7 @@ export async function refreshDueStats(
 
 /**
  * Finish bounded derived work for changed fixture or statistic inputs.
+ *
  * @param env - Bindings under the public write marker.
  * @param seasonId - Optional exact season scope.
  * @param holder - Lease owner for explicit PAV replacement fencing.
@@ -272,7 +292,7 @@ export async function rebuildQueuedStatsPav(
   const pending = await env.DB.prepare(`SELECT s.id, s.season_key, c.code FROM pav_rebuild_queue q
     JOIN seasons s ON s.id=q.season_id JOIN competitions c ON c.id=s.competition_id
     WHERE (?1 IS NULL OR s.id=?1) AND q.reason='statistics' ORDER BY s.id LIMIT ?2`)
-    .bind(seasonId ?? null, MAX_STATS_REFRESH_MATCHES)
+    .bind(seasonId ?? null, MAX_PAV_REBUILD_SEASONS)
     .all<{ id: number; season_key: string; code: CompetitionCode }>();
   for (const season of pending.results) {
     if (season.code === "AFLM" || season.code === "AFLW")

@@ -14,6 +14,8 @@ import {
   normaliseTeamForMatch,
   normaliseVenue,
 } from "../lib/normalise";
+import { boundedErrorText } from "../lib/errors";
+import { sha256Hex } from "../lib/hash";
 import { playedMatch, unsettledMatch } from "../lib/match-state";
 import { toMelbourneDate, toMelbourneTime } from "../lib/time";
 import type { Env } from "../types";
@@ -45,6 +47,26 @@ const BATCH_SIZE = 500;
  * impossible from any caller (cron, manual scripts, future backfills).
  */
 const MIN_LINEUP_SYNC_YEAR = 2023;
+
+/**
+ * Whether the sync imports provider lineups for this competition-season.
+ *
+ * Seasons before {@link MIN_LINEUP_SYNC_YEAR} keep their stats-derived
+ * lineups. AFLW 2022 Season 7 is the one verified exception: its provider
+ * rosters are checked against recorded appearances before import.
+ *
+ * @param competition - Competition code.
+ * @param seasonKey - Stored season key, such as `2025` or `2022-S7`.
+ * @returns True when provider lineups for the season may be imported.
+ * @example
+ * lineupSyncSupported("AFLW", "2022-S7"); // true
+ */
+export function lineupSyncSupported(competition: CompetitionCode, seasonKey: string): boolean {
+  return (
+    Number(seasonKey.slice(0, 4)) >= MIN_LINEUP_SYNC_YEAR ||
+    (competition === "AFLW" && seasonKey === "2022-S7")
+  );
+}
 
 /**
  * Run prepared statements in batches and return the total number of rows that
@@ -216,7 +238,8 @@ export async function ensureTeams(
 /**
  * Split incoming matches into syncable and placeholder sets, self-heal any
  * placeholder rows a pre-guard Worker version already wrote, and log one
- * `sync:placeholder-match:<competition>` row when placeholders are present.
+ * `sync:placeholder-match:<competition>` row when the self-heal deleted
+ * something. Quarantining alone is routine and is not logged.
  *
  * Placeholder matches (see {@link isPlaceholderTeamName}) are the AFL API's
  * unresolved finals fixtures ("1st" vs "4th", "Loser of QF1" vs "Winner of
@@ -270,14 +293,14 @@ export async function quarantinePlaceholderMatches(
       ).bind(...ids, ...ids),
       env.DB.prepare(`DELETE FROM teams WHERE id IN (${idPh})`).bind(...ids),
     ]);
+    await logSync(
+      env,
+      `sync:placeholder-match:${competitionCode}`,
+      placeholders.size,
+      names.join(", "),
+    );
   }
 
-  await logSync(
-    env,
-    `sync:placeholder-match:${competitionCode}`,
-    placeholders.size,
-    names.join(", "),
-  );
   return matches.filter((m) => !placeholders.has(m));
 }
 
@@ -314,14 +337,22 @@ export async function ensureVenues(
  * subrequest plus a sync_log error every 5 minutes forever, which is how
  * AFLW lineups produced 20k log rows in 90 days. Pass `null` (admin
  * backfills) to lift the recency bound and re-fetch any historical gap.
+ *
+ * @param env - Worker bindings.
+ * @param seasonId - Season to inspect.
+ * @param limit - Maximum rounds returned.
+ * @param maxAgeDays - Recency bound in days, or null for none.
+ * @param now - The tick's instant; defaults to the current time.
+ * @returns Round numbers, latest first.
  */
 export async function selectCompletedRoundsWithoutLineups(
   env: Env,
   seasonId: number,
   limit: number,
   maxAgeDays: number | null,
+  now: Date = new Date(),
 ): Promise<number[]> {
-  const recencyFilter = maxAgeDays === null ? "" : "AND m.date >= date('now', ?)";
+  const recencyFilter = maxAgeDays === null ? "" : "AND m.date >= date(?, ?)";
   const stmt = env.DB.prepare(
     `SELECT DISTINCT m.round_number FROM matches m
      WHERE m.season_id = ?
@@ -334,7 +365,7 @@ export async function selectCompletedRoundsWithoutLineups(
   const { results } = await (
     maxAgeDays === null
       ? stmt.bind(seasonId, limit)
-      : stmt.bind(seasonId, `-${maxAgeDays} days`, limit)
+      : stmt.bind(seasonId, now.toISOString(), `-${maxAgeDays} days`, limit)
   ).all<{ round_number: number }>();
   return results.map((r) => r.round_number);
 }
@@ -414,6 +445,12 @@ export async function upsertPlayers(
  * Upsert matches (completed + upcoming). Score/quarter/weather/attendance use
  * COALESCE so an upcoming-status re-fetch never clobbers a completed match's
  * data with NULLs.
+ *
+ * A match without a usable date only updates an existing row: its kickoff
+ * becomes unknown and its status follows the provider, so a later
+ * cancellation sticks. Unchanged rows are not rewritten or counted.
+ *
+ * @returns Rows inserted or changed.
  */
 export async function upsertMatches(
   env: Env,
@@ -424,8 +461,9 @@ export async function upsertMatches(
     Number.isFinite(m.date.getTime())
       ? buildMatchUpsert(env, m, ctx)
       : env.DB.prepare(
-          "UPDATE matches SET kickoff_at=NULL WHERE external_afl_id=? RETURNING id",
-        ).bind(m.matchId),
+          `UPDATE matches SET kickoff_at=NULL, status=?2 WHERE external_afl_id=?1
+           AND (kickoff_at IS NOT NULL OR status IS NOT ?2) RETURNING id`,
+        ).bind(m.matchId, m.status),
   );
   return await batchAndCountChanges(env, stmts, true);
 }
@@ -443,6 +481,14 @@ export interface MatchRow {
 }
 
 /**
+ * When the provider's clock replaces the stored one: on a status change to
+ * anything but `Live`. The SET clause sees the row before the update, so
+ * `matches.status` is the stored status.
+ */
+const CLOCK_REPLACE_WHEN =
+  "matches.status IS NOT excluded.status AND excluded.status IS NOT 'Live'";
+
+/**
  * Column manifest for the `matches` upsert. Every SQL fragment in
  * `buildMatchUpsert` (INSERT list, placeholders, UPDATE SET, change-detection
  * WHERE) and the bind argument order derive from this single array, so a
@@ -455,6 +501,11 @@ export interface MatchRow {
  *   `home_team_id`, `away_team_id` — see that function's TSDoc).
  * - `"coalesce"` columns never clobber a completed match's data with NULLs
  *   on an upcoming-status re-fetch.
+ * - The clock columns (`live_period_status`, `completed_quarter`) coalesce
+ *   while the status is unchanged or the match is live, so a transient null
+ *   mid-match keeps the last clock. When the status moves to anything but
+ *   `Live` the provider's value replaces them, so a stuck `LIVE` clears at
+ *   full time and a cancelled or postponed match drops its clock.
  */
 export const MATCH_COLUMNS: readonly UpsertColumn<MatchRow>[] = [
   { name: "external_afl_id", kind: "key", value: (r) => r.m.matchId },
@@ -510,8 +561,18 @@ export const MATCH_COLUMNS: readonly UpsertColumn<MatchRow>[] = [
   { name: "away_q4_goals", kind: "coalesce", value: (r) => r.m.q4Away?.goals ?? null },
   { name: "away_q4_behinds", kind: "coalesce", value: (r) => r.m.q4Away?.behinds ?? null },
   { name: "status", kind: "coalesce", value: (r) => r.m.status },
-  { name: "live_period_status", kind: "coalesce", value: (r) => r.m.livePeriodStatus },
-  { name: "completed_quarter", kind: "coalesce", value: (r) => r.m.completedQuarter },
+  {
+    name: "live_period_status",
+    kind: "coalesce",
+    replaceWhen: CLOCK_REPLACE_WHEN,
+    value: (r) => r.m.livePeriodStatus,
+  },
+  {
+    name: "completed_quarter",
+    kind: "coalesce",
+    replaceWhen: CLOCK_REPLACE_WHEN,
+    value: (r) => r.m.completedQuarter,
+  },
 ];
 
 // Shared UPDATE SET fragment for both ON CONFLICT branches in
@@ -754,7 +815,65 @@ function buildStatUpsert(
   );
 }
 
-/** Upsert per-match lineups (one row per player per match). */
+/** One stored or incoming `match_lineups` row, as compared for change. */
+interface LineupRow {
+  readonly player_id: number | undefined;
+  readonly team_id: number;
+  readonly guernsey_number: number | null;
+  readonly position: string | null;
+  readonly is_emergency: number;
+  readonly is_substitute: number;
+}
+
+/**
+ * Log a rejected lineup once per match and payload. An invalid upcoming
+ * lineup is refetched every 15 minutes for days; repeating the same
+ * rejection adds nothing. The digest in the message is the dedupe key, and
+ * the 90-day log purge eventually lets a long-lived rejection log again.
+ */
+async function logLineupRejection(
+  env: Env,
+  reason: string,
+  payload: readonly LineupRow[],
+): Promise<void> {
+  const digest = (await sha256Hex(JSON.stringify(payload))).slice(0, 16);
+  // Compare against the text logSync actually stores.
+  const message = boundedErrorText(`${reason} (payload ${digest})`);
+  const seen = await env.DB.prepare(
+    "SELECT 1 FROM sync_log WHERE type = 'sync:lineups:invalid' AND error = ?1 LIMIT 1",
+  )
+    .bind(message)
+    .first();
+  if (seen === null) await logSync(env, "sync:lineups:invalid", 0, message);
+}
+
+/** Order-free fingerprint of a lineup snapshot. */
+function lineupFingerprint(rows: readonly LineupRow[]): string {
+  return rows
+    .map((r) =>
+      JSON.stringify([
+        r.player_id ?? null,
+        r.team_id,
+        r.guernsey_number ?? null,
+        r.position ?? null,
+        r.is_emergency,
+        r.is_substitute,
+      ]),
+    )
+    .sort()
+    .join("\n");
+}
+
+/**
+ * Upsert per-match lineups (one row per player per match).
+ *
+ * A valid snapshot identical to the stored one is not rewritten, so an
+ * unchanged lineup neither bumps the public input revision nor counts as a
+ * change. It only restamps `lineups_observed_at` when a fixture change
+ * cleared it.
+ *
+ * @returns Lineup rows written.
+ */
 export async function upsertLineups(
   env: Env,
   lineups: readonly Lineup[],
@@ -764,8 +883,9 @@ export async function upsertLineups(
 ): Promise<number> {
   let changes = 0;
   for (const lineup of lineups) {
-    const verifiedSeasonSeven = lineup.competition === "AFLW" && lineup.seasonKey === "2022-S7";
-    if (lineup.season < MIN_LINEUP_SYNC_YEAR && !verifiedSeasonSeven) continue;
+    if (!lineupSyncSupported(lineup.competition, lineup.seasonKey ?? String(lineup.season)))
+      continue;
+    const verifiedSeasonSeven = lineup.season < MIN_LINEUP_SYNC_YEAR;
     const matchId = matchMap.get(lineup.matchId);
     const home = teamMap.get(
       normaliseTeamForMatch(lineup.homeTeam, lineup.competition, lineup.season),
@@ -779,7 +899,7 @@ export async function upsertLineups(
       { players: lineup.homePlayers, team: home },
       { players: lineup.awayPlayers, team: away },
     ];
-    const players = sides.flatMap((side) =>
+    const players: LineupRow[] = sides.flatMap((side) =>
       side.players.map((p) => ({
         player_id: playerMap.get(p.playerId),
         team_id: side.team,
@@ -798,21 +918,19 @@ export async function upsertLineups(
       players.some((p) => !p.player_id) ||
       new Set(players.map((p) => p.player_id)).size !== players.length
     ) {
-      await logSync(
+      await logLineupRejection(
         env,
-        "sync:lineups:invalid",
-        0,
         `Rejected incomplete or duplicate lineup for ${matchId}`,
+        players,
       );
       continue;
     }
     if (verifiedSeasonSeven) {
       if (players.length !== 42 || players.some((p) => p.is_emergency === 1)) {
-        await logSync(
+        await logLineupRejection(
           env,
-          "sync:lineups:invalid",
-          0,
           `Season-seven roster is not exactly 42 participants for ${matchId}`,
+          players,
         );
         continue;
       }
@@ -826,11 +944,10 @@ export async function upsertLineups(
         actual.size !== players.length ||
         players.some((p) => !actual.has(`${p.player_id}:${p.team_id}`))
       ) {
-        await logSync(
+        await logLineupRejection(
           env,
-          "sync:lineups:invalid",
-          0,
           `Season-seven roster differs from recorded appearances for ${matchId}`,
+          players,
         );
         continue;
       }
@@ -839,6 +956,21 @@ export async function upsertLineups(
     // guard is repeated so a concurrent identity change cannot attach the old lineup.
     const guard = `id=? AND home_team_id=? AND away_team_id=? AND external_afl_id=?`;
     const args = [matchId, home, away, lineup.matchId];
+    const stored = await env.DB.prepare(
+      `SELECT player_id, team_id, guernsey_number, position, is_emergency, is_substitute
+       FROM match_lineups WHERE match_id=?1`,
+    )
+      .bind(matchId)
+      .all<LineupRow>();
+    if (lineupFingerprint(stored.results) === lineupFingerprint(players)) {
+      await env.DB.prepare(
+        `UPDATE matches SET lineups_observed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE ${guard} AND lineups_observed_at IS NULL`,
+      )
+        .bind(...args)
+        .run();
+      continue;
+    }
     const result = await env.DB.batch([
       env.DB.prepare(
         `DELETE FROM match_lineups WHERE match_id IN (SELECT id FROM matches WHERE ${guard})`,

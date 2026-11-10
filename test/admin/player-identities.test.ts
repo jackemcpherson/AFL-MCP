@@ -1,5 +1,9 @@
+import { Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { mergeIdentityAppearances } from "../../src/admin/player-identities";
+import {
+  decodeIdentityRepairRequest,
+  mergeIdentityAppearances,
+} from "../../src/admin/player-identities";
 
 const evidence = {
   url: "https://www.afl.com.au/stats",
@@ -47,5 +51,25 @@ describe("verified identity appearance merging", () => {
         { table: "player_match_stats", matchId: 1, field: "kikcs", value: 8, evidence },
       ]),
     ).toThrow("conflicting field");
+  });
+});
+
+describe("identity repair request bounds", () => {
+  const resolution = {
+    table: "player_match_stats",
+    matchId: 1,
+    field: "kicks",
+    value: 7,
+    evidence: { ...evidence, explanation: "x".repeat(20) },
+  };
+  const body = (count: number) => ({
+    playerIds: [1, 2],
+    evidence: [{ ...evidence, explanation: "x".repeat(20) }],
+    resolutions: Array.from({ length: count }, () => resolution),
+  });
+
+  it("accepts up to 500 resolutions and rejects more", () => {
+    expect(Result.isSuccess(decodeIdentityRepairRequest(body(500)))).toBe(true);
+    expect(Result.isFailure(decodeIdentityRepairRequest(body(501)))).toBe(true);
   });
 });

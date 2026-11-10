@@ -61,10 +61,25 @@ describe("quarantinePlaceholderMatches", () => {
     expect(log?.n).toBe(0);
   });
 
-  it("writes one sync:placeholder-match log row naming the placeholders", async () => {
+  it("does not log a routine quarantine that deleted nothing", async () => {
     const { competitionId } = await setup();
+    const ghost = makePlaceholderFinal("M-G1", "5th", "Lowest-ranked WF Winner");
+
+    await quarantinePlaceholderMatches(env, competitionId, "AFLM", [ghost]);
+
+    const log = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM sync_log WHERE type LIKE 'sync:placeholder-match:%'",
+    ).first<{ n: number }>();
+    expect(log?.n).toBe(0);
+  });
+
+  it("writes one sync:placeholder-match log row naming the placeholders it self-healed", async () => {
+    const { competitionId, seasonId } = await setup();
     const ghost1 = makePlaceholderFinal("M-G1", "5th", "Lowest-ranked WF Winner");
     const ghost2 = makePlaceholderFinal("M-G2", "Loser of QF1", "Winner of EF1");
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [ghost1, ghost2]);
+    const venueMap = await ensureVenues(env, [ghost1, ghost2]);
+    await upsertMatches(env, [ghost1, ghost2], { seasonId, teamMap, venueMap });
 
     await quarantinePlaceholderMatches(env, competitionId, "AFLM", [ghost1, ghost2]);
 
