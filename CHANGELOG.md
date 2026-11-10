@@ -8,8 +8,8 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [5.1.0] - 2026-11-10
 
 This release prepares the Worker for the 2027 season, which has no Opening
-Round, and gives every lifecycle the Worker persists one owning module, listed
-in `docs/state-machines.md`. The `code` sandbox does not change.
+Round. It also gives every lifecycle the Worker persists one owning module.
+`docs/state-machines.md` lists them. The `code` sandbox does not change.
 
 ### Added in 5.1.0
 

@@ -41,11 +41,13 @@ AFLW.
 
 Each competition syncs its current season, the latest one that has started,
 plus every later season. The provider only names a season current from its
-first bounce, so the later seasons are what load a new fixture, its lineups
-and its forecasts before the opening match. The provider is asked for new
-seasons on hourly ticks; a later season already stored with unsettled matches
-stays in scope on every tick. A fetch failure for a season that has not
-started logs under `sync:<competition>:upcoming` and does not affect health.
+first bounce. The later seasons load a new fixture, its lineups and its
+forecasts before the opening match. The sync asks the provider for new
+seasons on hourly ticks. A later season that the database already holds with
+unsettled matches stays in scope on every tick.
+
+A fetch failure for a season that has not started logs under
+`sync:<competition>:upcoming`. It does not affect health.
 
 If the provider cannot name the current season, the latest stored season that
 has started stands in and the sync logs `sync:season-fallback`.
@@ -84,16 +86,16 @@ has started stands in and the sync logs `sync:season-fallback`.
 
 Provider statistics failures retain successful match results and persist
 retries.
-Database failures retain the public write marker. A steady-state sync is
-named by its competitions (`sync:steady:AFLM,AFLW,VFL,VFLW`), not by the
-seasons it resolved, so the next scheduled sync resumes a marker left by an
-earlier tick even when a default season rolled over in between, and logs
-`sync:recovered`. Backfills and every other operation still require explicit
-recovery with the identical operation scope.
+Database failures retain the public write marker. A steady-state sync takes
+its name from its competitions (`sync:steady:AFLM,AFLW,VFL,VFLW`), not from
+the seasons it resolved. The next scheduled sync therefore resumes a marker
+left by an earlier tick, even when a default season rolled over in between.
+It logs `sync:recovered`. Backfills and every other operation still require
+explicit recovery with the identical operation scope.
 
 The cron passes its scheduled time to the sync, and that one instant decides
-which stages run. A tick that starts late still runs the hourly stages for the
-hour it was scheduled in.
+which stages run. A tick that starts late still runs the hourly stages for
+its scheduled hour.
 
 ## Publication Inputs
 
@@ -151,11 +153,13 @@ remain unchanged.
 
 Provider weather failures persist diagnostics and a retry time in
 `weather_refresh_state`. `nextWeatherRetry` is the whole policy. A forecast
-retries after 1, 2, 4, 8 and 16 hours, then daily, and never gives up, so a
-failed hour on match day costs one refresh. An observation retries daily and
-remains unavailable after the initial failure and three unsuccessful retries.
-The needs-work queries skip a match that is backing off or unavailable, so it
-never takes one of the 25 fetch slots.
+retries after 1, 2, 4, 8 and 16 hours, then daily, and never gives up. A
+failed hour on match day therefore costs one refresh. An observation retries
+daily and remains unavailable after the initial failure and three
+unsuccessful retries.
+
+The needs-work queries skip a match that is waiting to retry or unavailable,
+so it never takes one of the 25 fetch slots.
 The authenticated `retry-weather` operation previews an exact match before
 scheduling another attempt.
 Database failures propagate and retain the public marker.
@@ -215,9 +219,9 @@ labels directly, no cross-competition normalisation.
 
 Two round-string columns on `matches`:
 
-- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024 to 2026 only,
-  `round_number = 0`), `Wildcard` (VFL before finals, through 2025), and a
-  finals name that varies by competition and era. AFLW 2024 is the
+- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024
+  to 2026 only, `round_number = 0`), `Wildcard` (VFL before finals, through
+  2025), and a finals name that varies by competition and era. AFLW 2024 is the
   exception for numbered rounds: the API labels them `Week 1` to `Week 10`,
   with `round_abbreviation` `Rd N` and `round_number` 1 to 10. AFLM used
   `Qualifying Final` and `Elimination Final` through 2014 and
@@ -307,9 +311,9 @@ vote. Brownlow votes are AFLM-only - the medal is not awarded for AFLW/VFL/VFLW.
 
 ## Match Coaches
 
-The hourly path may refresh AFL Tables match-coach facts for the sync's
-current AFLM season, not the calendar year, while holding the existing sync
-lease. Successful checks recur every 24
+The hourly path may refresh AFL Tables match-coach facts while holding the
+existing sync lease. It uses the sync's current AFLM season, not the calendar
+year. Successful checks recur every 24
 hours. Incomplete or failed checks retry every three hours. Five-minute cron
 ticks do not fetch coach career pages again.
 The sync logs coaching failures and continues score, lineup, statistics,
@@ -399,9 +403,9 @@ Historical checkpoints default to `operator` work and remain available to
 exact-season and approved requests. They cannot consume the hourly refresh
 budget or trigger a historical import when scheduled writes resume.
 
-An operator request is one-off. A match that was already more than 30 days
-old when first observed has no revisions left to follow, so one successful
-fetch ends its schedule (`next_retry_at` NULL). `/mcp/admin/status` reports
+An operator request is one-off. A match more than 30 days old at first
+observation has no revisions left to follow. One successful fetch ends its
+schedule (`next_retry_at` NULL). `/mcp/admin/status` reports
 the two drivers separately: `statisticsDue` counts scheduled matches the cron
 will fetch, and `statisticsAwaitingOperator` counts operator requests.
 
