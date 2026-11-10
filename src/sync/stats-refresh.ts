@@ -1,5 +1,7 @@
 import { type CompetitionCode, fetchPlayerStats, type PlayerStats } from "fitzroy";
+import { backoffMs, DAY_MS as DAY, HOUR_MS as HOUR } from "../lib/backoff";
 import { runFitzroy } from "../lib/fitzroy";
+import { playedMatch } from "../lib/match-state";
 import { toSeasonSelector } from "../lib/schemas";
 import { normaliseTeamForMatch } from "../lib/normalise";
 import type { Env } from "../types";
@@ -7,8 +9,6 @@ import { calculatePav } from "./pav";
 import { statFieldCapabilities } from "./stat-capabilities";
 import { STAT_COLUMNS, upsertPlayers, upsertStats } from "./upserts";
 
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
 /** Maximum matches in an hourly refresh, across all competitions. */
 export const MAX_STATS_REFRESH_MATCHES = 20;
 
@@ -19,6 +19,7 @@ interface RefreshMatch {
   readonly year: number;
   readonly season_key: string;
   readonly code: CompetitionCode;
+  readonly date: string;
   readonly completed_observed_at: string;
   readonly failures: number;
   readonly home_team_id: number;
@@ -35,31 +36,59 @@ export interface StatsRefreshReport {
   readonly changedRows: number;
 }
 
+/** Provider revisions are followed for this long after a match. */
+const FOLLOW_UP_DAYS = 30;
+
 /**
- * Calculate the next fetch after success or failure. The clock starts when a
- * completed match is first observed, never from an invented completion time.
+ * The refresh schedule of one played match, as a function of its row:
+ *
+ * | Phase     | Condition                          | Next fetch          |
+ * | --------- | ---------------------------------- | ------------------- |
+ * | backoff   | `failures > 0`                     | 1, 2, 4 ... 24 hours |
+ * | hourly    | under 2 days since first observed  | in an hour          |
+ * | daily     | under 14 days                      | in a day            |
+ * | final     | under 30 days                      | at day 30           |
+ * | done      | otherwise                          | never (`null`)      |
+ *
+ * The clock starts when a completed match is first observed, never from an
+ * invented completion time. A match that was already more than 30 days old
+ * when first observed is a historical import with no revisions left to
+ * follow, so one successful fetch ends its schedule.
  * @param completedAt - First observed completed status.
  * @param now - Fetch timestamp.
  * @param failures - Consecutive failures, zero after success.
- * @returns Next retry time, or null after the final successful day-30 refresh.
+ * @param playedOn - The match's calendar date (`YYYY-MM-DD`), when known.
+ * @returns Next retry time, or null once the schedule is done.
  */
-export function nextStatsRefresh(completedAt: Date, now: Date, failures: number): string | null {
-  if (failures > 0)
-    return new Date(
-      now.getTime() + Math.min(2 ** Math.min(failures - 1, 5), 24) * HOUR,
-    ).toISOString();
+export function nextStatsRefresh(
+  completedAt: Date,
+  now: Date,
+  failures: number,
+  playedOn?: string,
+): string | null {
+  if (failures > 0) return new Date(now.getTime() + backoffMs(failures)).toISOString();
+  if (
+    playedOn !== undefined &&
+    completedAt.getTime() - Date.parse(`${playedOn}T00:00:00Z`) > (FOLLOW_UP_DAYS + 1) * DAY
+  )
+    return null;
   const age = now.getTime() - completedAt.getTime();
   if (age < 2 * DAY)
     return new Date(Math.min(now.getTime() + HOUR, completedAt.getTime() + 2 * DAY)).toISOString();
   if (age < 14 * DAY)
     return new Date(Math.min(now.getTime() + DAY, completedAt.getTime() + 14 * DAY)).toISOString();
-  if (age < 30 * DAY) return new Date(completedAt.getTime() + 30 * DAY).toISOString();
+  if (age < FOLLOW_UP_DAYS * DAY)
+    return new Date(completedAt.getTime() + FOLLOW_UP_DAYS * DAY).toISOString();
   return null;
 }
 
 /**
- * Queue recent completed matches without resetting existing retry schedules.
- * Historical imports use the explicit admin queue rather than an unbounded cron sweep.
+ * Admit recent completed matches to the schedule without resetting existing
+ * retry deadlines. `origin` names who drives a queued match: the cron follows
+ * `scheduled` rows through {@link nextStatsRefresh}; an `operator` row is a
+ * one-off request that waits for a backfill or an approved refresh, so a
+ * historical import never spends the hourly budget or rewrites old seasons
+ * unreviewed.
  * @param env - Worker bindings.
  * @param now - Observation time.
 
@@ -70,16 +99,19 @@ export function nextStatsRefresh(completedAt: Date, now: Date, failures: number)
  */
 export async function queueRecentStatsRefresh(env: Env, now: Date): Promise<void> {
   await env.DB.prepare(`INSERT INTO match_stats_refresh (match_id, completed_observed_at, next_retry_at, origin)
-    SELECT id, ?1, ?1, 'scheduled' FROM matches WHERE status = 'Complete' AND external_afl_id IS NOT NULL
-    AND date >= date(?1, '-30 days') AND date <= date(?1)
+    SELECT m.id, ?1, ?1, 'scheduled' FROM matches m WHERE ${playedMatch("m")} AND m.external_afl_id IS NOT NULL
+    AND m.date >= date(?1, '-${FOLLOW_UP_DAYS} days') AND m.date <= date(?1)
     ON CONFLICT(match_id) DO UPDATE SET origin='scheduled'`)
     .bind(now.toISOString())
     .run();
 }
 
 /**
- * Refresh at most 20 queued matches, oldest due first. Call under the shared
- * lease and public write marker. Database failures propagate, retaining that marker.
+ * Refresh at most 20 due matches, oldest due first. Without a season or
+ * operation scope this is the cron, which takes only `scheduled` rows; a
+ * scoped call is an operator and also takes the `operator` rows in its scope.
+ * Call under the shared lease and public write marker. Database failures
+ * propagate, retaining that marker.
  * @param env - Worker bindings.
  * @param now - Timestamp for attempts, successful fetches and retries.
  * @param fetchStats - Provider fetch function; injected for captured-fixture tests.
@@ -101,11 +133,11 @@ export async function refreshDueStats(
 ): Promise<StatsRefreshReport> {
   const due = await env.DB.prepare(`SELECT m.id, m.external_afl_id, m.season_id,
     m.home_team_id, m.away_team_id, h.name AS home_name, a.name AS away_name,
-    s.year, s.season_key, c.code, r.completed_observed_at, r.failures
+    s.year, s.season_key, c.code, m.date, r.completed_observed_at, r.failures
     FROM match_stats_refresh r JOIN matches m ON m.id = r.match_id
     JOIN seasons s ON s.id = m.season_id JOIN competitions c ON c.id = s.competition_id
     JOIN teams h ON h.id = m.home_team_id JOIN teams a ON a.id = m.away_team_id
-    WHERE r.next_retry_at <= ?1 AND m.status = 'Complete' AND (?2 IS NULL OR s.id = ?2)
+    WHERE r.next_retry_at <= ?1 AND ${playedMatch("m")} AND (?2 IS NULL OR s.id = ?2)
     AND (?2 IS NOT NULL OR ?4 IS NOT NULL OR r.origin='scheduled')
     AND (?4 IS NULL OR EXISTS (SELECT 1 FROM stats_refresh_operation_matches o
       WHERE o.match_id = m.id AND o.operation_id = ?4 AND o.status = 'pending'))
@@ -153,7 +185,12 @@ export async function refreshDueStats(
       await env.DB.prepare(`UPDATE match_stats_refresh SET failures = failures + 1,
         next_retry_at = ?1, diagnostic = ?2 WHERE match_id = ?3`)
         .bind(
-          nextStatsRefresh(new Date(match.completed_observed_at), now, match.failures + 1),
+          nextStatsRefresh(
+            new Date(match.completed_observed_at),
+            now,
+            match.failures + 1,
+            match.date,
+          ),
           error instanceof Error ? error.message : "Provider fetch failed",
           match.id,
         )
@@ -195,12 +232,15 @@ export async function refreshDueStats(
       failures = 0, participant_count = ?3, diagnostic = ?5 WHERE match_id = ?4`)
       .bind(
         now.toISOString(),
-        nextStatsRefresh(new Date(match.completed_observed_at), now, 0),
+        nextStatsRefresh(new Date(match.completed_observed_at), now, 0, match.date),
         stats.length,
         match.id,
         diagnostic,
       )
       .run();
+    // A fresh fetch satisfies every pending request for this match, whichever
+    // operation or schedule triggered it. Scoping this to one operation would
+    // strand the others: the match is no longer due, so they could never run it.
     await env.DB.prepare(
       "UPDATE stats_refresh_operation_matches SET status = 'complete' WHERE match_id = ?1",
     )

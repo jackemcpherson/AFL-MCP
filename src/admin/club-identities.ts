@@ -1,14 +1,8 @@
 import { Schema } from "effect";
-import {
-  beginPublicInputWrite,
-  finishPublicInputWrite,
-  protectOperationWrites,
-  resumePublicInputWrite,
-} from "../db/public-inputs";
+import { runOperation } from "../db/operation";
 import { type Decoder, strictDecoder } from "../lib/decode";
 import { sha256Hex } from "../lib/hash";
 import { booleanDefault, Sha256HexSchema } from "../lib/schemas";
-import { acquireOperationLease, releaseOperationLease } from "../sync/lease";
 import type { Env } from "../types";
 import { OperationConflictError } from "./errors";
 
@@ -25,6 +19,14 @@ export interface BearsRepairReport {
   readonly pavRows: number;
   readonly canonicalCoaches: number;
   readonly observations: number;
+}
+
+/** Outcome of a Bears repair call. `busy` alone means another operation holds the lease. */
+export interface BearsRepairResult {
+  readonly busy: boolean;
+  readonly report?: BearsRepairReport;
+  readonly manifestDigest?: string;
+  readonly matchIds?: readonly number[];
 }
 
 /**
@@ -45,126 +47,110 @@ export async function reconcileBearsIdentity(
     readonly manifestDigest?: string | undefined;
     readonly resume?: boolean | undefined;
   } = {},
-): Promise<{
-  readonly busy: boolean;
-  readonly report?: BearsRepairReport;
-  readonly manifestDigest?: string;
-  readonly matchIds?: readonly number[];
-}> {
-  const holder = crypto.randomUUID();
-  if (!(await acquireOperationLease(env, holder))) return { busy: true };
-  let marked = false;
-  let consistent = false;
-  try {
-    const previewIds = await findClubIds(env, true);
-    const report = await countAffected(env, previewIds.lionsId);
-    const matches =
-      await env.DB.prepare(`SELECT m.id FROM matches m JOIN seasons s ON s.id=m.season_id
+): Promise<BearsRepairResult> {
+  return runOperation<BearsRepairResult>(
+    env,
+    () => ({ busy: true }),
+    async (operation) => {
+      const previewIds = await findClubIds(env, true);
+      const report = await countAffected(env, previewIds.lionsId);
+      const matches =
+        await env.DB.prepare(`SELECT m.id FROM matches m JOIN seasons s ON s.id=m.season_id
       JOIN competitions c ON c.id=s.competition_id WHERE c.code='AFLM' AND s.year<=?1
       AND ?2 IN (m.home_team_id,m.away_team_id) ORDER BY m.id`)
-        .bind(BEARS_LAST_SEASON, previewIds.lionsId)
-        .all<{ id: number }>();
-    const matchIds = matches.results.map((row) => row.id);
-    const revision = await env.DB.prepare(
-      "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
-    ).first<{ revision: number; in_progress: number }>();
-    if (!revision) throw new Error("Public input revision is unavailable");
-    const digest = await sha256Hex(
-      JSON.stringify({
-        ids: previewIds,
-        report,
-        matchIds,
-        revision: revision.revision,
-      }),
-    );
-    if (dryRun) {
-      if (revision.in_progress)
-        throw new OperationConflictError({
-          message: "Recover the active public write before previewing Bears",
-        });
-      return { busy: false, report, manifestDigest: digest, matchIds };
-    }
-    if (options.resume) {
-      if (!options.manifestDigest)
+          .bind(BEARS_LAST_SEASON, previewIds.lionsId)
+          .all<{ id: number }>();
+      const matchIds = matches.results.map((row) => row.id);
+      const revision = await env.DB.prepare(
+        "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
+      ).first<{ revision: number; in_progress: number }>();
+      if (!revision) throw new Error("Public input revision is unavailable");
+      const digest = await sha256Hex(
+        JSON.stringify({
+          ids: previewIds,
+          report,
+          matchIds,
+          revision: revision.revision,
+        }),
+      );
+      if (dryRun) {
+        if (revision.in_progress)
+          throw new OperationConflictError({
+            message: "Recover the active public write before previewing Bears",
+          });
+        return { busy: false, report, manifestDigest: digest, matchIds };
+      }
+      if (options.resume && !options.manifestDigest)
         throw new OperationConflictError({
           message: "Bears recovery requires the approved digest",
         });
-      await resumePublicInputWrite(env, holder, `bears:${options.manifestDigest}`);
-    } else {
-      if (options.manifestDigest !== digest)
+      if (!options.resume && options.manifestDigest !== digest)
         throw new OperationConflictError({ message: "Bears preview missing or stale" });
-      await beginPublicInputWrite(env, holder, new Date(), `bears:${digest}`);
-    }
-    marked = true;
-    const writer = protectOperationWrites(env, holder);
-    const ids = await findClubIds(writer, false);
-    if (report.matchSides > 0) {
-      const stmts: D1PreparedStatement[] = [];
-      stmts.push(
-        writer.DB.prepare(
-          `UPDATE player_match_stats SET team_id = ?1
+      const writer = await operation.write(`bears:${options.manifestDigest}`, {
+        resume: options.resume ?? false,
+      });
+      const ids = await findClubIds(writer, false);
+      if (report.matchSides > 0) {
+        const stmts: D1PreparedStatement[] = [];
+        stmts.push(
+          writer.DB.prepare(
+            `UPDATE player_match_stats SET team_id = ?1
            WHERE team_id = ?2 AND match_id IN (
              SELECT m.id FROM matches m JOIN seasons s ON s.id = m.season_id
              JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3 AND ?2 IN (m.home_team_id, m.away_team_id)
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE match_lineups SET team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE match_lineups SET team_id = ?1
            WHERE team_id = ?2 AND match_id IN (
              SELECT m.id FROM matches m JOIN seasons s ON s.id = m.season_id
              JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3 AND ?2 IN (m.home_team_id, m.away_team_id)
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE player_season_pav SET team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE player_season_pav SET team_id = ?1
            WHERE team_id = ?2 AND season_id IN (
              SELECT s.id FROM seasons s JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE coach_observations SET team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE coach_observations SET team_id = ?1
            WHERE team_id = ?2 AND season <= ?3 AND match_id IN (
              SELECT m.id FROM matches m JOIN seasons s ON s.id = m.season_id
              WHERE s.year <= ?3 AND ?2 IN (m.home_team_id, m.away_team_id)
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE match_coaches SET team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE match_coaches SET team_id = ?1
            WHERE team_id = ?2 AND match_id IN (
              SELECT m.id FROM matches m JOIN seasons s ON s.id = m.season_id
              JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3 AND ?2 IN (m.home_team_id, m.away_team_id)
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE matches SET home_team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE matches SET home_team_id = ?1
            WHERE home_team_id = ?2 AND season_id IN (
              SELECT s.id FROM seasons s JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-        writer.DB.prepare(
-          `UPDATE matches SET away_team_id = ?1
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+          writer.DB.prepare(
+            `UPDATE matches SET away_team_id = ?1
            WHERE away_team_id = ?2 AND season_id IN (
              SELECT s.id FROM seasons s JOIN competitions c ON c.id = s.competition_id
              WHERE c.code = 'AFLM' AND s.year <= ?3
            )`,
-        ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
-      );
-      await writer.DB.batch(stmts);
-    }
-    consistent = true;
-    return { busy: false, report: { ...report, dryRun } };
-  } finally {
-    try {
-      if (marked && consistent) await finishPublicInputWrite(env, holder);
-    } finally {
-      await releaseOperationLease(env, holder);
-    }
-  }
+          ).bind(ids.bearsId, ids.lionsId, BEARS_LAST_SEASON),
+        );
+        await writer.DB.batch(stmts);
+      }
+      return { busy: false, report: { ...report, dryRun } };
+    },
+  );
 }
 
 async function findClubIds(

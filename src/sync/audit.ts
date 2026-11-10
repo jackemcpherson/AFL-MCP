@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { batchRow, decodeRow } from "../lib/decode";
+import { playedMatch } from "../lib/match-state";
 import type { Env } from "../types";
 
 /** The public input revision marker. */
@@ -35,7 +36,7 @@ export async function auditNextSeason(env: Env, now: Date = new Date()): Promise
   const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, in_progress FROM public_input_revision WHERE id=1"),
     env.DB.prepare(`SELECT 'completed-without-statistics' AS issue, CAST(m.id AS TEXT) AS record_id
-      FROM matches m WHERE m.season_id=?1 AND m.status='Complete'
+      FROM matches m WHERE m.season_id=?1 AND ${playedMatch("m")}
       AND NOT EXISTS (SELECT 1 FROM player_match_stats p WHERE p.match_id=m.id)
       UNION ALL
       SELECT 'provider-match-not-linked', json_extract(j.value, '$.matchId')

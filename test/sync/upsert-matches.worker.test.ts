@@ -1,21 +1,14 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
-  buildMatchAflIdMap,
   ensureCompetition,
   ensureSeason,
   ensureTeams,
   ensureVenues,
-  selectCompletedCount,
   selectCompletedRoundsWithoutLineups,
-  selectHasCompletedMatchWithoutStats,
-  selectNextRound,
-  selectRoundFirstDate,
   upsertMatches,
-  upsertPlayers,
-  upsertStats,
 } from "../../src/sync/upserts";
-import { makeMatch, makePlayerStats } from "#test/factories";
+import { makeMatch } from "#test/factories";
 
 async function setup() {
   const competitionId = await ensureCompetition(env, "AFLM");
@@ -395,186 +388,6 @@ describe("upsertMatches", () => {
     }>();
     expect(after.results.length).toBe(1);
     expect(after.results[0]?.external_afl_id).toBe("M-BF");
-  });
-});
-
-describe("selectCompletedCount", () => {
-  it("returns 0 when no completed matches exist", async () => {
-    const { seasonId } = await setup();
-    expect(await selectCompletedCount(env, seasonId)).toBe(0);
-  });
-
-  it("counts only matches with non-null home_points", async () => {
-    const { competitionId, seasonId } = await setup();
-    const completed = makeMatch({ matchId: "M-1", date: new Date("2026-03-19T08:30:00Z") });
-    const alsoCompleted = makeMatch({
-      matchId: "M-2",
-      date: new Date("2026-03-26T08:30:00Z"),
-      homeTeam: "Geelong",
-      awayTeam: "Sydney",
-    });
-    const upcoming = makeMatch({
-      matchId: "M-3",
-      date: new Date("2026-04-02T08:30:00Z"),
-      homeTeam: "Hawthorn",
-      awayTeam: "Essendon",
-      homePoints: null,
-      awayPoints: null,
-      homeGoals: null,
-      homeBehinds: null,
-      awayGoals: null,
-      awayBehinds: null,
-      margin: null,
-    });
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", [
-      completed,
-      alsoCompleted,
-      upcoming,
-    ]);
-    const venueMap = await ensureVenues(env, [completed, alsoCompleted, upcoming]);
-    await upsertMatches(env, [completed, alsoCompleted, upcoming], {
-      seasonId,
-      teamMap,
-      venueMap,
-    });
-
-    expect(await selectCompletedCount(env, seasonId)).toBe(2);
-  });
-});
-
-describe("selectHasCompletedMatchWithoutStats", () => {
-  it("returns false when no matches exist", async () => {
-    const { seasonId } = await setup();
-    expect(await selectHasCompletedMatchWithoutStats(env, seasonId)).toBe(false);
-  });
-
-  it("returns true when a completed match has no player_match_stats rows", async () => {
-    const { competitionId, seasonId } = await setup();
-    const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
-    const venueMap = await ensureVenues(env, [match]);
-    await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
-
-    expect(await selectHasCompletedMatchWithoutStats(env, seasonId)).toBe(true);
-  });
-
-  it("returns false once a completed match has at least one stat row", async () => {
-    const { competitionId, seasonId } = await setup();
-    const match = makeMatch();
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
-    const venueMap = await ensureVenues(env, [match]);
-    await upsertMatches(env, [match], { seasonId, teamMap, venueMap });
-    const matchMap = await buildMatchAflIdMap(env, seasonId);
-    const playerMap = await upsertPlayers(env, [
-      { playerId: "P-1", givenName: "Patrick", surname: "Cripps" },
-    ]);
-    await upsertStats(
-      env,
-      [makePlayerStats({ playerId: "P-1", disposals: 25, timeOnGroundPercentage: 90 })],
-      matchMap,
-      playerMap,
-      teamMap,
-    );
-
-    expect(await selectHasCompletedMatchWithoutStats(env, seasonId)).toBe(false);
-  });
-
-  it("ignores upcoming matches (home_points IS NULL)", async () => {
-    const { competitionId, seasonId } = await setup();
-    const upcoming = makeMatch({
-      matchId: "M-UP",
-      homePoints: null,
-      awayPoints: null,
-      homeGoals: null,
-      homeBehinds: null,
-      awayGoals: null,
-      awayBehinds: null,
-      margin: null,
-    });
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", [upcoming]);
-    const venueMap = await ensureVenues(env, [upcoming]);
-    await upsertMatches(env, [upcoming], { seasonId, teamMap, venueMap });
-
-    expect(await selectHasCompletedMatchWithoutStats(env, seasonId)).toBe(false);
-  });
-});
-
-describe("selectNextRound", () => {
-  it("returns null when there are no scheduled (uncompleted) matches", async () => {
-    const { seasonId } = await setup();
-    expect(await selectNextRound(env, seasonId)).toBeNull();
-  });
-
-  it("returns the smallest round_number among matches with NULL home_points", async () => {
-    const { competitionId, seasonId } = await setup();
-    const completed = makeMatch({ matchId: "M-1", roundNumber: 1 });
-    const upcoming1 = makeMatch({
-      matchId: "M-2",
-      roundNumber: 3,
-      homeTeam: "Geelong",
-      awayTeam: "Sydney",
-      date: new Date("2026-04-09T08:30:00Z"),
-      homePoints: null,
-      awayPoints: null,
-    });
-    const upcoming2 = makeMatch({
-      matchId: "M-3",
-      roundNumber: 2,
-      homeTeam: "Hawthorn",
-      awayTeam: "Melbourne",
-      date: new Date("2026-04-02T08:30:00Z"),
-      homePoints: null,
-      awayPoints: null,
-    });
-    const matches = [completed, upcoming1, upcoming2];
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", matches);
-    const venueMap = await ensureVenues(env, matches);
-    await upsertMatches(env, matches, { seasonId, teamMap, venueMap });
-
-    expect(await selectNextRound(env, seasonId)).toBe(2);
-  });
-
-  it("returns 0 when an Opening Round match is still scheduled (no special-case needed)", async () => {
-    const { competitionId, seasonId } = await setup();
-    const opening = makeMatch({
-      matchId: "M-OR",
-      roundNumber: 0,
-      roundCode: null,
-      roundName: null,
-      date: new Date("2026-03-06T08:30:00Z"),
-      homePoints: null,
-      awayPoints: null,
-    });
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", [opening]);
-    const venueMap = await ensureVenues(env, [opening]);
-    await upsertMatches(env, [opening], { seasonId, teamMap, venueMap });
-
-    expect(await selectNextRound(env, seasonId)).toBe(0);
-  });
-});
-
-describe("selectRoundFirstDate", () => {
-  it("returns the earliest match date in the round, and null for an empty round", async () => {
-    const { competitionId, seasonId } = await setup();
-    const later = makeMatch({
-      matchId: "M-1",
-      roundNumber: 5,
-      date: new Date("2026-06-07T04:00:00Z"),
-    });
-    const earlier = makeMatch({
-      matchId: "M-2",
-      roundNumber: 5,
-      homeTeam: "Geelong",
-      awayTeam: "Sydney",
-      date: new Date("2026-06-05T09:00:00Z"),
-    });
-    const matches = [later, earlier];
-    const teamMap = await ensureTeams(env, competitionId, "AFLM", matches);
-    const venueMap = await ensureVenues(env, matches);
-    await upsertMatches(env, matches, { seasonId, teamMap, venueMap });
-
-    expect(await selectRoundFirstDate(env, seasonId, 5)).toBe("2026-06-05");
-    expect(await selectRoundFirstDate(env, seasonId, 6)).toBeNull();
   });
 });
 

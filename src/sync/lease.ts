@@ -1,5 +1,23 @@
 import type { Env } from "../types";
 
+/** Minutes after which a held lease is stale and another operation may take it. */
+export const LEASE_TTL_MINUTES = 10;
+
+const LEASE_CUTOFF_SQL = `datetime('now', '-${LEASE_TTL_MINUTES} minutes')`;
+
+/**
+ * SQL condition that is true while `holder` owns the unexpired lease. Every
+ * statement that depends on lease ownership embeds this one definition.
+ *
+ * @param holder - SQL expression for the holder, such as a `?1` placeholder.
+ * @returns An `EXISTS (...)` condition.
+ * @example
+ * `UPDATE t SET x = 1 WHERE ${leaseHeldBy("?1")}`;
+ */
+export function leaseHeldBy(holder: string): string {
+  return `EXISTS (SELECT 1 FROM sync_lease WHERE id = 1 AND holder = ${holder} AND acquired_at >= ${LEASE_CUTOFF_SQL})`;
+}
+
 /**
  * Acquires the shared cron/admin operation lease when it is free or stale.
  *
@@ -10,7 +28,7 @@ import type { Env } from "../types";
 export async function acquireOperationLease(env: Env, holder: string): Promise<boolean> {
   const result = await env.DB.prepare(
     `UPDATE sync_lease SET holder = ?1, acquired_at = datetime('now')
-     WHERE id = 1 AND (holder IS NULL OR acquired_at < datetime('now', '-10 minutes'))`,
+     WHERE id = 1 AND (holder IS NULL OR acquired_at < ${LEASE_CUTOFF_SQL})`,
   )
     .bind(holder)
     .run();

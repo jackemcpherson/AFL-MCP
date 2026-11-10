@@ -5,6 +5,58 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] - 2026-11-10
+
+This release prepares the Worker for the 2027 season, which has no Opening
+Round. It also gives every lifecycle the Worker persists one owning module.
+`docs/state-machines.md` lists them. The `code` sandbox does not change.
+
+### Added in 5.1.0
+
+- The steady-state sync also covers each competition's next season, so a new
+  fixture, its lineups and its forecasts load before the opening match. The
+  provider names a season current only from its first bounce, so the 2027
+  opener would otherwise have had none of them. `matches` therefore holds
+  `Upcoming` rows for a season that has not started.
+- If the provider cannot name a competition's current season, the latest
+  stored season that has started stands in (`sync:season-fallback`), so a
+  newly listed season without round dates cannot halt every sync.
+
+### Changed in 5.1.0
+
+- The `schema` rounds note says Opening Round exists for AFLM 2024 to 2026
+  only. AFLM 2027 starts at Round 1.
+- fitzroy moves to 7.0.1, which renumbers AFL Tables rounds for an Opening
+  Round in 2024 to 2026 only.
+- The hourly coaching refresh follows the sync's current AFLM season, not the
+  calendar year, so it no longer polls a season that has not started.
+- `seasons.is_complete` is 1 when a season has matches and every one is
+  `Complete` or `Cancelled`. Migration `0046` recomputes it, so AFLM 2015,
+  VFL 2021 and VFLW 2021, each held open by a cancelled match, become
+  complete. A season no longer reads complete while its last match is live.
+- "Played" means `status = 'Complete'` everywhere (`src/lib/match-state.ts`).
+  PAV, weather, coverage, health and status no longer infer it from scores
+  or accept a NULL status.
+- A failed forecast fetch retries after an hour (then 2, 4, 8, 16 and 24),
+  not a day, and a match that is backing off no longer takes a fetch slot.
+- The cron's scheduled time decides which stages a tick runs, so a late
+  start cannot drop the hourly statistics, coaching and weather work.
+- A steady-state sync writes under `sync:steady:<competitions>`, so the cron
+  recovers its own stranded write across a default-season rollover. A marker
+  stranded by the previous Worker under the old name needs one manual
+  `resume`.
+- Repeating a completed identity repair whose write marker is still held now
+  fails until repeated with `resume`, as weather repair already did.
+- An operator-queued historical statistics request ends after one successful
+  fetch. Migration `0046` ends the ones already fetched.
+- `/mcp/admin/status` splits `statisticsDue` (scheduled) from the new
+  `statisticsAwaitingOperator`. Backfill results add `statsPending`, and an
+  approved statistics refresh adds `nextRetryAt`.
+
+### Removed in 5.1.0
+
+- Five unused completion helpers in `src/sync/upserts.ts`.
+
 ## [5.0.1] - 2026-10-17
 
 This patch corrects `schema` tool examples and notes from an external v5

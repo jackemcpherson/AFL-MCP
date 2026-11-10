@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { resolveStoredSeason } from "../../db/seasons";
 import { COMPETITION_CODES, type CompetitionCode } from "../../lib/competitions";
 import { batchRow, decodeRow } from "../../lib/decode";
+import { playedMatch } from "../../lib/match-state";
 import { type StatFieldCapabilities, statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
@@ -719,6 +720,9 @@ export function contractCoverage(): Record<CoverageCompetition, ContractCoverage
   return output;
 }
 
+/** Coverage is measured over played matches. */
+const PLAYED = playedMatch("m");
+
 const OBSERVED_STAT_COLUMNS = STAT_COLUMNS.filter(
   (column) => !["id", "match_id", "player_id", "team_id"].includes(column),
 );
@@ -755,10 +759,10 @@ async function queryCoachingObservation(
     };
   const row = await env.DB.prepare(
     `SELECT
-       2 * COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete') THEN m.id END) AS expected_assignments,
-       COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete')
+       2 * COUNT(DISTINCT CASE WHEN ${PLAYED} THEN m.id END) AS expected_assignments,
+       COUNT(DISTINCT CASE WHEN ${PLAYED}
          THEN CAST(mc.match_id AS TEXT) || ':' || CAST(mc.team_id AS TEXT) END) AS observed_assignments,
-       COUNT(DISTINCT CASE WHEN m.home_points IS NOT NULL AND m.away_points IS NOT NULL AND (m.status IS NULL OR m.status = 'Complete')
+       COUNT(DISTINCT CASE WHEN ${PLAYED}
          THEN CASE WHEN home_coach.match_id IS NOT NULL AND away_coach.match_id IS NOT NULL THEN m.id END END) AS matches_with_both_coaches
      FROM competitions c JOIN seasons s ON s.competition_id = c.id
      LEFT JOIN matches m ON m.season_id = s.id
@@ -900,14 +904,14 @@ async function queryObservation(
       seasonRow.id,
     ),
     env.DB.prepare(`SELECT COUNT(*) AS row_count,
-      COUNT(CASE WHEN status='Complete' THEN 1 END) AS eligible_completed,
-      COUNT(CASE WHEN status='Complete' AND EXISTS(SELECT 1 FROM player_match_stats p WHERE p.match_id=matches.id) THEN 1 END) AS matches_with_statistics
-      FROM matches WHERE season_id=?1`).bind(seasonRow.id),
+      COUNT(CASE WHEN ${PLAYED} THEN 1 END) AS eligible_completed,
+      COUNT(CASE WHEN ${PLAYED} AND EXISTS(SELECT 1 FROM player_match_stats p WHERE p.match_id=m.id) THEN 1 END) AS matches_with_statistics
+      FROM matches m WHERE m.season_id=?1`).bind(seasonRow.id),
     env.DB.prepare(`SELECT json_array_length(matches_json) AS provider_matches,observed_at
       FROM season_provider_inventory WHERE season_id=?1 AND provider='afl-api'`).bind(seasonRow.id),
     env.DB.prepare(`SELECT COUNT(CASE WHEN r.failures>0 THEN 1 END) AS failures,
       COUNT(CASE WHEN r.diagnostic IS NOT NULL THEN 1 END) AS unresolved,
-      COUNT(CASE WHEN r.next_retry_at <= ?2 THEN 1 END) AS overdue
+      COUNT(CASE WHEN r.next_retry_at <= ?2 AND r.origin='scheduled' THEN 1 END) AS overdue
       FROM match_stats_refresh r JOIN matches m ON m.id=r.match_id WHERE m.season_id=?1`).bind(
       seasonRow.id,
       new Date().toISOString(),

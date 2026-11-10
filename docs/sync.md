@@ -39,6 +39,19 @@ season for each competition.
 Backfills accept explicit season keys, including `2022-S6` and `2022-S7` for
 AFLW.
 
+Each competition syncs its current season, the latest one that has started,
+plus every later season. The provider only names a season current from its
+first bounce. The later seasons load a new fixture, its lineups and its
+forecasts before the opening match. The sync asks the provider for new
+seasons on hourly ticks. A later season that the database already holds with
+unsettled matches stays in scope on every tick.
+
+A fetch failure for a season that has not started logs under
+`sync:<competition>:upcoming`. It does not affect health.
+
+If the provider cannot name the current season, the latest stored season that
+has started stands in and the sync logs `sync:season-fallback`.
+
 1. Fetch the season inventory from `afl-api`. Store its raw snapshot separately
    from reviewed fixture corrections.
 2. Resolve the competition and season IDs. Preserve existing IDs and record the
@@ -56,7 +69,8 @@ AFLW.
 6. Queue recent completed matches for statistics refresh. Hourly passes fetch at
    most 20 due matches across competitions.
    Admin backfills queue their exact season and also fetch at most 20 matches
-   per pass.
+   per pass. Their result reports `statsPending`, the matches still queued,
+   so repeat the backfill until it reaches zero.
    Each match has persisted success, failure and retry checkpoints. Match-count
    increases do not gate corrections.
 7. Rebuild changed statistics' PAV seasons before clearing the public write
@@ -72,10 +86,16 @@ AFLW.
 
 Provider statistics failures retain successful match results and persist
 retries.
-Database failures retain the public write marker. The next scheduled sync
-resumes a marker left by its own identical operation scope and logs
-`sync:recovered`. Backfills and every other operation still require explicit
-recovery with the identical operation scope.
+Database failures retain the public write marker. A steady-state sync takes
+its name from its competitions (`sync:steady:AFLM,AFLW,VFL,VFLW`), not from
+the seasons it resolved. The next scheduled sync therefore resumes a marker
+left by an earlier tick, even when a default season rolled over in between.
+It logs `sync:recovered`. Backfills and every other operation still require
+explicit recovery with the identical operation scope.
+
+The cron passes its scheduled time to the sync, and that one instant decides
+which stages run. A tick that starts late still runs the hourly stages for
+its scheduled hour.
 
 ## Publication Inputs
 
@@ -131,9 +151,15 @@ date bounds and `timeformat=unixtime` for UTC epoch hourly timestamps. Distinct
 epochs preserve both repeated daylight-saving hours. Existing retry deadlines
 remain unchanged.
 
-Provider weather failures persist diagnostics and daily retry schedules.
-After the initial failure and three unsuccessful daily retries, observations
-remain unavailable.
+Provider weather failures persist diagnostics and a retry time in
+`weather_refresh_state`. `nextWeatherRetry` is the whole policy. A forecast
+retries after 1, 2, 4, 8 and 16 hours, then daily, and never gives up. A
+failed hour on match day therefore costs one refresh. An observation retries
+daily and remains unavailable after the initial failure and three
+unsuccessful retries.
+
+The needs-work queries skip a match that is waiting to retry or unavailable,
+so it never takes one of the 25 fetch slots.
 The authenticated `retry-weather` operation previews an exact match before
 scheduling another attempt.
 Database failures propagate and retain the public marker.
@@ -193,9 +219,9 @@ labels directly, no cross-competition normalisation.
 
 Two round-string columns on `matches`:
 
-- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024+,
-  `round_number = 0`), `Wildcard` (VFL before finals, through 2025), and a
-  finals name that varies by competition and era. AFLW 2024 is the
+- `round` is the long form: `Round 1` - `Round N`, `Opening Round` (AFLM 2024
+  to 2026 only, `round_number = 0`), `Wildcard` (VFL before finals, through
+  2025), and a finals name that varies by competition and era. AFLW 2024 is the
   exception for numbered rounds: the API labels them `Week 1` to `Week 10`,
   with `round_abbreviation` `Rd N` and `round_number` 1 to 10. AFLM used
   `Qualifying Final` and `Elimination Final` through 2014 and
@@ -285,8 +311,9 @@ vote. Brownlow votes are AFLM-only - the medal is not awarded for AFLW/VFL/VFLW.
 
 ## Match Coaches
 
-The hourly path may refresh AFL Tables match-coach facts for the active AFLM
-season while holding the existing sync lease. Successful checks recur every 24
+The hourly path may refresh AFL Tables match-coach facts while holding the
+existing sync lease. It uses the sync's current AFLM season, not the calendar
+year. Successful checks recur every 24
 hours. Incomplete or failed checks retry every three hours. Five-minute cron
 ticks do not fetch coach career pages again.
 The sync logs coaching failures and continues score, lineup, statistics,
@@ -368,12 +395,24 @@ inputs.
 
 ### Historical Statistics Queue
 
-The recent 30-day queue marks admitted fixtures as scheduled work without
-resetting existing retry deadlines. Those fixtures retain their full schedule
-from first observed completion, including day 30 and failure retries.
-Historical checkpoints default to operator work and remain available to
+`match_stats_refresh.origin` names who drives a queued match. The recent
+30-day queue marks admitted fixtures as `scheduled` without resetting existing
+retry deadlines. Those fixtures retain their full schedule from first observed
+completion, including day 30 and failure retries.
+Historical checkpoints default to `operator` work and remain available to
 exact-season and approved requests. They cannot consume the hourly refresh
 budget or trigger a historical import when scheduled writes resume.
+
+An operator request is one-off. A match more than 30 days old at first
+observation has no revisions left to follow. One successful fetch ends its
+schedule (`next_retry_at` NULL). `/mcp/admin/status` reports
+the two drivers separately: `statisticsDue` counts scheduled matches the cron
+will fetch, and `statisticsAwaitingOperator` counts operator requests.
+
+A successful fetch completes every pending operation entry for that match,
+whichever operation triggered it. An approved refresh reports `remaining` and
+`nextRetryAt`, the earliest time a pending match becomes due again after a
+failed fetch.
 
 ## Fenced Read Retries
 

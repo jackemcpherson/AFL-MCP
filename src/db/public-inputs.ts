@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { OperationConflictError } from "../admin/errors";
 import { decodeRow } from "../lib/decode";
+import { leaseHeldBy } from "../sync/lease";
 import type { Env } from "../types";
 
 /**
@@ -24,10 +25,7 @@ export async function beginPublicInputWrite(
 ): Promise<void> {
   const result = await env.DB.prepare(
     `UPDATE public_input_revision SET in_progress = 1, write_started_at = ?1, write_holder = ?2, write_operation = ?3
-     WHERE id = 1 AND in_progress = 0 AND EXISTS (
-       SELECT 1 FROM sync_lease WHERE id = 1 AND holder = ?2
-       AND acquired_at >= datetime('now', '-10 minutes')
-     )`,
+     WHERE id = 1 AND in_progress = 0 AND ${leaseHeldBy("?2")}`,
   )
     .bind(now.toISOString(), holder, operation)
     .run();
@@ -50,10 +48,7 @@ export async function beginPublicInputWrite(
 export async function finishPublicInputWrite(env: Env, holder: string): Promise<void> {
   const result = await env.DB.prepare(
     `UPDATE public_input_revision SET in_progress = 0, write_started_at = NULL, write_holder = NULL, write_operation = NULL
-     WHERE id = 1 AND write_holder = ?1 AND EXISTS (
-       SELECT 1 FROM sync_lease WHERE id = 1 AND holder = ?1
-       AND acquired_at >= datetime('now', '-10 minutes')
-     )`,
+     WHERE id = 1 AND write_holder = ?1 AND ${leaseHeldBy("?1")}`,
   )
     .bind(holder)
     .run();
@@ -81,9 +76,7 @@ export async function resumePublicInputWrite(
   operation: string,
 ): Promise<void> {
   const result = await env.DB.prepare(`UPDATE public_input_revision SET write_holder=?1
-    WHERE id=1 AND in_progress=1 AND write_operation=?2 AND EXISTS (
-      SELECT 1 FROM sync_lease WHERE id=1 AND holder=?1
-      AND acquired_at >= datetime('now', '-10 minutes'))`)
+    WHERE id=1 AND in_progress=1 AND write_operation=?2 AND ${leaseHeldBy("?1")}`)
     .bind(holder, operation)
     .run();
   if (result.meta.changes !== 1)
@@ -142,9 +135,7 @@ export async function findStrandedWrite(
  */
 export function publicInputWriteFence(env: Env, holder: string): D1PreparedStatement {
   return env.DB.prepare(`UPDATE public_input_revision SET in_progress=CASE
-    WHEN in_progress=1 AND write_holder=?1 AND EXISTS (
-      SELECT 1 FROM sync_lease WHERE id=1 AND holder=?1
-      AND acquired_at >= datetime('now', '-10 minutes')) THEN 1 ELSE -1 END
+    WHEN in_progress=1 AND write_holder=?1 AND ${leaseHeldBy("?1")} THEN 1 ELSE -1 END
     WHERE id=1`).bind(holder);
 }
 

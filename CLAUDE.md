@@ -13,6 +13,8 @@ For deeper context, read the appropriate doc:
 - [`docs/sync.md`](./docs/sync.md) — Single-cron orchestrator, `shouldRunNow`
   gate, PAV recalc, AFL season structure.
 - [`docs/schema.md`](./docs/schema.md) — D1 table reference.
+- [`docs/state-machines.md`](./docs/state-machines.md) — Every lifecycle the
+  Worker persists, its states, and the one module that owns its transitions.
 
 ## Commands
 
@@ -51,7 +53,8 @@ Never filter or group match data by round name or `round_number` alone — use
 date-based or total match-count comparisons. The season includes special
 rounds outside standard numeric ordering:
 
-- **Opening Round** before Round 1 (4-5 games, AFLM 2024+), stored as
+- **Opening Round** before Round 1 (2-5 games, AFLM 2024 to 2026 only; the
+  AFL dropped it for 2027), stored as
   `round = 'Opening Round'`, `round_abbreviation = 'OR'`, `round_number = 0`.
   The 2026 Opening Round had 5 games.
 - Numbered rounds: `round = 'Round N'`, `round_abbreviation = 'Rd N'`.
@@ -89,6 +92,11 @@ full pipeline.
 - `src/sandbox/executor.ts` — Dynamic Worker loader and result handling.
 - `src/sandbox/db-proxy.ts` — `DbProxy` read-only RPC bridge (re-exported
   from `src/index.ts`).
+- `src/db/operation.ts` — `runOperation`: the lease and public write marker
+  around every cron tick and admin operation. Do not call the lease or
+  marker primitives directly.
+- `src/lib/match-state.ts` — The played, cancelled and unsettled match
+  predicates. Never test `home_points` to decide whether a match finished.
 - `src/sync/sync.ts` — Sync orchestrator and `shouldRunNow` gate.
 - `src/sync/upserts.ts` — DB writes for the match-data sync pipeline (the
   weather stage writes `match_weather` itself from `src/weather/stage.ts`).

@@ -25,10 +25,11 @@ import { COMPETITION_CODES } from "./lib/competitions";
 import { decodeRow } from "./lib/decode";
 import { logError } from "./lib/errors";
 import { toSeasonSelector } from "./lib/schemas";
+import { playedMatch } from "./lib/match-state";
 import { handleMcpRequest } from "./mcp/protocol";
 import { decodeSyncRequest } from "./mcp/validation";
 import { auditNextSeason } from "./sync/audit";
-import { sync } from "./sync/sync";
+import { isHourlyTick, sync } from "./sync/sync";
 import type { Env } from "./types";
 
 /** Earliest season in the historical record. */
@@ -67,7 +68,7 @@ export default {
       }
       const [freshness, lastSyncRow, lastCriticalRow] = await Promise.all([
         env.DB.prepare(
-          "SELECT MAX(date) as latest_match FROM matches WHERE home_points IS NOT NULL",
+          `SELECT MAX(m.date) as latest_match FROM matches m WHERE ${playedMatch("m")}`,
         ).first(),
         env.DB.prepare(
           `SELECT timestamp, type, rows_affected, error FROM sync_log
@@ -149,11 +150,13 @@ export default {
     // An exception before the per-competition try/catch (e.g. in the
     // shouldRunNow gate) was previously invisible — waitUntil swallowed
     // it. Record a sync:fatal row so /mcp/health turns unhealthy (OPS-02).
+    // One clock for the whole tick: the scheduled time decides which stages
+    // run, so a late start cannot drop the hourly work.
+    const tick = new Date(event.scheduledTime);
     ctx.waitUntil(
-      sync(env, COMPETITION_CODES)
+      sync(env, COMPETITION_CODES, { now: tick })
         .then(async () => {
-          const now = new Date(event.scheduledTime);
-          if (now.getUTCMinutes() === 0) await auditNextSeason(env, now);
+          if (isHourlyTick(tick)) await auditNextSeason(env, tick);
         })
         .catch(async (err) => {
           logError("sync_fatal", err);
