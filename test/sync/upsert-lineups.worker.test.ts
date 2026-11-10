@@ -6,6 +6,7 @@ import {
   ensureSeason,
   ensureTeams,
   ensureVenues,
+  lineupSyncSupported,
   unionPlayers,
   upsertLineups,
   upsertMatches,
@@ -75,19 +76,73 @@ describe("atomic lineup replacement", () => {
   it("rolls back deletion if replacement insertion fails", async () => {
     const { matchMap, teamMap } = await setup();
     const initial = completeLineup();
-    const players = await upsertPlayers(env, unionPlayers([], [initial]));
+    const replacement = {
+      ...completeLineup(),
+      homePlayers: [makeLineupPlayer({ playerId: "NEW" }), ...initial.homePlayers.slice(1)],
+    };
+    const players = await upsertPlayers(env, unionPlayers([], [initial, replacement]));
     await upsertLineups(env, [initial], matchMap, players, teamMap);
     await env.DB.prepare(
       "CREATE TRIGGER fail_lineup BEFORE INSERT ON match_lineups BEGIN SELECT RAISE(ABORT,'injected'); END",
     ).run();
     try {
-      await expect(upsertLineups(env, [initial], matchMap, players, teamMap)).rejects.toThrow();
+      await expect(upsertLineups(env, [replacement], matchMap, players, teamMap)).rejects.toThrow();
       expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM match_lineups").first()).toEqual({
         n: 46,
       });
     } finally {
       await env.DB.prepare("DROP TRIGGER fail_lineup").run();
     }
+  });
+});
+
+describe("unchanged and rejected lineups", () => {
+  it("skips an identical snapshot without bumping the public revision", async () => {
+    const { matchMap, teamMap } = await setup();
+    const lineup = completeLineup();
+    const players = await upsertPlayers(env, unionPlayers([], [lineup]));
+    expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(46);
+    const revision = () =>
+      env.DB.prepare("SELECT revision FROM public_input_revision").first("revision");
+    const before = await revision();
+    const observed = await env.DB.prepare("SELECT lineups_observed_at FROM matches").first(
+      "lineups_observed_at",
+    );
+    expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(0);
+    expect(await revision()).toBe(before);
+    expect(
+      await env.DB.prepare("SELECT lineups_observed_at FROM matches").first("lineups_observed_at"),
+    ).toBe(observed);
+  });
+
+  it("restamps the observation time of an identical snapshot after a fixture change cleared it", async () => {
+    const { matchMap, teamMap } = await setup();
+    const lineup = completeLineup();
+    const players = await upsertPlayers(env, unionPlayers([], [lineup]));
+    await upsertLineups(env, [lineup], matchMap, players, teamMap);
+    await env.DB.prepare("UPDATE matches SET lineups_observed_at = NULL").run();
+    expect(await upsertLineups(env, [lineup], matchMap, players, teamMap)).toBe(0);
+    expect(
+      await env.DB.prepare("SELECT lineups_observed_at FROM matches").first("lineups_observed_at"),
+    ).toEqual(expect.any(String));
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM match_lineups").first("n")).toBe(46);
+  });
+
+  it("logs a rejected lineup once per distinct payload", async () => {
+    const { matchMap, teamMap } = await setup();
+    const base = completeLineup();
+    const partial = { ...base, homePlayers: base.homePlayers.slice(1) };
+    const shorter = { ...base, homePlayers: base.homePlayers.slice(2) };
+    const players = await upsertPlayers(env, unionPlayers([], [base]));
+    await upsertLineups(env, [partial], matchMap, players, teamMap);
+    await upsertLineups(env, [partial], matchMap, players, teamMap);
+    const rejections = () =>
+      env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM sync_log WHERE type = 'sync:lineups:invalid'",
+      ).first("n");
+    expect(await rejections()).toBe(1);
+    await upsertLineups(env, [shorter], matchMap, players, teamMap);
+    expect(await rejections()).toBe(2);
   });
 });
 
@@ -162,4 +217,11 @@ it("accepts season-seven rosters only when every player-team appearance agrees",
   expect(
     await upsertLineups(env, [{ ...lineup, seasonKey: "2022-S6" }], matchMap, players, teamMap),
   ).toBe(0);
+});
+
+it("imports provider lineups from 2023, plus the verified AFLW 2022 Season 7", () => {
+  expect(lineupSyncSupported("AFLM", "2022")).toBe(false);
+  expect(lineupSyncSupported("AFLW", "2022-S6")).toBe(false);
+  expect(lineupSyncSupported("AFLW", "2022-S7")).toBe(true);
+  expect(lineupSyncSupported("AFLM", "2023")).toBe(true);
 });

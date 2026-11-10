@@ -278,3 +278,22 @@ it("retains a scheduled day-30 refresh after delayed completion observation", as
     await env.DB.prepare("SELECT next_retry_at FROM match_stats_refresh").first("next_retry_at"),
   ).toBeNull();
 });
+
+it("does not rewrite already scheduled queue rows on later ticks", async () => {
+  await seed();
+  const now = new Date("2026-09-02T00:00:00Z");
+  await queueRecentStatsRefresh(env, now);
+  await env.DB.prepare(
+    "CREATE TRIGGER count_queue_updates AFTER UPDATE ON match_stats_refresh BEGIN INSERT INTO sync_log(timestamp,type) VALUES ('t','queue-update'); END",
+  ).run();
+  try {
+    await queueRecentStatsRefresh(env, now);
+    expect(
+      await env.DB.prepare("SELECT COUNT(*) AS n FROM sync_log WHERE type='queue-update'").first(
+        "n",
+      ),
+    ).toBe(0);
+  } finally {
+    await env.DB.prepare("DROP TRIGGER count_queue_updates").run();
+  }
+});

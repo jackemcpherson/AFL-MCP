@@ -1,5 +1,6 @@
 -- AFL-MCP D1 schema and reference seeds (SQLite).
--- Verified from migrations 0027_baseline.sql on 2026-10-04.
+-- Consolidated from 0027_baseline.sql and later migrations.
+-- `bun run check:schema` verifies parity with src/db/migrations/.
 
 CREATE TABLE coach_backfill_progress (
   provider TEXT NOT NULL CHECK (provider IN ('afl-tables', 'footywire')),
@@ -302,6 +303,8 @@ CREATE TABLE sync_log (
   rows_affected INTEGER DEFAULT 0,
   error TEXT
 );
+CREATE INDEX idx_sync_log_type_timestamp ON sync_log(type, timestamp);
+CREATE INDEX idx_sync_log_timestamp ON sync_log(timestamp);
 
 CREATE TABLE teams (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1093,10 +1096,13 @@ BEGIN
   UPDATE public_input_revision SET revision=revision+1 WHERE id=1;
 END;
 
+-- PAV reads played matches only, so only a row that was or becomes played
+-- queues its season.
 CREATE TRIGGER pav_matches_update AFTER UPDATE OF season_id,home_team_id,away_team_id,home_points,away_points,status ON matches
-WHEN OLD.season_id IS NOT NEW.season_id OR OLD.home_team_id IS NOT NEW.home_team_id
+WHEN (OLD.status = 'Complete' OR NEW.status = 'Complete') AND (
+ OLD.season_id IS NOT NEW.season_id OR OLD.home_team_id IS NOT NEW.home_team_id
  OR OLD.away_team_id IS NOT NEW.away_team_id OR OLD.home_points IS NOT NEW.home_points
- OR OLD.away_points IS NOT NEW.away_points OR OLD.status IS NOT NEW.status
+ OR OLD.away_points IS NOT NEW.away_points OR OLD.status IS NOT NEW.status)
 BEGIN
   INSERT INTO pav_rebuild_queue(season_id,reason)
   SELECT s.id,'statistics' FROM seasons s JOIN competitions c ON c.id=s.competition_id

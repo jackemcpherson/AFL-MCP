@@ -4,7 +4,7 @@ import { type Decoder, strictDecoder } from "../lib/decode";
 import { sha256Hex } from "../lib/hash";
 import { booleanDefault, Sha256HexSchema } from "../lib/schemas";
 import type { Env } from "../types";
-import { OperationConflictError } from "./errors";
+import { OperationConflictError, OperationRequestError } from "./errors";
 
 const BEARS_LAST_SEASON = 1996;
 
@@ -81,7 +81,7 @@ export async function reconcileBearsIdentity(
         return { busy: false, report, manifestDigest: digest, matchIds };
       }
       if (options.resume && !options.manifestDigest)
-        throw new OperationConflictError({
+        throw new OperationRequestError({
           message: "Bears recovery requires the approved digest",
         });
       if (!options.resume && options.manifestDigest !== digest)
@@ -192,7 +192,7 @@ async function findClubIds(
 }
 
 async function countAffected(env: Env, lionsId: number): Promise<BearsRepairReport> {
-  const [matches, sides, stats, lineups, pav, coaches, observations] = await Promise.all([
+  const [matches, stats, lineups, pav, coaches, observations] = await Promise.all([
     env.DB.prepare(
       `SELECT COUNT(*) AS n FROM matches m JOIN seasons s ON s.id = m.season_id
        JOIN competitions c ON c.id = s.competition_id WHERE c.code = 'AFLM' AND s.year <= ?1
@@ -200,22 +200,15 @@ async function countAffected(env: Env, lionsId: number): Promise<BearsRepairRepo
     )
       .bind(BEARS_LAST_SEASON, lionsId)
       .first<{ n: number }>(),
-    env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM matches m JOIN seasons s ON s.id = m.season_id
-       JOIN competitions c ON c.id = s.competition_id WHERE c.code = 'AFLM' AND s.year <= ?1
-       AND (m.home_team_id = ?2 OR m.away_team_id = ?2)`,
-    )
-      .bind(BEARS_LAST_SEASON, lionsId)
-      .first<{ n: number }>(),
-    countReferences(env, "player_match_stats", lionsId, "match_id"),
-    countReferences(env, "match_lineups", lionsId, "match_id"),
+    countReferences(env, "player_match_stats", lionsId),
+    countReferences(env, "match_lineups", lionsId),
     env.DB.prepare(
       `SELECT COUNT(*) AS n FROM player_season_pav p JOIN seasons s ON s.id = p.season_id
        JOIN competitions c ON c.id = s.competition_id WHERE c.code = 'AFLM' AND s.year <= ?1 AND p.team_id = ?2`,
     )
       .bind(BEARS_LAST_SEASON, lionsId)
       .first<{ n: number }>(),
-    countReferences(env, "match_coaches", lionsId, "match_id"),
+    countReferences(env, "match_coaches", lionsId),
     env.DB.prepare(
       `SELECT COUNT(*) AS n FROM coach_observations o JOIN matches m ON m.id = o.match_id
        JOIN seasons s ON s.id = m.season_id JOIN competitions c ON c.id = s.competition_id
@@ -227,8 +220,10 @@ async function countAffected(env: Env, lionsId: number): Promise<BearsRepairRepo
   return {
     dryRun: true,
     competition: "AFLM",
+    // A club never plays itself, so each affected match has one Lions side.
+    // `matchSides` is kept in the response shape and equals `affectedMatches`.
     affectedMatches: matches?.n ?? 0,
-    matchSides: sides?.n ?? 0,
+    matchSides: matches?.n ?? 0,
     playerStats: stats,
     lineups,
     pavRows: pav?.n ?? 0,
@@ -241,10 +236,9 @@ async function countReferences(
   env: Env,
   table: "player_match_stats" | "match_lineups" | "match_coaches",
   teamId: number,
-  matchColumn: "match_id",
 ): Promise<number> {
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM ${table} r JOIN matches m ON m.id = r.${matchColumn}
+    `SELECT COUNT(*) AS n FROM ${table} r JOIN matches m ON m.id = r.match_id
      JOIN seasons s ON s.id = m.season_id JOIN competitions c ON c.id = s.competition_id
      WHERE c.code = 'AFLM' AND s.year <= ?1 AND r.team_id = ?2`,
   )

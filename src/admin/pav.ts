@@ -8,7 +8,7 @@ import { sha256Hex } from "../lib/hash";
 import { booleanDefault, SeasonSelectorSchema, Sha256HexSchema } from "../lib/schemas";
 import { calculatePav } from "../sync/pav";
 import type { Env } from "../types";
-import { OperationConflictError } from "./errors";
+import { OperationConflictError, OperationRequestError } from "./errors";
 
 /** One reviewed competition-season replacement; no implicit calendar-year scope. */
 export const PavRepairRequestSchema: Schema.Struct<{
@@ -52,10 +52,11 @@ export interface PavRepairResult {
  * @param env - Worker bindings.
  * @param request - Exact season and approved preview digest.
  * @returns Input revision and scope preview, or replaced row count.
- * @throws When the preview is stale, recovery scope differs, or D1 fails.
-
+ * @throws {OperationRequestError} When recovery is requested without a digest.
+ * @throws {OperationConflictError} When the preview is stale or recovery scope differs.
  * @example
- * await repairPav(env, Result.getOrThrow(decodePavRepairRequest(body))); */
+ * await repairPav(env, Result.getOrThrow(decodePavRepairRequest(body)));
+ */
 export async function repairPav(env: Env, request: PavRepairRequest): Promise<PavRepairResult> {
   return runOperation<PavRepairResult>(
     env,
@@ -80,7 +81,7 @@ export async function repairPav(env: Env, request: PavRepairRequest): Promise<Pa
         return { busy: false, dryRun: true, ...preview, manifestDigest: digest };
       }
       if (request.resume && !request.manifestDigest)
-        throw new OperationConflictError({
+        throw new OperationRequestError({
           message: "Recovery requires the approved preview digest",
         });
       if (!request.resume && request.manifestDigest !== digest)

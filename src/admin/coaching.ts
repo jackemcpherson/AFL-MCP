@@ -4,7 +4,7 @@ import { Effect, Schema } from "effect";
 import { runOperation } from "../db/operation";
 import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 import { runFitzroy } from "../lib/fitzroy";
-import { type Decoder, looseDecoder } from "../lib/decode";
+import { type Decoder, strictDecoder } from "../lib/decode";
 import {
   booleanDefault,
   IsoDateSchema,
@@ -14,6 +14,7 @@ import {
 import { normaliseTeamForMatch } from "../lib/normalise";
 import { logSync } from "../sync/log";
 import type { Env } from "../types";
+import { MIN_COACHING_YEAR } from "../lib/coaching-queries";
 
 type CoachProvider = "afl-tables" | "footywire";
 
@@ -25,7 +26,16 @@ const CoachingSourceErrorBase: TaggedErrorBase<
   message: Schema.String,
 });
 
-/** A coaching provider fetch failed before any database mutation. */
+/**
+ * A coaching provider fetch failed.
+ *
+ * Thrown before any coaching fact is written. A non-dry run first records the
+ * failure as a diagnostic, a failed import page and a sync log row, so callers
+ * treat it as a completed, failed attempt rather than a partial import.
+ *
+ * @example
+ * throw new CoachingSourceError({ message: "coaching source fetch failed" });
+ */
 class CoachingSourceError extends CoachingSourceErrorBase {}
 
 /** One row of {@link MATCH_PROJECTION}. */
@@ -165,8 +175,12 @@ export async function ingestMatchCoachResult(
       row.coach_id,
     ]),
   );
-  const coaches = new Map<string, string>();
+  const coaches = new Set<string>();
+  // Every write, diagnostics included, runs in ordered batches of 100 below.
   const writes: D1PreparedStatement[] = [];
+  const diagnose = (reason: string, url: string): void => {
+    if (!dryRun) writes.push(diagnosticStatement(env, season, source, reason, url, retrievedAt));
+  };
   let resolved = 0;
   let unresolved = 0;
   let conflicts = 0;
@@ -187,56 +201,24 @@ export async function ingestMatchCoachResult(
       assignment.source !== source
     ) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "invalid-scope",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("invalid-scope", assignment.matchUrl);
       continue;
     }
     const candidate = resolveMatch(seasonMatches, matchCrosswalk, assignment);
     if (candidate.status === "ambiguous") {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "ambiguous-match",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("ambiguous-match", assignment.matchUrl);
       continue;
     }
     if (!candidate.match) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "unresolved-match",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("unresolved-match", assignment.matchUrl);
       continue;
     }
     const match = candidate.match;
     if (!matchesEvidence(match, assignment, false)) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "score-mismatch",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("score-mismatch", assignment.matchUrl);
       continue;
     }
     const teamName = normaliseTeamForMatch(assignment.team, "AFLM", season);
@@ -249,15 +231,7 @@ export async function ingestMatchCoachResult(
     const validTeam = teamId === null ? null : { id: teamId };
     if (!validTeam || match.home_competition_id !== match.away_competition_id) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "invalid-participant",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("invalid-participant", assignment.matchUrl);
       continue;
     }
 
@@ -267,15 +241,7 @@ export async function ingestMatchCoachResult(
     const identity = coachIdentities.get(assignment.coachId);
     if (identity && identity.coach_id !== assignment.coachId && identity.verified !== 1) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "unverified-identity",
-          assignment.coachUrl,
-          retrievedAt,
-        );
+      diagnose("unverified-identity", assignment.coachUrl);
       continue;
     }
     planned.push({ assignment, match, teamId: validTeam.id });
@@ -285,15 +251,7 @@ export async function ingestMatchCoachResult(
     const key = `${match.id}:${teamId}`;
     if (duplicateKeys.has(key)) {
       unresolved++;
-      if (!dryRun)
-        await writeDiagnostic(
-          env,
-          season,
-          source,
-          "duplicate-assignment",
-          assignment.matchUrl,
-          retrievedAt,
-        );
+      diagnose("duplicate-assignment", assignment.matchUrl);
       continue;
     }
     resolved++;
@@ -304,10 +262,11 @@ export async function ingestMatchCoachResult(
     if (source === "footywire" && existingAssignment && existingAssignment !== canonicalId)
       conflicts++;
     if (dryRun) continue;
-    let coachId = coaches.get(assignment.coachId);
-    if (!coachId) {
-      coachId = await ensureCoach(env, assignment, source, retrievedAt);
-      coaches.set(assignment.coachId, coachId);
+    const coachId = canonicalId;
+    if (!coaches.has(assignment.coachId)) {
+      // Coach rows precede the observations that reference them in `writes`.
+      writes.push(...coachStatements(env, assignment, source, coachId, retrievedAt));
+      coaches.add(assignment.coachId);
     }
     writes.push(buildObservation(env, assignment, source, coachId, match.id, teamId, retrievedAt));
     if (
@@ -347,19 +306,17 @@ export async function ingestMatchCoachResult(
     );
   }
 
-  for (let offset = 0; offset < writes.length; offset += 100) {
-    const results = await env.DB.batch(writes.slice(offset, offset + 100));
-    changed += results.reduce((sum, result) => sum + result.results.length, 0);
-  }
+  changed += await runInBatches(env, writes);
 
-  if (
-    !dryRun &&
-    source === "afl-tables" &&
+  // A full, failure-free and fully resolved source cycle. Only this may
+  // remove assignments, mark the season successful and close diagnostics.
+  const complete =
     !result.batch &&
     result.completeness.complete &&
     result.completeness.failures.length === 0 &&
-    unresolved === 0
-  ) {
+    unresolved === 0;
+
+  if (!dryRun && source === "afl-tables" && complete) {
     const existing = await env.DB.prepare(
       `SELECT mc.match_id, mc.team_id
        FROM match_coaches mc
@@ -377,73 +334,52 @@ export async function ingestMatchCoachResult(
           "DELETE FROM match_coaches WHERE match_id = ?1 AND team_id = ?2 RETURNING match_id",
         ).bind(row.match_id, row.team_id),
       );
-    for (let offset = 0; offset < removals.length; offset += 100) {
-      const batch = await env.DB.batch(removals.slice(offset, offset + 100));
-      changed += batch.reduce((total, item) => total + item.results.length, 0);
-    }
+    changed += await runInBatches(env, removals);
   }
 
   if (!dryRun) {
-    for (const failure of result.completeness.failures) {
-      await writeDiagnostic(
-        env,
-        season,
-        source,
-        failure.reason.slice(0, 180),
-        failure.url,
-        retrievedAt,
-        failure.scope,
-      );
-    }
-    await env.DB.prepare(
-      `INSERT INTO coach_import_pages (provider, season, scope, status, last_checked_at, last_success_at, failure_count)
+    const closing = [
+      ...result.completeness.failures.map((failure) =>
+        diagnosticStatement(
+          env,
+          season,
+          source,
+          failure.reason.slice(0, 180),
+          failure.url,
+          retrievedAt,
+          failure.scope,
+        ),
+      ),
+      env.DB.prepare(
+        `INSERT INTO coach_import_pages (provider, season, scope, status, last_checked_at, last_success_at, failure_count)
        VALUES (?1, ?2, 'season', ?3, ?4, ?5, ?6)
        ON CONFLICT (provider, season, scope) DO UPDATE SET
          status = excluded.status, last_checked_at = excluded.last_checked_at,
          last_success_at = COALESCE(excluded.last_success_at, coach_import_pages.last_success_at),
          failure_count = CASE WHEN excluded.status = 'success' THEN 0 ELSE coach_import_pages.failure_count + 1 END`,
-    )
-      .bind(
+      ).bind(
         source,
         season,
-        !result.batch &&
-          result.completeness.complete &&
-          result.completeness.failures.length === 0 &&
-          unresolved === 0
-          ? "success"
-          : "partial",
+        complete ? "success" : "partial",
         retrievedAt,
-        !result.batch &&
-          result.completeness.complete &&
-          result.completeness.failures.length === 0 &&
-          unresolved === 0
-          ? retrievedAt
-          : null,
+        complete ? retrievedAt : null,
         result.completeness.failures.length + unresolved,
-      )
-      .run();
-    if (
-      !result.batch &&
-      result.completeness.complete &&
-      result.completeness.failures.length === 0 &&
-      unresolved === 0
-    ) {
-      await env.DB.prepare(
-        "UPDATE coach_import_diagnostics SET resolved_at = ?1 WHERE provider = ?2 AND season = ?3 AND resolved_at IS NULL",
-      )
-        .bind(retrievedAt, source, season)
-        .run();
-    }
+      ),
+      ...(complete
+        ? [
+            env.DB.prepare(
+              "UPDATE coach_import_diagnostics SET resolved_at = ?1 WHERE provider = ?2 AND season = ?3 AND resolved_at IS NULL",
+            ).bind(retrievedAt, source, season),
+          ]
+        : []),
+    ];
+    await runInBatches(env, closing);
   }
   return {
     season,
     source,
     dryRun,
-    complete:
-      !result.batch &&
-      result.completeness.complete &&
-      result.completeness.failures.length === 0 &&
-      unresolved === 0,
+    complete,
     assignments: result.assignments.length,
     resolved,
     unresolved,
@@ -454,14 +390,29 @@ export async function ingestMatchCoachResult(
 }
 
 /**
+ * Outcome of a backfill-coaches call. `busy` alone means another operation
+ * holds the lease. `sourceFailed` means the provider fetch failed: the
+ * failure is recorded and the public write marker is cleared.
+ */
+export interface CoachingBackfillResult {
+  readonly busy: boolean;
+  readonly sourceFailed?: boolean;
+  readonly summary?: CoachingImportSummary;
+}
+
+/**
  * Run the authenticated one-season coaching operation under the shared lease.
  *
  * @param env - Worker bindings.
  * @param season - AFLM season to fetch.
  * @param source - Primary AFL Tables or comparison FootyWire source.
  * @param dryRun - Whether to avoid persistent import writes.
- * @returns Whether the lease was busy and, when acquired, the import summary.
- * @throws If the source or D1 operation fails.
+ * @param resume - Take over the stranded write marker of an interrupted run
+ *   of this same source and season.
+ * @returns Whether the lease was busy or the source failed and, otherwise,
+ *   the import summary.
+ * @throws If a D1 operation fails. The write marker then stays stranded for
+ *   an explicit resume.
  * @example
  * await backfillCoaches(env, 2024, "afl-tables", true);
  */
@@ -471,15 +422,22 @@ export async function backfillCoaches(
   source: CoachProvider,
   dryRun: boolean,
   resume = false,
-): Promise<{ readonly busy: boolean; readonly summary?: CoachingImportSummary }> {
-  return runOperation<{ readonly busy: boolean; readonly summary?: CoachingImportSummary }>(
+): Promise<CoachingBackfillResult> {
+  return runOperation<CoachingBackfillResult>(
     env,
     () => ({ busy: true }),
     async (operation) => {
       const writer = dryRun
         ? env
         : await operation.write(`coaching:${source}:${season}`, { resume });
-      return { busy: false, summary: await runCoachBatch(writer, season, source, dryRun) };
+      try {
+        return { busy: false, summary: await runCoachBatch(writer, season, source, dryRun) };
+      } catch (error) {
+        // The failure is already recorded and no fact was written, so
+        // returning lets runOperation clear the marker instead of stranding it.
+        if (error instanceof CoachingSourceError) return { busy: false, sourceFailed: true };
+        throw error;
+      }
     },
   );
 }
@@ -580,8 +538,12 @@ async function runCoachBatch(
       )
         .bind(source, season, cursor, JSON.stringify(assignments), now)
         .run();
-      for (const failure of fetched.data.completeness.failures)
-        await writeDiagnostic(env, season, source, failure.reason, failure.url, now, failure.scope);
+      await runInBatches(
+        env,
+        fetched.data.completeness.failures.map((failure) =>
+          diagnosticStatement(env, season, source, failure.reason, failure.url, now, failure.scope),
+        ),
+      );
     }
     // A page batch stages source evidence. It cannot authorize season-wide removals.
     return {
@@ -628,7 +590,7 @@ const StoredCoachAssignmentsSchema = Schema.fromJsonString(
   Schema.Array(
     Schema.Struct({
       competition: Schema.Literal("AFLM"),
-      season: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1990)),
+      season: Schema.Int.check(Schema.isGreaterThanOrEqualTo(MIN_COACHING_YEAR)),
       team: NonEmptyStringSchema,
       coachId: NonEmptyStringSchema,
       coachName: NonEmptyStringSchema,
@@ -737,34 +699,36 @@ function resolveMatch(
   return verified[0] ? { status: "found", match: verified[0] } : { status: "none" };
 }
 
-async function ensureCoach(
+/**
+ * The upserts that make a coach and its provider identity exist.
+ *
+ * @param env - Worker bindings.
+ * @param assignment - Source assignment naming the coach.
+ * @param source - Provider of the assignment.
+ * @param coachId - Canonical coach id: the verified mapping, else the provider id.
+ * @param now - Import timestamp.
+ * @returns The coach upsert, then the provider identity insert.
+ */
+function coachStatements(
   env: Env,
   assignment: MatchCoachAssignment,
   source: CoachProvider,
+  coachId: string,
   now: string,
-): Promise<string> {
-  const mapping = await env.DB.prepare(
-    "SELECT coach_id FROM coach_external_ids WHERE provider = ?1 AND external_coach_id = ?2 AND verified = 1",
-  )
-    .bind(source, assignment.coachId)
-    .first<{ coach_id: string }>();
-  const internalId = mapping?.coach_id ?? assignment.coachId;
+): D1PreparedStatement[] {
   const insert =
     source === "afl-tables"
       ? `INSERT INTO coaches (id, display_name, profile_url, created_at) VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, profile_url = excluded.profile_url
        WHERE coaches.display_name IS NOT excluded.display_name OR coaches.profile_url IS NOT excluded.profile_url`
       : "INSERT INTO coaches (id, display_name, profile_url, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (id) DO NOTHING";
-  await env.DB.prepare(insert)
-    .bind(internalId, assignment.coachName, assignment.coachUrl, now)
-    .run();
-  await env.DB.prepare(
-    `INSERT INTO coach_external_ids (provider, external_coach_id, coach_id, display_name, profile_url)
+  return [
+    env.DB.prepare(insert).bind(coachId, assignment.coachName, assignment.coachUrl, now),
+    env.DB.prepare(
+      `INSERT INTO coach_external_ids (provider, external_coach_id, coach_id, display_name, profile_url)
      VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (provider, external_coach_id) DO NOTHING`,
-  )
-    .bind(source, assignment.coachId, internalId, assignment.coachName, assignment.coachUrl)
-    .run();
-  return internalId;
+    ).bind(source, assignment.coachId, coachId, assignment.coachName, assignment.coachUrl),
+  ];
 }
 
 function buildObservation(
@@ -804,7 +768,19 @@ function buildObservation(
   );
 }
 
-async function writeDiagnostic(
+/**
+ * Record one import diagnostic, keeping the first copy of a repeated one.
+ *
+ * @param env - Worker bindings.
+ * @param season - AFLM season.
+ * @param source - Provider.
+ * @param reason - Bounded diagnostic reason.
+ * @param url - Source URL the diagnostic refers to.
+ * @param now - Import timestamp.
+ * @param scope - Import scope, `season` or a `coach:` page.
+ * @returns The insert statement.
+ */
+function diagnosticStatement(
   env: Env,
   season: number,
   source: CoachProvider,
@@ -812,24 +788,41 @@ async function writeDiagnostic(
   url: string,
   now: string,
   scope = "season",
-): Promise<void> {
-  await env.DB.prepare(
+): D1PreparedStatement {
+  return env.DB.prepare(
     "INSERT OR IGNORE INTO coach_import_diagnostics (provider, season, scope, source_url, reason, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-  )
-    .bind(source, season, scope, url, reason, now)
-    .run();
+  ).bind(source, season, scope, url, reason, now);
+}
+
+/** Most statements sent in one D1 batch. */
+const WRITE_BATCH_SIZE = 100;
+
+/**
+ * Run statements in order, in batches of {@link WRITE_BATCH_SIZE}.
+ *
+ * @param env - Worker bindings.
+ * @param statements - Statements to run.
+ * @returns The rows each statement returned, summed.
+ */
+async function runInBatches(env: Env, statements: readonly D1PreparedStatement[]): Promise<number> {
+  let returned = 0;
+  for (let offset = 0; offset < statements.length; offset += WRITE_BATCH_SIZE) {
+    const results = await env.DB.batch(statements.slice(offset, offset + WRITE_BATCH_SIZE));
+    returned += results.reduce((sum, result) => sum + result.results.length, 0);
+  }
+  return returned;
 }
 
 async function recordSourceFailure(env: Env, season: number, source: CoachProvider, now: string) {
-  await writeDiagnostic(env, season, source, "source-fetch-failed", "", now);
-  await env.DB.prepare(
-    `INSERT INTO coach_import_pages (provider, season, scope, status, last_checked_at, failure_count)
+  await env.DB.batch([
+    diagnosticStatement(env, season, source, "source-fetch-failed", "", now),
+    env.DB.prepare(
+      `INSERT INTO coach_import_pages (provider, season, scope, status, last_checked_at, failure_count)
      VALUES (?1, ?2, 'season', 'failed', ?3, 1)
      ON CONFLICT (provider, season, scope) DO UPDATE SET status = 'failed',
        last_checked_at = excluded.last_checked_at, failure_count = coach_import_pages.failure_count + 1`,
-  )
-    .bind(source, season, now)
-    .run();
+    ).bind(source, season, now),
+  ]);
   await logSync(env, `sync:${source}:coaches`, 0, "coaching source fetch failed");
 }
 
@@ -856,7 +849,7 @@ export const CoachingBackfillRequestSchema: Schema.Struct<{
 /** One-season coaching backfill request shape. */
 export type CoachingBackfillRequest = typeof CoachingBackfillRequestSchema.Type;
 
-/** Decode a coaching backfill body, ignoring unknown keys. */
-export const decodeCoachingBackfillRequest: Decoder<CoachingBackfillRequest> = looseDecoder(
+/** Decode a coaching backfill body, rejecting unknown keys. */
+export const decodeCoachingBackfillRequest: Decoder<CoachingBackfillRequest> = strictDecoder(
   CoachingBackfillRequestSchema,
 );

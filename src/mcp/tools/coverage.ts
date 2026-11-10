@@ -1,8 +1,14 @@
 import { Schema } from "effect";
+import {
+  MIN_COACHING_YEAR,
+  SEASON_COACHING_CONFLICTS_SQL,
+  SEASON_UNRESOLVED_COACH_JOINS_SQL,
+} from "../../lib/coaching-queries";
 import { resolveStoredSeason } from "../../db/seasons";
 import { COMPETITION_CODES, type CompetitionCode } from "../../lib/competitions";
-import { batchRow, decodeRow } from "../../lib/decode";
+import { batchRow } from "../../lib/decode";
 import { playedMatch } from "../../lib/match-state";
+import { CoverageObservationError } from "../errors";
 import { type StatFieldCapabilities, statFieldCapabilities } from "../../sync/stat-capabilities";
 import type { Env } from "../../types";
 
@@ -740,83 +746,102 @@ export interface CoachingObservation {
   readonly last_success_at: string | null;
 }
 
-async function queryCoachingObservation(
-  env: Env,
-  competition: CoverageCompetition,
-  season: number,
-): Promise<CoachingObservation> {
-  if (competition !== "AFLM" || season < 1990)
-    return {
-      applicable: false,
-      unit: "participant_assignments",
-      expected_assignments: 0,
-      observed_assignments: 0,
-      matches_with_both_coaches: 0,
-      unresolved_joins: 0,
-      conflicts: 0,
-      failed_pages: 0,
-      last_success_at: null,
-    };
-  const row = await env.DB.prepare(
-    `SELECT
+/** The observation reported where coaching coverage does not apply. */
+const NOT_APPLICABLE_COACHING: CoachingObservation = {
+  applicable: false,
+  unit: "participant_assignments",
+  expected_assignments: 0,
+  observed_assignments: 0,
+  matches_with_both_coaches: 0,
+  unresolved_joins: 0,
+  conflicts: 0,
+  failed_pages: 0,
+  last_success_at: null,
+};
+
+/** Expected and observed coaching assignments for one season. */
+const CoachingAssignmentRowSchema = Schema.Struct({
+  expected_assignments: Schema.NullOr(Schema.Number),
+  observed_assignments: Schema.NullOr(Schema.Number),
+  matches_with_both_coaches: Schema.NullOr(Schema.Number),
+});
+
+/** One `n` count. */
+const CountRowSchema = Schema.Struct({ n: Schema.NullOr(Schema.Number) });
+
+/** Latest successful coaching import check. */
+const LastSuccessRowSchema = Schema.Struct({ at: Schema.NullOr(Schema.String) });
+
+/**
+ * Whether coaching coverage applies to a competition-season.
+ *
+ * @param competition - Competition being measured.
+ * @param year - Season year.
+ * @returns True for AFLM seasons from {@link MIN_COACHING_YEAR}.
+ */
+function coachingApplies(competition: CoverageCompetition, year: number): boolean {
+  return competition === "AFLM" && year >= MIN_COACHING_YEAR;
+}
+
+/**
+ * The coaching coverage statements for one AFLM season, run in the same
+ * batch as the rest of the observation so every count reads one snapshot.
+ *
+ * @param env - Worker bindings.
+ * @param seasonId - Stored season id.
+ * @param year - Season year, which keys the coaching import tables.
+ * @returns Four statements, decoded by {@link readCoachingObservation}.
+ */
+function coachingStatements(env: Env, seasonId: number, year: number): D1PreparedStatement[] {
+  return [
+    env.DB.prepare(
+      `SELECT
        2 * COUNT(DISTINCT CASE WHEN ${PLAYED} THEN m.id END) AS expected_assignments,
        COUNT(DISTINCT CASE WHEN ${PLAYED}
          THEN CAST(mc.match_id AS TEXT) || ':' || CAST(mc.team_id AS TEXT) END) AS observed_assignments,
        COUNT(DISTINCT CASE WHEN ${PLAYED}
          THEN CASE WHEN home_coach.match_id IS NOT NULL AND away_coach.match_id IS NOT NULL THEN m.id END END) AS matches_with_both_coaches
-     FROM competitions c JOIN seasons s ON s.competition_id = c.id
-     LEFT JOIN matches m ON m.season_id = s.id
+     FROM matches m
      LEFT JOIN match_coaches mc ON mc.match_id = m.id AND mc.team_id IN (m.home_team_id, m.away_team_id)
      LEFT JOIN match_coaches home_coach ON home_coach.match_id = m.id AND home_coach.team_id = m.home_team_id
      LEFT JOIN match_coaches away_coach ON away_coach.match_id = m.id AND away_coach.team_id = m.away_team_id
-     WHERE c.code = ?1 AND s.year = ?2`,
-  )
-    .bind(competition, season)
-    .first<Record<string, number>>();
-  const [diagnostics, conflicts, failedPages, lastSuccess] = await Promise.all([
-    env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM coach_import_diagnostics
-       WHERE provider = 'afl-tables' AND season = ?1 AND resolved_at IS NULL
-         AND reason IN ('unresolved-match', 'ambiguous-match', 'invalid-participant', 'score-mismatch')`,
-    )
-      .bind(season)
-      .first<{ n: number }>(),
-    env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM match_coaches mc
-       JOIN matches m ON m.id = mc.match_id JOIN seasons s ON s.id = m.season_id
-       JOIN competitions c ON c.id = s.competition_id
-       JOIN coach_observations secondary_obs ON secondary_obs.match_id = mc.match_id
-         AND secondary_obs.team_id = mc.team_id AND secondary_obs.provider = 'footywire'
-       WHERE c.code = 'AFLM' AND s.year = ?1 AND mc.coach_id <> secondary_obs.coach_id
-         AND secondary_obs.id = (SELECT o.id FROM coach_observations o
-           WHERE o.match_id = mc.match_id AND o.team_id = mc.team_id AND o.provider = 'footywire'
-           ORDER BY o.retrieved_at DESC, o.id DESC LIMIT 1)`,
-    )
-      .bind(season)
-      .first<{ n: number }>(),
+     WHERE m.season_id = ?1`,
+    ).bind(seasonId),
+    env.DB.prepare(SEASON_UNRESOLVED_COACH_JOINS_SQL).bind(year),
+    env.DB.prepare(SEASON_COACHING_CONFLICTS_SQL).bind(year),
     env.DB.prepare(
       `SELECT COUNT(*) AS n FROM coach_import_diagnostics
        WHERE provider = 'afl-tables' AND season = ?1 AND resolved_at IS NULL
          AND (scope LIKE 'coach:%' OR reason = 'source-fetch-failed')`,
-    )
-      .bind(season)
-      .first<{ n: number }>(),
+    ).bind(year),
     env.DB.prepare(
       "SELECT MAX(last_success_at) AS at FROM coach_import_pages WHERE provider = 'afl-tables' AND season = ?1",
-    )
-      .bind(season)
-      .first<{ at: string | null }>(),
-  ]);
+    ).bind(year),
+  ];
+}
+
+/**
+ * Decode the results of {@link coachingStatements}.
+ *
+ * @param results - The observation batch results.
+ * @param offset - Index of the first coaching statement in the batch.
+ * @returns The season's coaching observation.
+ */
+function readCoachingObservation(
+  results: readonly D1Result[],
+  offset: number,
+): CoachingObservation {
+  const assignments = batchRow(results, offset, CoachingAssignmentRowSchema);
   return {
     applicable: true,
     unit: "participant_assignments",
-    expected_assignments: row?.["expected_assignments"] ?? 0,
-    observed_assignments: row?.["observed_assignments"] ?? 0,
-    matches_with_both_coaches: row?.["matches_with_both_coaches"] ?? 0,
-    unresolved_joins: diagnostics?.n ?? 0,
-    conflicts: conflicts?.n ?? 0,
-    failed_pages: failedPages?.n ?? 0,
-    last_success_at: lastSuccess?.at ?? null,
+    expected_assignments: assignments?.expected_assignments ?? 0,
+    observed_assignments: assignments?.observed_assignments ?? 0,
+    matches_with_both_coaches: assignments?.matches_with_both_coaches ?? 0,
+    unresolved_joins: batchRow(results, offset + 1, CountRowSchema)?.n ?? 0,
+    conflicts: batchRow(results, offset + 2, CountRowSchema)?.n ?? 0,
+    failed_pages: batchRow(results, offset + 3, CountRowSchema)?.n ?? 0,
+    last_success_at: batchRow(results, offset + 4, LastSuccessRowSchema)?.at ?? null,
   };
 }
 
@@ -893,6 +918,9 @@ async function queryObservation(
   const select = OBSERVED_STAT_COLUMNS.flatMap((column, index) => [
     `COUNT(${column}) AS n${index}`,
   ]).join(", ");
+  const withCoaches = coachingApplies(competition, seasonRow.year);
+  // One batch is one D1 transaction, so every count and the input marker
+  // read the same snapshot and no second marker read is needed.
   const results = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS row_count, ${select} FROM player_match_stats
       WHERE match_id IN (SELECT id FROM matches WHERE season_id = ?1)`).bind(seasonRow.id),
@@ -917,6 +945,7 @@ async function queryObservation(
       new Date().toISOString(),
     ),
     env.DB.prepare("SELECT revision,in_progress FROM public_input_revision WHERE id=1"),
+    ...(withCoaches ? coachingStatements(env, seasonRow.id, seasonRow.year) : []),
   ]);
   const statRow = batchRow(results, 0, StatCountRowSchema);
   const pav = batchRow(results, 1, PavCountRowSchema);
@@ -926,16 +955,10 @@ async function queryObservation(
   const refresh = batchRow(results, 5, RefreshCountRowSchema);
   const marker = batchRow(results, 6, MarkerRowSchema);
   if (marker?.in_progress !== 0)
-    throw new Error("Coverage observation blocked by an unfinished input write");
-  const coaches = await queryCoachingObservation(env, competition, seasonRow.year);
-  const after = decodeRow(
-    await env.DB.prepare(
-      "SELECT revision,in_progress FROM public_input_revision WHERE id=1",
-    ).first(),
-    MarkerRowSchema,
-  );
-  if (after?.in_progress !== 0 || after.revision !== marker.revision)
-    throw new Error("Coverage inputs changed during observation; retry");
+    throw new CoverageObservationError({
+      message: "Observed coverage is unavailable while a data update is in progress; retry shortly",
+    });
+  const coaches = withCoaches ? readCoachingObservation(results, 7) : NOT_APPLICABLE_COACHING;
 
   const rows = statRow?.["row_count"] ?? 0;
   const scalar: Record<string, RowObservation> = {};
@@ -989,7 +1012,8 @@ async function queryObservation(
  * @param season - Canonical season key or year.
  * @param cache - Cache for the observation. Defaults to the Workers cache when present.
  * @returns The observation, from cache when a fresh entry exists.
- * @throws {Error} When the season is unknown or inputs change during the observation.
+ * @throws {SeasonSelectionError} When the season is ambiguous or not stored.
+ * @throws {CoverageObservationError} When a data update is in progress.
  */
 export async function observeCoverage(
   env: Env,

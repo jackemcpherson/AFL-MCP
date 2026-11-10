@@ -40,18 +40,28 @@ jobs:
     timeout-minutes: 10
     environment: production
     steps:
-      # Checkout and install only provide the lockfile-pinned wrangler for the
-      # R2 upload. The bundle itself comes from the CI job.
+      # The checkout only supplies bun.lock, which pins the wrangler version
+      # used for the R2 upload. The bundle itself comes from the CI job, so
+      # this job skips the full dependency install.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout: bun.lock
+          sparse-checkout-cone-mode: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - name: Resolve lockfile wrangler version
+        id: wrangler
+        run: |
+          version="$(sed -nE 's/^[[:space:]]*"wrangler": \["wrangler@([^"]+)".*/\1/p' bun.lock)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected one exact wrangler version in bun.lock, got '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Download checked bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -63,13 +73,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_VERSION: ${{ steps.wrangler.outputs.version }}
         run: |
           ARTIFACT_DIGEST="$(sha256sum dist/index.js | cut -d' ' -f1)"
           MIGRATIONS_DIGEST="$(sha256sum dist/migrations.tar.gz | cut -d' ' -f1)"
           echo "Publishing afl-mcp/${GITHUB_SHA}.js and afl-mcp/${GITHUB_SHA}-migrations.tar.gz"
-          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}.js" \
+          bunx "wrangler@${WRANGLER_VERSION}" r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}.js" \
             --file dist/index.js --remote
-          bunx wrangler r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}-migrations.tar.gz" \
+          bunx "wrangler@${WRANGLER_VERSION}" r2 object put "worker-artifacts/afl-mcp/${GITHUB_SHA}-migrations.tar.gz" \
             --file dist/migrations.tar.gz --remote
           {
             echo "### Published Worker artifacts"

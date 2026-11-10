@@ -56,6 +56,20 @@ const MAX_FETCHES_PER_QUERY = 25;
 const OBSERVED_RETRY_LIMIT = 3;
 
 /**
+ * The limit spelled out for the stored diagnostic. Keyed by the limit's
+ * literal type, so changing {@link OBSERVED_RETRY_LIMIT} fails to compile
+ * until this map names the new value.
+ */
+const RETRY_LIMIT_WORDS: Record<typeof OBSERVED_RETRY_LIMIT, string> = { 3: "three" };
+
+/**
+ * Diagnostic prefix stored when an observed fetch becomes unavailable.
+ * Stored rows already hold `unavailable-after-three-retries`, so the text
+ * must not change while the limit stays at three.
+ */
+const UNAVAILABLE_DIAGNOSTIC = `unavailable-after-${RETRY_LIMIT_WORDS[OBSERVED_RETRY_LIMIT]}-retries`;
+
+/**
  * When to retry a weather fetch after `failures` consecutive failures.
  *
  * A forecast is only useful before kickoff, so it retries on the shared
@@ -71,7 +85,7 @@ const OBSERVED_RETRY_LIMIT = 3;
  * @example
  * nextWeatherRetry("forecast", 1, now); // one hour later
  */
-export function nextWeatherRetry(kind: WeatherKind, failures: number, now: Date): string | null {
+function nextWeatherRetry(kind: WeatherKind, failures: number, now: Date): string | null {
   if (failures === 0) return null;
   if (kind === "forecast") return new Date(now.getTime() + backoffMs(failures)).toISOString();
   return failures <= OBSERVED_RETRY_LIMIT ? new Date(now.getTime() + DAY_MS).toISOString() : null;
@@ -152,7 +166,7 @@ export async function runWeatherStage(
           nextRetry,
           failures,
           failures > 0 && nextRetry === null
-            ? `unavailable-after-three-retries: ${diagnostic}`
+            ? `${UNAVAILABLE_DIAGNOSTIC}: ${diagnostic}`
             : diagnostic,
         )
         .run();

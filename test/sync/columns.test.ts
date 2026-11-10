@@ -93,4 +93,21 @@ describe("upsert column manifests", () => {
     const keys = MATCH_COLUMNS.filter((c) => c.kind === "key").map((c) => c.name);
     expect(keys).toEqual(["external_afl_id", "season_id", "date", "home_team_id", "away_team_id"]);
   });
+
+  it("a conditional coalesce uses the same CASE in SET and change detection", () => {
+    const columns = [
+      { name: "clock", kind: "coalesce", replaceWhen: "t.s IS NOT excluded.s" },
+    ] as const;
+    const value =
+      "CASE WHEN t.s IS NOT excluded.s THEN excluded.clock ELSE COALESCE(excluded.clock, t.clock) END";
+    expect(updateSetClause("t", columns)).toBe(`clock = ${value}`);
+    expect(changeDetectionWhere("t", columns)).toBe(`t.clock IS NOT ${value}`);
+  });
+
+  it("only the match clock columns replace conditionally", () => {
+    expect(MATCH_COLUMNS.filter((c) => c.replaceWhen !== undefined).map((c) => c.name)).toEqual([
+      "live_period_status",
+      "completed_quarter",
+    ]);
+  });
 });

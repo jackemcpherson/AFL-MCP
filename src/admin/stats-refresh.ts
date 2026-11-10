@@ -68,10 +68,10 @@ export interface StatsRefreshResult extends Partial<StatsRefreshReport> {
  * @param env - Worker bindings.
  * @param request - Validated operator scope and operation ID.
  * @returns Preview inventory, or batch progress. Repeating a completed ID is a no-op.
-
  * @throws If approval, recovery, lease ownership or a database operation fails.
  * @example
- * await operateStatsRefresh(env, Result.getOrThrow(decodeStatsRefreshRequest(body))); */
+ * await operateStatsRefresh(env, Result.getOrThrow(decodeStatsRefreshRequest(body)));
+ */
 export async function operateStatsRefresh(
   env: Env,
   request: StatsRefreshRequest,

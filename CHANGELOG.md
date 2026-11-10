@@ -5,6 +5,75 @@ This file records all notable project changes.
 The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] - 2026-11-10
+
+This release comes out of a whole-repository audit. It unifies the admin
+request and response contract, which breaks callers that send unknown keys or
+parse the old busy shapes. It also cuts redundant D1 writes on every cron tick
+and fixes health, marker and error-mapping bugs. The `code` sandbox query API
+does not change.
+
+### Breaking in 6.0.0
+
+- Every admin route rejects unknown body keys. `backfill-brownlow` and
+  `backfill-coaches` used to drop them.
+- Every admin route reports a held lease as HTTP 409
+  `{ "error": "operation lease held", "code": "OPERATION_BUSY", "busy": true }`.
+- Request validation failures return HTTP 400 with the first problem. Checks
+  that used to return 409, such as player identity group rules and `resume`
+  without a digest, now return 400 with code `INVALID_REQUEST`.
+- Paths under `/mcp/` other than `/mcp`, `/mcp/health` and `/mcp/admin/*`
+  return 404 instead of reaching the MCP handler.
+- A wrong media type on `/mcp` returns error `-32600`, not `-32700`.
+- `/mcp/admin/status` `coaching.conflicts` counts canonical coach facts that
+  differ from the latest FootyWire observation.
+
+### Added in 6.0.0
+
+- Migration `0047` indexes `sync_log` on `(type, timestamp)` and `timestamp`.
+- Migration `0048` queues a PAV rebuild only when a match is or becomes
+  `Complete`, so live score updates no longer rebuild a season every tick.
+
+### Changed in 6.0.0
+
+- Public health clears a competition error after the next successful pass,
+  even one that changed nothing. Before, a quiet off-season could hold
+  `/mcp/health` at 503 for three hours.
+- A provider failure in one competition no longer stops the rest of the pass.
+  An upcoming season logs its successful work under
+  `sync:<competition>:upcoming`, so it cannot clear a current-season error.
+- A `backfill-coaches` upstream failure returns HTTP 502 with code
+  `SOURCE_UNAVAILABLE` and clears the public write marker. Before, it
+  stranded the marker.
+- An observed `schema` call can name a season the database does not hold, or
+  hit a data update in progress. Both return an `isError` tool result instead
+  of a JSON-RPC internal error.
+- The `code` tool reads the sandbox reply with a 4 MiB cap.
+- Identical lineup snapshots, PAV results, statistics queue rows, season
+  inventories and season metadata no longer rewrite D1.
+  `lineups_observed_at` records when the current snapshot was first seen.
+- `sync_log` rejection and placeholder rows log only on change. Stored error
+  text keeps at most 500 characters without URL query strings. The 90-day
+  purge runs hourly.
+- A completed match whose statistics keep failing stops retrying at day 37.
+  An approved statistics refresh queues it again.
+- A status change to anything but `Live` replaces `completed_quarter` and
+  `live_period_status`, so a finished match drops a stale clock.
+- Seasons before 2023, except AFLW `2022-S7`, fetch no lineups.
+- `weatherUnavailable` in `/mcp/admin/status` counts only observed rows that
+  have stopped retrying.
+- The `undici` override is `^7.28.0`, and `@oxlint/plugins` matches the
+  version that `vite-plus` bundles.
+- The publish job runs the wrangler version pinned in `bun.lock` without a
+  full install.
+
+### Removed in 6.0.0
+
+- `scripts/backfill-brownlow.ts`, `scripts/backfill-lineups.ts` and
+  `scripts/refetch-lineups.ts`. The authenticated admin routes replace them.
+- The unused `recalculatePav` and `calculateAllPav` functions.
+- Ten finished design and research documents, now under `archive/docs/`.
+
 ## [5.1.0] - 2026-11-10
 
 This release prepares the Worker for the 2027 season, which has no Opening

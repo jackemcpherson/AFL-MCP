@@ -1,54 +1,24 @@
-import { execSync } from "node:child_process";
-import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DataFrame } from "@jackemcpherson/rds-js";
-import { Option, Predicate, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { AflTables, Fryzigg, normaliseTeamName } from "fitzroy";
 import { runFitzroy } from "../src/lib/fitzroy";
+import { executeSQLFile, queryD1, writeBatchedSQL } from "./lib/d1";
+
+/** Fryzigg's column-major frame, derived so `@jackemcpherson/rds-js` stays transitive. */
+type FryziggService = Parameters<Parameters<typeof Fryzigg.use>[0]>[0];
+type DataFrame = Effect.Success<ReturnType<FryziggService["fetchPlayerStats"]>>;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SQL_DIR = join(__dirname, "..", "data", "sql-dob");
 mkdirSync(SQL_DIR, { recursive: true });
 
-const BATCH_SIZE = 200;
 const MIN_BIRTH_YEAR = 1940;
 const MIN_DEBUT_AGE = 16;
 const MAX_DEBUT_AGE = 45;
 
-// ── Shared plumbing (backfill-brownlow pattern) ─────────────────────
-
-function writeBatchedSQL(prefix: string, statements: string[]): number {
-  for (const f of readdirSync(SQL_DIR).filter((f) => f.startsWith(`${prefix}_`))) {
-    unlinkSync(join(SQL_DIR, f));
-  }
-  let fileIndex = 0;
-  for (let i = 0; i < statements.length; i += BATCH_SIZE) {
-    const batch = statements.slice(i, i + BATCH_SIZE);
-    const sql = `${batch.join(";\n")};\n`;
-    const path = join(SQL_DIR, `${prefix}_${String(fileIndex).padStart(4, "0")}.sql`);
-    writeFileSync(path, sql);
-    fileIndex++;
-  }
-  return fileIndex;
-}
-
-function queryD1<T>(sql: string): T[] {
-  const escaped = sql.replace(/"/g, '\\"');
-  const raw = execSync(`npx wrangler d1 execute afl-stats --remote --command "${escaped}" --json`, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
-  const parsed = JSON.parse(raw);
-  return parsed[0]?.results ?? [];
-}
-
-function executeSQL(filePath: string): void {
-  execSync(`npx wrangler d1 execute afl-stats --remote --file "${filePath}"`, {
-    encoding: "utf-8",
-    maxBuffer: 50 * 1024 * 1024,
-  });
-}
+// ── Helpers ─────────────────────────────────────────────────────────
 
 function normalizeName(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -105,22 +75,24 @@ function getColumn(frame: DataFrame, name: string): unknown[] | undefined {
 
 // ── D1 row shapes ────────────────────────────────────────────────────
 
-interface DbPlayer {
-  id: number;
-  external_id: string | null;
-  first_name: string | null;
-  surname: string;
-  date_of_birth: string | null;
-}
+const DbPlayerSchema = Schema.Struct({
+  id: Schema.Number,
+  external_id: Schema.NullOr(Schema.String),
+  first_name: Schema.NullOr(Schema.String),
+  surname: Schema.String,
+  date_of_birth: Schema.NullOr(Schema.String),
+});
+type DbPlayer = typeof DbPlayerSchema.Type;
 
-interface DbPlayerStint {
-  id: number;
-  first_name: string | null;
-  surname: string;
-  team: string;
-  first_year: number;
-  last_year: number;
-}
+const DbPlayerStintSchema = Schema.Struct({
+  id: Schema.Number,
+  first_name: Schema.NullOr(Schema.String),
+  surname: Schema.String,
+  team: Schema.String,
+  first_year: Schema.Number,
+  last_year: Schema.Number,
+});
+type DbPlayerStint = typeof DbPlayerStintSchema.Type;
 
 // ── Stage 0/1: fryzigg ──────────────────────────────────────────────
 
@@ -168,7 +140,7 @@ function probe(frame: DataFrame): void {
   }
 }
 
-function stageFryzigg(frame: DataFrame, players: DbPlayer[]): string[] {
+function stageFryzigg(frame: DataFrame, players: readonly DbPlayer[]): string[] {
   const dobColName = findDobColumn(frame);
   if (!dobColName) {
     console.log("Stage 1: no DOB column in fryzigg frame — skipping");
@@ -227,7 +199,7 @@ function stageFryzigg(frame: DataFrame, players: DbPlayer[]): string[] {
 
 async function stageAflTables(startYear: number, endYear: number): Promise<string[]> {
   console.log("Stage 2 (AFL Tables): loading NULL-DOB players with club stints from D1...");
-  const stints = queryD1<DbPlayerStint>(
+  const stints = queryD1(
     `SELECT p.id, p.first_name, p.surname, t.name AS team,
             MIN(s.year) AS first_year, MAX(s.year) AS last_year
      FROM players p
@@ -239,6 +211,7 @@ async function stageAflTables(startYear: number, endYear: number): Promise<strin
      WHERE c.code = 'AFLM' AND p.date_of_birth IS NULL
        AND s.year BETWEEN ${startYear} AND ${endYear}
      GROUP BY p.id, t.name`,
+    DbPlayerStintSchema,
   );
   const byTeam = new Map<string, DbPlayerStint[]>();
   for (const s of stints) {
@@ -329,7 +302,7 @@ async function stageAflTables(startYear: number, endYear: number): Promise<strin
 
 function printCoverage(label: string): void {
   console.log(`\nDOB coverage by AFLM PAV season (${label}):`);
-  const rows = queryD1<{ year: number; players: number; with_dob: number }>(
+  const rows = queryD1(
     `SELECT s.year, COUNT(DISTINCT psp.player_id) AS players,
             COUNT(DISTINCT CASE WHEN p.date_of_birth IS NOT NULL THEN psp.player_id END) AS with_dob
      FROM player_season_pav psp
@@ -338,6 +311,7 @@ function printCoverage(label: string): void {
      JOIN competitions c ON c.id = s.competition_id
      WHERE c.code = 'AFLM'
      GROUP BY s.year ORDER BY s.year`,
+    Schema.Struct({ year: Schema.Number, players: Schema.Number, with_dob: Schema.Number }),
   );
   for (const r of rows) {
     console.log(
@@ -368,8 +342,9 @@ async function main() {
   const statements: string[] = [];
 
   if (stage === "all" || stage === "fryzigg") {
-    const players = queryD1<DbPlayer>(
+    const players = queryD1(
       "SELECT id, external_id, first_name, surname, date_of_birth FROM players",
+      DbPlayerSchema,
     );
     console.log(`  ${players.length} players loaded from D1`);
     statements.push(...stageFryzigg(await fetchFryziggFrame(), players));
@@ -378,7 +353,7 @@ async function main() {
   if (stage === "all" || stage === "afltables") {
     if (stage === "all" && statements.length > 0 && !dryRun) {
       // Apply fryzigg updates first so the AFL Tables stage only sees true leftovers.
-      const files = writeBatchedSQL("dob_fryzigg", statements);
+      const files = writeBatchedSQL(SQL_DIR, "dob_fryzigg", statements);
       console.log(`\nApplying ${files} fryzigg SQL files before Stage 2...`);
       applyFiles("dob_fryzigg");
       statements.length = 0;
@@ -396,7 +371,7 @@ async function main() {
   }
 
   const prefix = stage === "all" ? "dob_afltables" : `dob_${stage}`;
-  const fileCount = writeBatchedSQL(prefix, statements);
+  const fileCount = writeBatchedSQL(SQL_DIR, prefix, statements);
   console.log(`\nWrote ${fileCount} SQL files to ${SQL_DIR}`);
 
   if (dryRun) {
@@ -412,14 +387,7 @@ async function main() {
 }
 
 function printAgeOutliers(): void {
-  const rows = queryD1<{
-    id: number;
-    first_name: string | null;
-    surname: string;
-    dob: string;
-    min_age: number;
-    max_age: number;
-  }>(
+  const rows = queryD1(
     `SELECT p.id, p.first_name, p.surname, p.date_of_birth AS dob,
             MIN((julianday(m.date) - julianday(p.date_of_birth)) / 365.25) AS min_age,
             MAX((julianday(m.date) - julianday(p.date_of_birth)) / 365.25) AS max_age
@@ -428,6 +396,14 @@ function printAgeOutliers(): void {
      WHERE p.date_of_birth IS NOT NULL
      GROUP BY p.id
      HAVING max_age > ${MAX_DEBUT_AGE} OR min_age < ${MIN_DEBUT_AGE}`,
+    Schema.Struct({
+      id: Schema.Number,
+      first_name: Schema.NullOr(Schema.String),
+      surname: Schema.String,
+      dob: Schema.String,
+      min_age: Schema.Number,
+      max_age: Schema.Number,
+    }),
   );
   if (rows.length === 0) {
     console.log("\nAge outlier check: clean.");
@@ -450,7 +426,7 @@ function applyFiles(prefix: string): void {
     .sort();
   for (const f of files) {
     process.stdout.write(`  ${f} `);
-    executeSQL(join(SQL_DIR, f));
+    executeSQLFile(join(SQL_DIR, f));
     console.log("✓");
   }
 }

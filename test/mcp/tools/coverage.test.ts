@@ -226,14 +226,14 @@ describe("coverage contract", () => {
       overdue_refreshes: 1,
       input_revision: 10,
     });
-    expect(calls).toHaveLength(9);
+    expect(calls).toHaveLength(8);
     expect(calls[0]?.bindings).toEqual(["VFLW", "2026"]);
     expect(calls.slice(1, 7).every((call) => call.bindings[0] === 77)).toBe(true);
     expect(entries.size).toBe(1);
     expect(entries.values().next().value?.headers.get("Cache-Control")).toBe("max-age=900");
 
     await observeCoverage(env, "VFLW", 2026, cache);
-    expect(calls).toHaveLength(9);
+    expect(calls).toHaveLength(8);
   });
 
   it("does not cache query errors", async () => {

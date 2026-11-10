@@ -144,3 +144,49 @@ it("falls back to the stored season when a newly listed season has no round date
     ),
   ).toContain("using stored season 2026");
 });
+
+it("logs one success row after a competition error so health can clear it", async () => {
+  stubSeasons();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2027-01-15T03:05:00Z"));
+  await env.DB.prepare(
+    "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES (?1, 'sync:AFLM', 0, 'fetchMatches failed: 503')",
+  )
+    .bind("2027-01-15T03:00:00.000Z")
+    .run();
+  const rows = async () =>
+    (
+      await env.DB.prepare("SELECT error FROM sync_log WHERE type = 'sync:AFLM' ORDER BY id").all<{
+        type: string;
+        error: string | null;
+      }>()
+    ).results;
+
+  await sync(env, ["AFLM"], { fixturesOnly: true, skipShouldRunNow: true });
+  expect(await rows()).toEqual([{ error: "fetchMatches failed: 503" }, { error: null }]);
+
+  // Later no-op passes stay unlogged.
+  vi.setSystemTime(new Date("2027-01-15T03:10:00Z"));
+  await sync(env, ["AFLM"], { fixturesOnly: true, skipShouldRunNow: true });
+  expect(await rows()).toHaveLength(2);
+});
+
+it("logs an upcoming season's work apart from the competition's health rows", async () => {
+  stubSeasons();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2027-01-15T03:00:00Z"));
+  await env.DB.prepare(
+    "INSERT INTO sync_log (timestamp, type, rows_affected, error) VALUES ('2027-01-15T02:00:00.000Z', 'sync:AFLM', 0, 'boom')",
+  ).run();
+  await sync(env, ["AFLM"], { fixturesOnly: true, skipShouldRunNow: true });
+  const types = (
+    await env.DB.prepare(
+      "SELECT type, error FROM sync_log WHERE type LIKE 'sync:AFLM%' ORDER BY id",
+    ).all<{ type: string; error: string | null }>()
+  ).results;
+  // The current season recovers; nothing from 2027 lands under sync:AFLM.
+  expect(types.filter((row) => row.type === "sync:AFLM")).toEqual([
+    { type: "sync:AFLM", error: "boom" },
+    { type: "sync:AFLM", error: null },
+  ]);
+});

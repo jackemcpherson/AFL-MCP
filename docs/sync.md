@@ -17,6 +17,10 @@ The cron fires every five minutes and dispatches
 `sync(env, ["AFLM", "AFLW", "VFL", "VFLW"])`. There is no separate cron for full
 syncs or for PAV - the orchestrator decides what to run on each tick.
 
+When the `SYNC_PAUSED` variable is `true`, `scheduled()` returns before the
+sync. Hourly ticks also run `auditNextSeason`, which records `audit:season:*`
+rows about the next season's fixture.
+
 ## The `shouldRunNow` Gate
 
 `shouldRunNow(now, env)` (in `src/sync/sync.ts`) is the only thing standing
@@ -42,29 +46,36 @@ AFLW.
 Each competition syncs its current season, the latest one that has started,
 plus every later season. The provider only names a season current from its
 first bounce. The later seasons load a new fixture, its lineups and its
-forecasts before the opening match. The sync asks the provider for new
-seasons on hourly ticks. A later season that the database already holds with
+forecasts before the opening match. The sync fetches the provider's season
+list once per competition on every pass, and admits new seasons from it on
+hourly ticks only. A later season that the database already holds with
 unsettled matches stays in scope on every tick.
 
-A fetch failure for a season that has not started logs under
-`sync:<competition>:upcoming`. It does not affect health.
+A provider failure logs under `sync:<competition>`, and the pass continues with
+the next competition. Provider failures cover season discovery, the fixture
+fetch, and a source mismatch. A season that has not started logs both its
+failures and its successful work under `sync:<competition>:upcoming`, which
+does not affect health. Database and lease errors still abort the pass.
 
 If the provider cannot name the current season, the latest stored season that
 has started stands in and the sync logs `sync:season-fallback`.
 
 1. Fetch the season inventory from `afl-api`. Store its raw snapshot separately
-   from reviewed fixture corrections.
+   from reviewed fixture corrections, and rewrite it only when it changes.
 2. Resolve the competition and season IDs. Preserve existing IDs and record the
    provider season link.
 3. Select upcoming lineup rounds within five days and completed rounds with
    missing lineups.
    Cron limits historical lineup retries to three rounds from the last 14 days.
-   Admin backfills select up to 40 rounds.
+   Admin backfills select up to 40 rounds. Seasons before 2023, except AFLW
+   `2022-S7`, fetch no lineups.
 4. Fetch the selected lineups. Upcoming snapshots refresh every fifteen minutes,
    or every five minutes within ninety minutes of kickoff.
    A provider 404 means the roster has not published. It does not erase a stored
    snapshot.
-5. Quarantine placeholder finals participants. Upsert teams, venues, players,
+5. Quarantine placeholder finals participants, logging
+   `sync:placeholder-match:<competition>` only when that removes rows. Upsert
+   teams, venues, players,
    fixtures and validated lineups in dependency order.
 6. Queue recent completed matches for statistics refresh. Hourly passes fetch at
    most 20 due matches across competitions.
@@ -74,13 +85,16 @@ has started stands in and the sync logs `sync:season-fallback`.
    Each match has persisted success, failure and retry checkpoints. Match-count
    increases do not gate corrections.
 7. Rebuild changed statistics' PAV seasons before clearing the public write
-   marker.
+   marker. Hourly passes rebuild inside the statistics refresh, and other
+   passes rebuild at the end of the tick. A season whose recalculated rows
+   match the stored rows is not rewritten.
    A pass rebuilds at most 20 queued seasons. Remaining rebuilds fail the pass
    and retain the marker for explicit recovery.
    AFLM and AFLW use the canonical formula. Other competitions retain unknown
    derived values where required inputs lack verification.
 8. Run hourly coaching and weather work under the same lease, then finish the
    public write marker.
+   Hourly passes also purge `sync_log` rows older than 90 days.
    Finalisation failures propagate and retain the marker. The lease releases
    even when finalisation fails.
 
@@ -113,12 +127,12 @@ and the non-emergency team size: 23 for AFLM and 21 for AFLW. Interchange and
 substitute players count toward those totals. Review the sizes against the
 published 2027 rules before launch.
 
-Each valid match snapshot replaces its lineup rows in one native D1 batch.
-The replacement removes omitted players and records
-`matches.lineups_observed_at`
-in UTC. Invalid, incomplete, or failed upstream responses preserve the previous
-valid snapshot. The pre-2023 historical lineup guard remains in place, with the
-corroborated
+Each valid match snapshot that differs from the stored rows replaces them in one
+native D1 batch. An identical snapshot writes nothing. The replacement removes
+omitted players and records `matches.lineups_observed_at` in UTC. Invalid,
+incomplete, or failed upstream responses preserve the previous valid snapshot. A
+rejected snapshot logs `sync:lineups:invalid` once per match and payload digest.
+The pre-2023 historical lineup guard remains in place, with the corroborated
 AFLW season-seven exception described in the schema guide.
 
 Fixture identity, venue, or kickoff changes atomically invalidate current
@@ -206,10 +220,10 @@ refresh operations until their remaining count reaches zero.
 Lineup and provider work can exceed an individual request's limits. A failed
 marked operation requires explicit recovery.
 
-Cron, manual sync, and annual Brownlow ingestion share the single `sync_lease`
-row. Acquisition is atomic, holders expire after ten minutes, and release checks
-the holder. Contending syncs keep their established log-and-return behaviour.
-Brownlow returns HTTP 409.
+Every cron tick and admin operation shares the single `sync_lease` row through
+`runOperation` (see [State Machines](state-machines.md)). Acquisition is atomic,
+holders expire after ten minutes, and release checks the holder. A contending
+cron tick logs and returns. A contending admin route returns HTTP 409.
 
 ## Round Labels
 
@@ -243,9 +257,10 @@ competitions - AFLM R1 is March, AFLW R1 is August, VFL R1 is April.
 
 ## PAV (Player Approximate Value)
 
-`recalculatePav(env, competition, year?)` in `src/sync/pav.ts` writes to
-`player_season_pav`. The sync pipeline runs it after updating player statistics
-for AFLM or AFLW through the persisted rebuild queue.
+`calculatePav` in `src/sync/pav.ts` writes to `player_season_pav`. The sync
+pipeline runs it through `rebuildQueuedStatsPav` (`src/sync/stats-refresh.ts`)
+after updating player statistics for AFLM or AFLW, using the persisted rebuild
+queue.
 
 Cancelled and live matches do not contribute to PAV. Missing completed-match
 scores, required inputs
@@ -273,13 +288,17 @@ objects or transition timestamps. Consumers must pair the value with
 `matches.status`. It reflects the five-minute sync cadence, not second-level
 match timing. `live_period_status` remains raw upstream text.
 
+Both columns keep their stored value when an update omits them, except on a
+status change to anything but `Live`. That change takes the provider's value,
+so a finished or corrected match clears a stale clock.
+
 `matches.local_time` remains Melbourne time (`Australia/Melbourne`) across all
 competitions, matching the AFL API ecosystem convention. Venue-native time and
 timezone are intentionally discarded.
 
 ## Brownlow Votes
 
-fitzroy 3.4 parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
+fitzroy parses AFL Tables `cells[16]` as `brownlowVotes` and returns season
 scrapes in the partial-result envelope `{ stats, failedMatchIds }`.
 [fitzRoy issue 117](https://github.com/jackemcpherson/fitzRoy-ts/issues/117)
 tracks the completed parser work. Brownlow ingestion is an annual operation. The
@@ -301,8 +320,8 @@ all seasons before the first update. A wholly unpublished season performs no
 writes. Write mode uses batches of at most 100 parameterised updates guarded by
 `brownlow_votes IS NULL OR brownlow_votes = 0`. It does not recalculate PAV.
 
-The full contract is in
-[`admin-operations-v2-design.md`](./admin-operations-v2-design.md).
+The historical design record is
+[`admin-operations-v2-design.md`](../archive/docs/admin-operations-v2-design.md).
 
 The `upsertStats` path uses `COALESCE` on `brownlow_votes`, and the annual
 backfill also writes only when the current value is NULL or zero. This keeps
@@ -319,14 +338,18 @@ ticks do not fetch coach career pages again.
 The sync logs coaching failures and continues score, lineup, statistics,
 weather and PAV work.
 
-`POST /mcp/admin/backfill-coaches` accepts one AFLM season per request:
+`POST /mcp/admin/backfill-coaches` accepts one AFLM season per request.
+`fromYear` and `toYear` must name the same year, and unknown keys fail
+validation:
 
 ```json
 { "fromYear": 2024, "toYear": 2024, "source": "afl-tables", "dryRun": true }
 ```
 
 Years must be 1990 or later. FootyWire season-wide coaching requires captured
-match headings to establish coverage. Dry-run is the default.
+match headings to establish coverage. Dry-run is the default. An upstream
+fetch failure returns HTTP 502 with code `SOURCE_UNAVAILABLE` and clears the
+public write marker.
 
 Repeating a request is idempotent by provider key. Stored page status records
 the latest outcome. AFL Tables alone writes canonical `match_coaches` rows.
@@ -358,7 +381,7 @@ lease age, and counts for five integrity views. It omits
 `v_integrity_clearances`. It also reports 24-hour
 partial-lineup, partial-stat, and unmapped-team event counts.
 
-The endpoint uses thirteen fixed statements and one fixed window. It includes
+The endpoint uses fourteen fixed statements and one fixed window. It includes
 aggregate coaching last-success, failed-scope, unresolved-join, disagreement,
 and active-season assignment counts. It never returns raw errors, lease
 holders, IDs, row samples, client data, or tokens. Public health routes retain
@@ -381,10 +404,12 @@ checkpoint, including unresolved imports, so the next cycle can fetch
 corrections
 from earlier profiles. A thrown write failure retains its checkpoint for retry.
 
-Public health clears a competition-level error after a later successful sync
-for that competition. Success in another competition or a lineup/stat sub-task
-does not clear it. Error records remain in `sync_log`. Fatal errors retain the
-three-hour alert window.
+Public health clears a competition-level error after a later successful sync for
+that competition. A successful pass writes a `sync:<competition>` row when it
+changed data. It also writes one when the latest row for that competition was an
+error, so a quiet pass still records recovery. Success in another competition,
+an upcoming season, or a lineup/stat sub-task does not clear it. Error records
+remain in `sync_log`. Fatal errors retain the three-hour alert window.
 
 Bears identity repair changes match participants through the existing fixture
 trigger. That trigger invalidates current `match_predictions` and
@@ -405,9 +430,11 @@ budget or trigger a historical import when scheduled writes resume.
 
 An operator request is one-off. A match more than 30 days old at first
 observation has no revisions left to follow. One successful fetch ends its
-schedule (`next_retry_at` NULL). `/mcp/admin/status` reports
-the two drivers separately: `statisticsDue` counts scheduled matches the cron
-will fetch, and `statisticsAwaitingOperator` counts operator requests.
+schedule (`next_retry_at` NULL). A scheduled match that keeps failing retries
+until day 37, seven days after its follow-up window closes, then stops. An
+approved refresh queues it again. `/mcp/admin/status` reports the two drivers
+separately: `statisticsDue` counts scheduled matches the cron will fetch, and
+`statisticsAwaitingOperator` counts operator requests.
 
 A successful fetch completes every pending operation entry for that match,
 whichever operation triggered it. An approved refresh reports `remaining` and
@@ -416,7 +443,8 @@ failed fetch.
 
 ## Fenced Read Retries
 
-Protected SELECT reads retry twice after a D1 connection loss. Their batches
+Protected read queries (`SELECT`, or a `WITH` query with no write keyword)
+retry twice after a D1 connection loss. Their batches
 contain an idempotent ownership fence and the read query. Every retry validates
 the lease again, with bounded delays and jitter. Mutation calls and shared
 batches do not retry. Exhausted reads and lost leases retain the public marker

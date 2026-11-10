@@ -50,7 +50,7 @@ Version 3.8.0 adds coaching ingestion and consistent native input revisions.
   publishing immutable artefacts.
 
 Historical identity repairs and coaching writes require separate operator
-approval. See [Coaching Release Operations](docs/coaching-release-operations.md)
+approval. See [Coaching Release Operations](../docs/coaching-release-operations.md)
 for deployment verification, backfill procedures and recovery instructions.
 
 ## [3.7.1] - 2026-07-30

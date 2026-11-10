@@ -39,21 +39,33 @@ async function count(table: "matches" | "season_provider_inventory"): Promise<un
   return env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first("n");
 }
 
-it("rejects a provider season that lists the same match ID twice before writing it", async () => {
+it("reports a provider season that lists the same match ID twice without writing it", async () => {
   stubProvider([{ id: 85, name: "2026 Toyota AFL Premiership" }], [matchItem, matchItem]);
 
-  await expect(sync(env, ["AFLM"], { season: 2026, skipShouldRunNow: true })).rejects.toThrow(
-    "Provider season inventory contains duplicate match IDs",
-  );
+  const [result] = await sync(env, ["AFLM"], { season: 2026, skipShouldRunNow: true });
+  expect(result?.error).toBe("Provider season inventory contains duplicate match IDs");
+  expect(
+    await env.DB.prepare("SELECT error FROM sync_log WHERE type = 'sync:AFLM'").first("error"),
+  ).toBe("Provider season inventory contains duplicate match IDs");
   expect(await count("season_provider_inventory")).toBe(0);
   expect(await count("matches")).toBe(0);
 });
 
-it("rejects a season the provider does not list exactly before fetching its matches", async () => {
+it("reports a season the provider does not list exactly without writing it", async () => {
   stubProvider([{ id: 85, name: "2026 Toyota AFL Premiership" }], [matchItem]);
 
-  await expect(sync(env, ["AFLM"], { season: 2025, skipShouldRunNow: true })).rejects.toThrow(
-    "No exact AFLM season 2025; use season discovery",
-  );
+  const [result] = await sync(env, ["AFLM"], { season: 2025, skipShouldRunNow: true });
+  expect(result?.error).toBe("No exact AFLM season 2025; use season discovery");
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM seasons").first("n")).toBe(0);
+});
+
+it("keeps syncing later competitions when one competition's provider fails", async () => {
+  stubProvider([{ id: 85, name: "2026 Toyota AFL Premiership" }], [matchItem, matchItem]);
+
+  const results = await sync(env, ["AFLM", "AFLW"], { season: 2026, skipShouldRunNow: true });
+  expect(results.map((r) => r.competition)).toEqual(["AFLM", "AFLW"]);
+  expect(results.every((r) => r.error !== undefined)).toBe(true);
+  expect(
+    await env.DB.prepare("SELECT in_progress FROM public_input_revision").first("in_progress"),
+  ).toBe(0);
 });

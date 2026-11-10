@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { TaggedErrorBase } from "../lib/errors";
+import type { MessageFields, TaggedErrorBase } from "../lib/errors";
 
 const McpRequestErrorBase: TaggedErrorBase<
   McpRequestError,
@@ -21,3 +21,23 @@ const McpRequestErrorBase: TaggedErrorBase<
  * throw new McpRequestError({ code: -32601, message: "Method not found: foo" });
  */
 export class McpRequestError extends McpRequestErrorBase {}
+
+const CoverageObservationErrorBase: TaggedErrorBase<
+  CoverageObservationError,
+  "CoverageObservationError",
+  MessageFields
+> = Schema.TaggedError<CoverageObservationError>()("CoverageObservationError", {
+  message: Schema.String,
+});
+
+/**
+ * Observed coverage cannot be measured right now, for example while a data
+ * update holds the public input marker.
+ *
+ * The message is application-written. The `schema` tool returns it as an
+ * `isError` tool result so the model can retry, not as a JSON-RPC error.
+ *
+ * @example
+ * throw new CoverageObservationError({ message: "Retry shortly" });
+ */
+export class CoverageObservationError extends CoverageObservationErrorBase {}

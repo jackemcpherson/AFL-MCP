@@ -33,7 +33,7 @@ One row per `(competition, season_key)`, the unique key. `season_key` is the
 year, except AFLW 2022, which has two seasons, `2022-S6` and `2022-S7`, sharing
 `year = 2022`. A `CHECK` constraint allows only those two split keys.
 
-- `is_complete` is 1 when the season has matches and none is unsettled:
+- `is_complete` is 1 when the season has matches and no match remains open:
   every match is `Complete` or `Cancelled`. Scores do not decide it, because
   a `Live` row has a partial score and a `Cancelled` row has none.
 
@@ -55,7 +55,8 @@ year, except AFLW 2022, which has two seasons, `2022-S6` and `2022-S7`, sharing
 ### `players`
 
 - Stable identity via two external IDs, indexed conditionally so nulls do not
-  collide:
+  collide. `player_provider_ids` and `player_id_redirects` (below) extend this
+  with a provider crosswalk and merged-ID redirects:
   - `external_id` - fryzigg / AFL-tables provider id.
   - `external_afl_player_id` - AFL.com.au id (used by lineups). The AFL's CD_I
     IDs span competitions, so the same player can appear in AFLM and VFL stats
@@ -65,6 +66,21 @@ year, except AFLW 2022, which has two seasons, `2022-S6` and `2022-S7`, sharing
   `weight_kg`. `is_retired` stays `NULL` until source evidence establishes the
   status. `legacy_is_retired` preserves imported or defaulted bits without
   treating them as verified activity or retirement.
+
+### Player Identity Crosswalk
+
+- `player_provider_ids` maps each `(provider, provider_id)` pair to one
+  `player_id`, with `evidence_json` recording why. Sync registers rows as it
+  resolves players, so a provider ID resolves without the two `players`
+  columns.
+- `player_id_redirects` maps a `retired_id` to the `canonical_id` it merged
+  into, with the repair's `manifest_digest`. The retired ID is always the
+  larger one. Resolve old player IDs through it before joining.
+
+### `season_provider_ids`
+
+Maps each provider's season ID to one `season_id`. Each season has at most one
+ID per provider.
 
 ## Match Data
 
@@ -81,7 +97,7 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
   maps only known names, so a finals name it does not know, such as the 2026
   `Wildcard Finals`, gets `F<round_number>`.
 - Indexed on `date`, `season_id`, `home_team_id`, `away_team_id`, `venue_id`,
-  and conditionally on `external_afl_id`.
+  `(kickoff_at, status)`, and conditionally on `external_afl_id`.
 - See [`sync.md`](./sync.md#round-labels) for the full label rules.
 - `local_time` is always Melbourne local time (`Australia/Melbourne`, AEST/AEDT)
   for every competition. Venue-native time is intentionally not stored.
@@ -95,7 +111,9 @@ Match tables store fixtures, results, player statistics, lineups, and weather.
 - `completed_quarter` is nullable and constrained to 0 - 4. `0` means no quarter
   is complete. `1` - `4` are the highest completed quarter. `NULL` means the AFL
   API supplied no clock or the row predates refresh. Pair it with `status`. The
-  five-minute sync does not make it a live siren signal.
+  five-minute sync does not make it a live siren signal. A status change to
+  anything but `Live` replaces it and `live_period_status`, so a finished match
+  drops a stale clock.
 - Every row has a `status` (`Upcoming`, `Live`, `Complete`,
   `Postponed`, `Cancelled`). Migration [0017](https://github.com/jackemcpherson/AFL-MCP/blob/migrations-pre-baseline/src/db/migrations/0017_backfill_match_status.sql) backfilled played matches as
   `Complete` and marked score-less VFL/VFLW 2021 COVID-era matches
@@ -186,7 +204,7 @@ components plus a total. One row per `(player, season, team)` - a player traded
 mid-season has separate rows per club.
 
 - Indexed on `(season_id, total_pav DESC)` for top-N queries.
-- Recalculated from `player_match_stats` by `recalculatePav` whenever the sync
+- Recalculated from `player_match_stats` by `calculatePav` whenever the sync
   writes new stats.
 - Available for **AFLM 1998+ and AFLW 2017+ only**. VFL/VFLW have no PAV rows
   because the AFL API does not populate the formula's inputs. The `schema`
@@ -340,14 +358,45 @@ Operational tables record sync outcomes and coordinate exclusive work.
 ### `sync_log`
 
 Append-only log of sync ticks that did work or errored. Columns: `timestamp`,
-`type` (such as `sync:AFLM`, `sync:VFL`, `pav_recalculation:AFLW`,
-`backfill:AFLM:2024`, `admin:brownlow-backfill`), `rows_affected`, `error`.
-Brownlow operations record bounded error codes instead of upstream rows or IDs.
-Successful no-op ticks are not logged.
+`type` (such as `sync:AFLM`, `sync:AFLM:upcoming`, `sync:AFLM:lineups`,
+`sync:weather`, `sync:fatal`, `admin:brownlow-backfill`), `rows_affected`,
+`error`. Indexed on `(type, timestamp)` and on `timestamp`.
+
+- `error` holds bounded text: the first line, URL query strings and fragments
+  removed, at most 500 characters. Brownlow operations record bounded error
+  codes instead of upstream rows or IDs.
+- Successful no-op ticks are not logged, except one recovery row after an
+  error for that competition.
+- Hourly ticks purge rows older than 90 days.
+
+### Refresh and Repair State
+
+Each of these tables belongs to one lifecycle in
+[`state-machines.md`](./state-machines.md), which owns its transitions.
+
+- `match_stats_refresh` - one row per completed match that needs statistics.
+  Holds the attempt and success times, `next_retry_at`, `failures`,
+  `participant_count`, a bounded `diagnostic`, and `origin` (`scheduled` for
+  cron, `operator` for admin requests). A failing row stops retrying from day
+  37 and keeps its failures and diagnostic.
+- `stats_refresh_operations` and `stats_refresh_operation_matches` - one admin
+  statistics refresh, keyed by its manifest, and the `pending` or `complete`
+  status of each match it covers.
+- `weather_refresh_state` - per match, `kind` (`observed` or `forecast`) and
+  source: the last attempt, `next_retry_at`, `failures`, and a `diagnostic`.
+- `weather_repair_operations` - an admin weather repair keyed by manifest
+  digest, `pending` or `complete`.
+- `identity_repair_operations` - a player identity repair keyed by manifest
+  digest. Status moves from `prepared` to `reparented` to `complete`.
+- `pav_rebuild_queue` - one row per season whose PAV needs a rebuild, with the
+  `reason`. Database triggers enqueue and `rebuildQueuedStatsPav` drains.
+- `season_provider_inventory` - the latest raw provider fixture list per season
+  and provider (`matches_json`), kept as evidence beside the normalised
+  `matches` rows.
 
 ### `sync_lease`
 
-Single-row mutex shared by cron sync, manual sync, and Brownlow ingestion.
+Single-row mutex shared by every cron tick and admin operation.
 Columns are the fixed `id = 1`, an opaque `holder`, and `acquired_at`. Atomic
 acquisition permits a free row or one older than ten minutes. Release checks the
 holder. The private status endpoint derives only active state and age and never

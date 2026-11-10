@@ -4,6 +4,7 @@ import { batchRow, batchRows } from "../lib/decode";
 import { playedMatch } from "../lib/match-state";
 import { LEASE_TTL_MINUTES } from "../sync/lease";
 import type { Env } from "../types";
+import { COACHING_CONFLICTS_SQL, UNRESOLVED_COACH_JOINS_SQL } from "../lib/coaching-queries";
 
 const DEGRADATION_WINDOW_HOURS = 24;
 
@@ -86,8 +87,8 @@ const CoachingRowSchema = Schema.Struct({
   latestSuccessAt: TextColumn,
   failedScopes: NumberColumn,
 });
-const CoachingJoinsRowSchema = Schema.Struct({ unresolvedJoins: NumberColumn });
-const CoachingConflictRowSchema = Schema.Struct({ conflicts: NumberColumn });
+/** One `n` count from the shared coaching diagnostic statements. */
+const CoachingCountRowSchema = Schema.Struct({ n: NumberColumn });
 const CoachingCoverageRowSchema = Schema.Struct({
   expectedAssignments: NumberColumn,
   observedAssignments: NumberColumn,
@@ -171,17 +172,8 @@ export async function getAdminStatus(
               SUM(CASE WHEN status IN ('failed', 'partial') THEN 1 ELSE 0 END) AS failedScopes
        FROM coach_import_pages WHERE provider = 'afl-tables'`,
     ),
-    env.DB.prepare(
-      `SELECT
-         SUM(CASE WHEN reason IN ('unresolved-match', 'ambiguous-match', 'invalid-participant', 'score-mismatch') THEN 1 ELSE 0 END) AS unresolvedJoins
-       FROM coach_import_diagnostics WHERE provider = 'afl-tables' AND resolved_at IS NULL`,
-    ),
-    env.DB.prepare(
-      `SELECT COUNT(DISTINCT CAST(a.match_id AS TEXT) || ':' || CAST(a.team_id AS TEXT)) AS conflicts
-       FROM coach_observations a JOIN coach_observations b
-         ON b.match_id = a.match_id AND b.team_id = a.team_id AND b.provider = 'footywire'
-       WHERE a.provider = 'afl-tables' AND a.coach_id <> b.coach_id`,
-    ),
+    env.DB.prepare(UNRESOLVED_COACH_JOINS_SQL),
+    env.DB.prepare(COACHING_CONFLICTS_SQL),
     env.DB.prepare(
       `SELECT 2 * COUNT(DISTINCT m.id) AS expectedAssignments,
               COUNT(DISTINCT CAST(mc.match_id AS TEXT) || ':' || CAST(mc.team_id AS TEXT)) AS observedAssignments
@@ -198,7 +190,7 @@ export async function getAdminStatus(
       (SELECT count(*) FROM match_stats_refresh WHERE failures > 0) AS statisticsFailed,
       (SELECT count(*) FROM match_stats_refresh WHERE diagnostic IS NOT NULL) AS statisticsUnresolved,
       (SELECT count(*) FROM weather_refresh_state WHERE diagnostic IS NOT NULL) AS weatherUnresolved,
-      (SELECT count(*) FROM weather_refresh_state WHERE failures > 3) AS weatherUnavailable,
+      (SELECT count(*) FROM weather_refresh_state WHERE kind='observed' AND failures > 0 AND next_retry_at IS NULL) AS weatherUnavailable,
       (SELECT count(*) FROM pav_rebuild_queue) AS pavSeasonsPending,
       (SELECT count(*) FROM identity_repair_operations WHERE status <> 'complete') AS identityRepairsPending
       FROM public_input_revision WHERE id=1`).bind(asOf),
@@ -227,8 +219,8 @@ export async function getAdminStatus(
   });
   const degradation = batchRow(results, 8, DegradationRowSchema);
   const coaching = batchRow(results, 9, CoachingRowSchema);
-  const coachingJoins = batchRow(results, 10, CoachingJoinsRowSchema);
-  const coachingConflict = batchRow(results, 11, CoachingConflictRowSchema);
+  const coachingJoins = batchRow(results, 10, CoachingCountRowSchema);
+  const coachingConflict = batchRow(results, 11, CoachingCountRowSchema);
   const coachingCoverage = batchRow(results, 12, CoachingCoverageRowSchema);
   const remediation = batchRow(results, 13, RemediationRowSchema);
   const response: AdminStatusResponse = {
@@ -269,8 +261,8 @@ export async function getAdminStatus(
     coaching: {
       latestSuccessAt: coaching?.latestSuccessAt ?? null,
       failedScopes: countOrZero(coaching?.failedScopes),
-      unresolvedJoins: countOrZero(coachingJoins?.unresolvedJoins),
-      conflicts: countOrZero(coachingConflict?.conflicts),
+      unresolvedJoins: countOrZero(coachingJoins?.n),
+      conflicts: countOrZero(coachingConflict?.n),
       currentSeasonExpectedAssignments: countOrZero(coachingCoverage?.expectedAssignments),
       currentSeasonObservedAssignments: countOrZero(coachingCoverage?.observedAssignments),
     },

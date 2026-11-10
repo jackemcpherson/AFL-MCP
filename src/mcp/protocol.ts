@@ -1,12 +1,14 @@
 import { Predicate, Result } from "effect";
 import pkg from "../../package.json";
+import { SeasonSelectionError } from "../db/seasons";
 import { COMPETITION_CODES } from "../lib/competitions";
 import { describeIssue, firstIssue } from "../lib/decode";
 import { logError } from "../lib/errors";
+import { readBoundedText } from "../sandbox/bounded-body";
 import { type ExecuteResult, executeCode } from "../sandbox/executor";
 import { looksLikeTypeScript } from "../sandbox/normalize";
 import type { Env } from "../types";
-import { McpRequestError } from "./errors";
+import { CoverageObservationError, McpRequestError } from "./errors";
 import { getSchemaInfo } from "./tools/schema";
 import type { JsonRpcResponse, ToolAnnotations, ToolDefinition } from "./types";
 import {
@@ -292,7 +294,18 @@ async function handleToolCall(
           message === SCHEMA_TOOL_CONTRACT ? message : `${message}. ${SCHEMA_TOOL_CONTRACT}`,
         );
       }
-      return mcpContent(await deps.getSchemaInfo(parsed.success, env));
+      try {
+        return mcpContent(await deps.getSchemaInfo(parsed.success, env));
+      } catch (err) {
+        // A season the database does not hold is an argument error, so it
+        // carries the usage hint. A measurement blocked by a data update is
+        // transient, so the model is told to retry.
+        if (err instanceof SeasonSelectionError) {
+          return mcpError(`${err.message}. ${SCHEMA_TOOL_CONTRACT}`);
+        }
+        if (err instanceof CoverageObservationError) return mcpError(err.message);
+        throw err;
+      }
     }
 
     case "code": {
@@ -444,36 +457,6 @@ function knownId(body: unknown): string | number | null {
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
- * Read a request body as UTF-8 text, counting the bytes actually received so
- * a chunked body without `Content-Length` cannot exceed the cap.
- * @param request - Incoming MCP POST request.
- * @returns The body text, or `null` once it passes {@link MAX_BODY_BYTES}.
- */
-async function readBoundedText(request: Request): Promise<string | null> {
-  if (request.body === null) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_BODY_BYTES) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
-}
-
-/**
  * Check a request's protocol version against the revisions this server
  * speaks. `initialize` is exempt because its body negotiates the version.
  *
@@ -525,12 +508,12 @@ export async function handleMcpRequest(
   const contentType = request.headers.get("content-type") ?? "";
   const mediaType = contentType.split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") {
-    return Response.json(jsonRpcError(null, -32700, "Content-Type must be application/json"), {
+    return Response.json(jsonRpcError(null, -32600, "Content-Type must be application/json"), {
       status: 415,
     });
   }
 
-  const text = await readBoundedText(request);
+  const text = await readBoundedText(request.body, MAX_BODY_BYTES);
   if (text === null) {
     return Response.json(jsonRpcError(null, -32600, "Request body exceeds 4 MiB"), { status: 413 });
   }

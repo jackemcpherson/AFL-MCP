@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import type { PlayerStats } from "fitzroy";
 import { fetchPlayerStats } from "fitzroy";
 import { runOperation } from "../db/operation";
-import { type Decoder, firstIssue, looseDecoder } from "../lib/decode";
+import { type Decoder, describeIssue, firstIssue, strictDecoder } from "../lib/decode";
 import { runFitzroy } from "../lib/fitzroy";
 import { normaliseTeam } from "../lib/normalise";
 import { booleanDefault } from "../lib/schemas";
@@ -194,14 +194,29 @@ export function resolveBrownlowSeason(
 }
 
 /**
+ * Outcome of a Brownlow backfill call. `busy` means another operation holds
+ * the lease and `body` is empty; otherwise `body` is the response to return.
+ */
+export interface BrownlowBackfillOutcome {
+  readonly busy: boolean;
+  readonly httpStatus: 200 | 409;
+  readonly body: BrownlowBackfillResponse;
+}
+
+/**
  * Fetches, resolves, and optionally writes Brownlow votes for up to two seasons.
  *
  * @param env - Worker bindings.
  * @param fromYear - First AFLM season, inclusive.
  * @param toYear - Final AFLM season, inclusive.
  * @param dryRun - When true, validates without updating D1.
- * @returns HTTP status and exact sanitized response body.
+ * @param resume - Take over the stranded write marker of an interrupted
+ *   non-dry run over the same year range.
+ * @returns Whether the lease was busy, and otherwise the HTTP status and
+ *   exact sanitized response body.
  * @throws When upstream or D1 access fails; callers map this to sanitized 500.
+ * @example
+ * const { busy, httpStatus, body } = await backfillBrownlow(env, 2025, 2025, true);
  */
 export async function backfillBrownlow(
   env: Env,
@@ -209,9 +224,10 @@ export async function backfillBrownlow(
   toYear: number,
   dryRun: boolean,
   resume = false,
-): Promise<{ readonly httpStatus: 200 | 409; readonly body: BrownlowBackfillResponse }> {
-  type Outcome = { readonly httpStatus: 200 | 409; readonly body: BrownlowBackfillResponse };
+): Promise<BrownlowBackfillOutcome> {
+  type Outcome = BrownlowBackfillOutcome;
   const busy = (): Outcome => ({
+    busy: true,
     httpStatus: 409,
     body: { status: "blocked", dryRun, seasons: [] },
   });
@@ -251,6 +267,7 @@ export async function backfillBrownlow(
         await logSync(env, "admin:brownlow-backfill", 0, blockedCode(summary));
       }
       return {
+        busy: false,
         httpStatus: 409,
         body: {
           status: "blocked",
@@ -262,6 +279,7 @@ export async function backfillBrownlow(
 
     if (dryRun) {
       return {
+        busy: false,
         httpStatus: 200,
         body: { status: "ok", dryRun, seasons: resolved.map(({ summary }) => summary) },
       };
@@ -277,7 +295,7 @@ export async function backfillBrownlow(
         await logSync(env, "admin:brownlow-backfill", updated);
       }
     }
-    return { httpStatus: 200, body: { status: "ok", dryRun, seasons: summaries } };
+    return { busy: false, httpStatus: 200, body: { status: "ok", dryRun, seasons: summaries } };
   });
 }
 
@@ -475,8 +493,8 @@ export const BrownlowBackfillRequestSchema: Schema.Struct<{
 /** A validated Brownlow backfill request. */
 export type BrownlowBackfillRequest = typeof BrownlowBackfillRequestSchema.Type;
 
-/** Decode a Brownlow backfill body, ignoring unknown keys. */
-export const decodeBrownlowBackfillRequest: Decoder<BrownlowBackfillRequest> = looseDecoder(
+/** Decode a Brownlow backfill body, rejecting unknown keys. */
+export const decodeBrownlowBackfillRequest: Decoder<BrownlowBackfillRequest> = strictDecoder(
   BrownlowBackfillRequestSchema,
 );
 
@@ -487,10 +505,10 @@ export const decodeBrownlowBackfillRequest: Decoder<BrownlowBackfillRequest> = l
  * @returns A stable caller-facing message.
  */
 export function describeBrownlowBackfillIssue(error: Schema.SchemaError): string {
-  const { path, message } = firstIssue(error);
-  const [root] = path;
+  const [root] = firstIssue(error).path;
   if (root === "fromYear") return "fromYear must be an integer";
   if (root === "toYear") return "toYear must be an integer";
   if (root === "dryRun") return "dryRun must be a boolean";
-  return message;
+  // Names the failing key, such as an unknown one.
+  return describeIssue(error);
 }

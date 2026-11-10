@@ -151,6 +151,18 @@ describe("calculatePav for AFLW", () => {
     expect(rows.results.every((row) => row.total_pav === null)).toBe(true);
   });
 
+  it("leaves an unchanged season's PAV rows and the public revision untouched", async () => {
+    await seedAflwMatch(2025);
+    const rows = await calculatePav(env, 2025, "AFLW");
+    const snapshot = () =>
+      env.DB.prepare(
+        "SELECT (SELECT MAX(id) FROM player_season_pav) AS id, (SELECT revision FROM public_input_revision) AS revision",
+      ).first();
+    const before = await snapshot();
+    expect(await calculatePav(env, 2025, "AFLW")).toBe(rows);
+    expect(await snapshot()).toEqual(before);
+  });
+
   it.each(["Cancelled", "Live"])(
     "excludes %s matches even when partial scores exist",
     async (status) => {

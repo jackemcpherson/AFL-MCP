@@ -6,9 +6,9 @@
   "include": [
     "scripts/**/*.ts",
     "scripts/**/*.mts",
-    "tools/**/*.ts",
     "vite.config.ts",
-    "vitest.config.mts"
+    "vitest.config.mts",
+    "test/scripts/**/*.ts"
   ],
   "exclude": ["tools/oxlint/anti-slop/**"]
 }

@@ -324,7 +324,35 @@ describe("authenticated coaching backfill on local D1", () => {
     await adminEnv.DB.prepare(
       "UPDATE sync_lease SET holder = 'other', acquired_at = datetime('now') WHERE id = 1",
     ).run();
-    expect((await worker.fetch(request(), adminEnv, context)).status).toBe(409);
+    const busy = await worker.fetch(request(), adminEnv, context);
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toEqual({
+      error: "operation lease held",
+      code: "OPERATION_BUSY",
+      busy: true,
+    });
+    expect(await count("match_coaches")).toBe(0);
+  });
+
+  it("answers a source outage with 502, records it and clears the write marker", async () => {
+    await seed();
+    vi.stubGlobal("fetch", async () => new Response("offline", { status: 503 }));
+    const response = await worker.fetch(request(), adminEnv, context);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "coaching source fetch failed; retry later",
+      code: "SOURCE_UNAVAILABLE",
+    });
+    expect(
+      await adminEnv.DB.prepare(
+        "SELECT in_progress, write_operation FROM public_input_revision WHERE id = 1",
+      ).first(),
+    ).toEqual({ in_progress: 0, write_operation: null });
+    expect(
+      await adminEnv.DB.prepare(
+        "SELECT status FROM coach_import_pages WHERE provider = 'afl-tables' AND season = 2024",
+      ).first(),
+    ).toEqual({ status: "failed" });
     expect(await count("match_coaches")).toBe(0);
   });
 

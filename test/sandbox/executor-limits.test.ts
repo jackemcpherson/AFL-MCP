@@ -24,8 +24,15 @@ describe("executeCode limits", () => {
   });
 
   it("shortens a result over 100,000 characters structurally", async () => {
-    const results = Array.from({ length: 5_000 }, (_, id) => ({ id, team: `Team ${id}` }));
-    const env = envWithReply({ hasValue: true, value: { results, success: true }, logs: [] });
+    const results = Array.from({ length: 5_000 }, (_, id) => ({
+      id,
+      team: `Team ${id}`,
+    }));
+    const env = envWithReply({
+      hasValue: true,
+      value: { results, success: true },
+      logs: [],
+    });
     const result = await executeCode("return big", env, stubCtx);
     expect(result.error).toBeUndefined();
     expect(serializedLength(result.result)).toBeLessThanOrEqual(100_000);
@@ -35,8 +42,20 @@ describe("executeCode limits", () => {
     expect(kept.at(-1)).toMatch(/^--- TRUNCATED: showing \d+ of 5000 items\./);
   });
 
+  it("refuses a sandbox reply over the 4 MiB read cap", async () => {
+    const env = envWithLoaderFetch(async () => new Response("x".repeat(4 * 1024 * 1024 + 1)));
+    const result = await executeCode("return huge", env, stubCtx);
+    expect(result.result).toBeNull();
+    expect(result.error).toMatch(/^Result too large: the sandbox reply exceeds 4 MiB/);
+    expect(result.errorClass).toBe("ReplyTooLargeError");
+  });
+
   it("returns a result under the cap untouched", async () => {
-    const env = envWithReply({ hasValue: true, value: { rows: [1, 2, 3] }, logs: [] });
+    const env = envWithReply({
+      hasValue: true,
+      value: { rows: [1, 2, 3] },
+      logs: [],
+    });
     const result = await executeCode("return rows", env, stubCtx);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ rows: [1, 2, 3] });
@@ -140,13 +159,20 @@ describe("executeCode outcomes", () => {
 
 describe("executeCode console output", () => {
   it("returns console lines with a result", async () => {
-    const env = envWithReply({ hasValue: true, value: 1, logs: ["first", "[warn] second"] });
+    const env = envWithReply({
+      hasValue: true,
+      value: 1,
+      logs: ["first", "[warn] second"],
+    });
     const result = await executeCode("return 1", env, stubCtx);
     expect(result.logs).toEqual(["first", "[warn] second"]);
   });
 
   it("returns console lines with an error", async () => {
-    const env = envWithReply({ error: { name: "Error", message: "boom" }, logs: ["before"] });
+    const env = envWithReply({
+      error: { name: "Error", message: "boom" },
+      logs: ["before"],
+    });
     const result = await executeCode("throw new Error('boom')", env, stubCtx);
     expect(result.error).toBe("boom");
     expect(result.logs).toEqual(["before"]);
@@ -160,7 +186,12 @@ describe("executeCode console output", () => {
 
   it("keeps at most 100 lines and counts the rest", async () => {
     const logs = Array.from({ length: 150 }, (_, i) => `line ${i}`);
-    const env = envWithReply({ hasValue: true, value: 1, logs, droppedLogs: 7 });
+    const env = envWithReply({
+      hasValue: true,
+      value: 1,
+      logs,
+      droppedLogs: 7,
+    });
     const result = await executeCode("return 1", env, stubCtx);
     expect(result.logs).toHaveLength(101);
     expect(result.logs?.[99]).toBe("line 99");
@@ -186,7 +217,11 @@ describe("executeCode console output", () => {
   });
 
   it("drops log entries that are not strings", async () => {
-    const env = envWithReply({ hasValue: true, value: 1, logs: ["ok", 5, null] });
+    const env = envWithReply({
+      hasValue: true,
+      value: 1,
+      logs: ["ok", 5, null],
+    });
     const result = await executeCode("return 1", env, stubCtx);
     expect(result.logs).toEqual(["ok"]);
   });

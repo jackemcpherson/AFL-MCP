@@ -1,6 +1,7 @@
 import { Predicate, Schema } from "effect";
 import type { Env } from "../types";
 import type { TaggedErrorBase } from "../lib/errors";
+import { readBoundedText } from "./bounded-body";
 import { boundConsoleLines, CONSOLE_CAPTURE_SOURCE } from "./console";
 import { normalizeSubmission } from "./normalize";
 import { isJsonObject, type JsonValue, truncateResult } from "./truncate";
@@ -44,7 +45,7 @@ type RunOutcome = Omit<ExecuteResult, "execution_time_ms">;
 const NO_RETURN_VALUE_MESSAGE =
   "The code returned no value. End it with `return` and a JSON-serialisable value, such as `return rows.results`.";
 
-/** Wall-clock execution budget, matching the limit documented by the `tools` tool. */
+/** Wall-clock execution budget, matching the limit documented by the `code` tool. */
 const EXECUTION_TIMEOUT_MS = 30_000;
 
 /**
@@ -53,6 +54,13 @@ const EXECUTION_TIMEOUT_MS = 30_000;
  * MCP output budget of common clients.
  */
 const MAX_RESULT_CHARS = 100_000;
+
+/**
+ * Largest sandbox reply read, in bytes. Well above {@link MAX_RESULT_CHARS},
+ * so ordinary oversized results still reach structural truncation, but a
+ * reply this large is refused before it is buffered and parsed.
+ */
+const MAX_REPLY_BYTES = 4 * 1024 * 1024;
 
 /**
  * How far inside the parent's budget the sandbox stops waiting: a tenth of
@@ -74,7 +82,7 @@ const SANDBOX_LIMITS = { cpuMs: 10_000, subRequests: 100 } as const;
  * Run LLM-written code in a Dynamic Worker isolate with read-only D1 access.
  *
  * @param code - Body of an async function with `db` in scope, or a shape
- *   {@link normalizeCode} accepts.
+ *   {@link normalizeSubmission} accepts.
  * @param env - Worker bindings, including the Worker loader.
  * @param ctx - Execution context that exposes the `DbProxy` entrypoint.
  * @param timeoutMs - Wall-clock budget before the run is abandoned.
@@ -156,7 +164,9 @@ ${CONSOLE_CAPTURE_SOURCE}
 
     const execution = (async (): Promise<RunOutcome> => {
       const response = await worker.getEntrypoint().fetch(new Request("https://internal/"));
-      return readReply(await response.text(), timeoutMs);
+      const text = await readBoundedText(response.body, MAX_REPLY_BYTES);
+      if (text === null) return failure(new ReplyTooLargeError(), []);
+      return readReply(text, timeoutMs);
     })();
     // The sandbox races the code against a slightly shorter budget, so this
     // race is a backstop for code that never yields. If it wins, the abandoned
@@ -317,6 +327,17 @@ class SandboxReplyError extends Error {
 
   constructor() {
     super("The sandbox returned an unreadable reply.");
+  }
+}
+
+/** The sandbox reply passed {@link MAX_REPLY_BYTES} and was not read. */
+class ReplyTooLargeError extends Error {
+  override readonly name = "ReplyTooLargeError";
+
+  constructor() {
+    super(
+      `Result too large: the sandbox reply exceeds ${MAX_REPLY_BYTES / (1024 * 1024)} MiB. Select fewer rows or columns, or aggregate in SQL.`,
+    );
   }
 }
 

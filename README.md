@@ -11,12 +11,12 @@ Version 4 migration and operator procedures are in
 
 ## Coverage
 
-| Competition          | Years           | Matches | Stats |   Lineups   |  PAV  |
-| -------------------- | --------------- | :-----: | :---: | :---------: | :---: |
-| AFL Men's (`AFLM`)   | 1990 to current |    ✓    |   ✓   |    2015+    | 1998+ |
-| AFL Women's (`AFLW`) | 2017 to current |    ✓    |   ✓   |    2017+    | 2017+ |
-| VFL                  | 2021 to current |    ✓    |   ✓   | best-effort |   -   |
-| VFLW                 | 2021 to current |    ✓    |   ✓   | best-effort |   -   |
+| Competition          | Years           | Matches | Stats |       Lineups       |  PAV  |
+| -------------------- | --------------- | :-----: | :---: | :-----------------: | :---: |
+| AFL Men's (`AFLM`)   | 1990 to current |    ✓    |   ✓   |        2015+        | 1998+ |
+| AFL Women's (`AFLW`) | 2017 to current |    ✓    |   ✓   |      2022-S7+       | 2017+ |
+| VFL                  | 2021 to current |    ✓    |   ✓   | 2023+ (best-effort) |   -   |
+| VFLW                 | 2021 to current |    ✓    |   ✓   | 2023+ (best-effort) |   -   |
 
 The service calculates Player Approximate Value for AFLM and AFLW only. AFL API
 does not supply the required inputs for VFL or VFLW.
@@ -104,7 +104,7 @@ ORDER BY s.year DESC, c.code;
 
 ## Getting Started
 
-Install the dependencies, run the checks, then deploy through Wrangler.
+Install the dependencies, then run the checks and tests.
 
 ### Prerequisites
 
@@ -139,9 +139,9 @@ bun run typecheck    # tsc on the app, test and node tsconfigs only
 bun run format       # auto-fix formatting and lint findings
 ```
 
-Vite+ (`vp`) supplies the formatter, linter and Vitest. The repository
-pins `vite-plus` at 0.3.3 until `@cloudflare/vitest-pool-workers` supports
-Vitest 5.
+Vite+ (`vp`) supplies the formatter, linter and Vitest. Tests stay on
+Vitest 4.1 through `package.json` overrides until
+`@cloudflare/vitest-pool-workers` supports Vitest 5.
 
 ### Deployment
 
@@ -164,7 +164,8 @@ the top of the hour. At other times, it runs only near a recorded match.
 The match window spans one day before and three days after the current time. The
 pipeline recalculates PAV when new AFLM or AFLW player statistics arrive.
 
-For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
+For one-shot historical loads, `POST /mcp/admin/backfill` accepts one exact
+season, which also selects either AFLW 2022 season:
 
 ```json
 {
@@ -174,14 +175,28 @@ For one-shot historical loads, `POST /mcp/admin/backfill` accepts:
 }
 ```
 
-It iterates through `(competition, year)` pairs and returns per-tick row counts.
+It also accepts a year range across competitions:
+
+```json
+{
+    "competitions": ["AFLM", "AFLW"],
+    "fromYear": 2019,
+    "toYear": 2020,
+    "skipShouldRunNow": true
+}
+```
+
+The range form iterates through `(competition, year)` pairs. Both forms return
+per-season row counts.
 Callers must keep requests within the Worker execution limit. Use one AFLM year
 per request and small batches for other competitions.
 
 ### Private Operations
 
-All `/mcp/admin/*` routes require `Authorization: Bearer <ADMIN_TOKEN>`. Two
-bounded operator routes complement the normal sync:
+All `/mcp/admin/*` routes require `Authorization: Bearer <ADMIN_TOKEN>`.
+Besides `sync` and `backfill`, bounded operator routes refresh statistics and
+weather, retry weather, recalculate PAV, repair player identities, backfill
+coaching, and reconcile historical Bears matches. Two of them:
 
 - `POST /mcp/admin/backfill-brownlow` validates and optionally writes AFLM
   Brownlow votes for one or two seasons. Its body is
@@ -192,12 +207,33 @@ bounded operator routes complement the normal sync:
   integrity-view counts, and 24-hour degradation event counts. It never returns
   lease holders, raw sync errors, player/match samples, or tokens.
 
-Brownlow backfill, manual sync, and cron share one ten-minute operation lease.
-An overlapping request returns `409` instead of duplicating upstream work.
+Every admin operation and cron tick shares one ten-minute operation lease. An
+overlapping admin request returns `409` instead of duplicating upstream work.
 
 See [`docs/sync.md`](./docs/sync.md) for the full pipeline and the
 `shouldRunNow` gate. It also covers season structures that affect match-data
 queries, including Opening Round, finals codes, and the VFL Wildcard.
+
+## Coaching and Native Publishers
+
+The database holds canonical AFL Tables coaching facts for AFLM from 1990.
+The schema tool documents coach joins, source evidence, coverage and the native
+`public_input_revision` snapshot contract. Coaching refresh shares the existing
+sync lease. Five-minute match ticks do not fetch coach profiles again.
+
+Historical Bears repair and coaching backfill use authenticated operator
+endpoints. Read the [coaching release operations](docs/coaching-release-operations.md)
+before previewing or authorising historical writes. FootyWire season-wide
+coaching remains unsupported.
+
+## Database Baseline
+
+Fresh databases apply `src/db/migrations/0027_baseline.sql`, including required
+reference seeds. Existing databases skip it after the preceding GitOps adoption
+migration. Keep the existing migration ledger during upgrades.
+
+[Coaching Release Operations](docs/coaching-release-operations.md) records the
+adoption gates, historical migration tag and recovery procedure.
 
 ## Further Documentation
 
@@ -218,24 +254,3 @@ queries, including Opening Round, finals codes, and the VFL Wildcard.
 ## License
 
 [MIT](LICENSE)
-
-## Coaching and Native Publishers
-
-Version 3.8.0 adds canonical AFL Tables coaching facts for AFLM from 1990.
-The schema tool documents coach joins, source evidence, coverage and the native
-`public_input_revision` snapshot contract. Coaching refresh shares the existing
-sync lease. Five-minute match ticks do not fetch coach profiles again.
-
-Historical Bears repair and coaching backfill use authenticated operator
-endpoints. Read the [coaching release operations](docs/coaching-release-operations.md)
-before previewing or authorising historical writes. FootyWire season-wide
-coaching remains unsupported.
-
-## Database Baseline
-
-Fresh databases apply `src/db/migrations/0027_baseline.sql`, including required
-reference seeds. Existing databases skip it after the preceding GitOps adoption
-migration. Keep the existing migration ledger during upgrades.
-
-[Coaching Release Operations](docs/coaching-release-operations.md) records the
-adoption gates, historical migration tag and recovery procedure.

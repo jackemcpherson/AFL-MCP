@@ -172,6 +172,73 @@ describe("upsertMatches", () => {
     expect(preserved?.completed_quarter).toBe(4);
   });
 
+  it("replaces the clock when the status leaves Live, and keeps it on an unchanged status", async () => {
+    const { competitionId, seasonId } = await setup();
+    const live = makeMatch({
+      matchId: "M-CLOCK",
+      status: "Live",
+      livePeriodStatus: "LIVE",
+      completedQuarter: 3,
+    });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [live]);
+    const venueMap = await ensureVenues(env, [live]);
+    const ctx = { seasonId, teamMap, venueMap };
+    const clock = () =>
+      env.DB.prepare(
+        "SELECT live_period_status, completed_quarter FROM matches WHERE external_afl_id = 'M-CLOCK'",
+      ).first();
+    await upsertMatches(env, [live], ctx);
+    await upsertMatches(env, [{ ...live, status: "Complete", livePeriodStatus: null }], ctx);
+    expect(await clock()).toEqual({ live_period_status: null, completed_quarter: 3 });
+    // A later complete fetch without a clock keeps the stored value.
+    expect(
+      await upsertMatches(
+        env,
+        [{ ...live, status: "Complete", livePeriodStatus: null, completedQuarter: null }],
+        ctx,
+      ),
+    ).toBe(0);
+    expect(await clock()).toEqual({ live_period_status: null, completed_quarter: 3 });
+    await upsertMatches(
+      env,
+      [{ ...live, status: "Cancelled", livePeriodStatus: null, completedQuarter: null }],
+      ctx,
+    );
+    expect(await clock()).toEqual({ live_period_status: null, completed_quarter: null });
+  });
+
+  it("clears an undated match's kickoff once and lets its status follow the provider", async () => {
+    const { competitionId, seasonId } = await setup();
+    const match = makeMatch({ matchId: "M-UNDATED", status: "Upcoming" });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [match]);
+    const venueMap = await ensureVenues(env, [match]);
+    const ctx = { seasonId, teamMap, venueMap };
+    await upsertMatches(env, [match], ctx);
+    const undated = { ...match, date: new Date(Number.NaN) };
+    expect(await upsertMatches(env, [undated], ctx)).toBe(1);
+    expect(await upsertMatches(env, [undated], ctx)).toBe(0);
+    expect(await upsertMatches(env, [{ ...undated, status: "Cancelled" }], ctx)).toBe(1);
+    expect(
+      await env.DB.prepare(
+        "SELECT kickoff_at, status FROM matches WHERE external_afl_id = 'M-UNDATED'",
+      ).first(),
+    ).toEqual({ kickoff_at: null, status: "Cancelled" });
+  });
+
+  it("does not queue PAV for score changes on a match that is not played", async () => {
+    const { competitionId, seasonId } = await setup();
+    const live = makeMatch({ matchId: "M-PAV-LIVE", status: "Live", homePoints: 10 });
+    const teamMap = await ensureTeams(env, competitionId, "AFLM", [live]);
+    const venueMap = await ensureVenues(env, [live]);
+    const ctx = { seasonId, teamMap, venueMap };
+    await upsertMatches(env, [live], ctx);
+    await env.DB.prepare("DELETE FROM pav_rebuild_queue").run();
+    await upsertMatches(env, [{ ...live, homePoints: 20 }], ctx);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM pav_rebuild_queue").first("n")).toBe(0);
+    await upsertMatches(env, [{ ...live, homePoints: 30, status: "Complete" }], ctx);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM pav_rebuild_queue").first("n")).toBe(1);
+  });
+
   it("stores null for an upcoming match without a clock", async () => {
     const { competitionId, seasonId } = await setup();
     const upcoming = makeMatch({

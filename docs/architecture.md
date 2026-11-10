@@ -64,10 +64,11 @@ any other header an array is an invalid envelope and returns 400.
 - `initialize` inside a batch gets a `-32600` error. The other messages
   still run.
 - The reply is 200 with an array of responses in input order, or 202 with
-  no body when no message takes a response. The handler logs
-the `Origin` and protocol version of each request that passes steps 1 to 5
-as an `mcp:client` event. Requests rejected at those steps are not logged.
-The event records the `MCP-Protocol-Version` header, the `initialize`
+  no body when no message takes a response.
+
+The handler logs the `Origin` and protocol version of each request that
+passes steps 1 to 5 as an `mcp:client` event. Requests rejected at those
+steps are not logged. The event records the `MCP-Protocol-Version` header, the `initialize`
 `protocolVersion`, and the 2026-07-28 `_meta` marker as
 `metaProtocolVersion`.
 
@@ -94,26 +95,35 @@ The `schema` tool accepts three request shapes:
 - `competition` returns the static schema for one competition.
 - `competition`, `season`, and `includeObserved: true` add bounded observations.
 
-The observed request runs indexed aggregates for statistics, weather, PAV,
-lineups, and coaching coverage. The Worker caches successful output for 15
-minutes. It rejects every other argument combination before querying D1.
+The observed request runs indexed aggregates for statistics, PAV, lineups,
+coaching, and provider inventory coverage. The Worker caches successful
+output for 15 minutes. It rejects every other argument combination before
+querying D1.
 
 An argument error names the failing key, for example
 `Expected boolean at "includeObserved"` or
 `Expected no excess property at "table"`. Contract errors, such as
 `includeObserved` without a `season`, keep their own text.
 
+An observed request for a season the database does not hold returns an
+`isError` result with the usage hint. So does an observation blocked by an
+unfinished data write, whose message asks the caller to retry. Neither is a
+JSON-RPC error.
+
 ## Components
 
-| Layer             | Location                  | Responsibility                                               |
-| ----------------- | ------------------------- | ------------------------------------------------------------ |
-| Entry and routing | `src/index.ts`            | Worker fetch, scheduled, and authenticated admin routes      |
-| Admin operations  | `src/admin/`              | Coaching and Brownlow backfill, club repair, operator status |
-| MCP protocol      | `src/mcp/protocol.ts`     | Streamable HTTP transport                                    |
-| MCP tools         | `src/mcp/tools/`          | `schema` and `code` definitions                              |
-| Sandbox           | `src/sandbox/`            | Dynamic Worker isolation and the `DbProxy` read bridge       |
-| Sync              | `src/sync/`               | Cron orchestration, upserts, weather, and PAV                |
-| Schema            | `src/db/schema.sql`       | D1 schema documented in [Schema Reference](schema.md)        |
+| Layer             | Location              | Responsibility                                                             |
+| ----------------- | --------------------- | -------------------------------------------------------------------------- |
+| Entry and routing | `src/index.ts`        | Worker fetch, scheduled, and authenticated admin routes                    |
+| Admin operations  | `src/admin/`          | Backfills, statistics and weather refresh, identity and PAV repair, status |
+| MCP protocol      | `src/mcp/protocol.ts` | Streamable HTTP transport                                                  |
+| MCP tools         | `src/mcp/tools/`      | `schema` and `code` definitions                                            |
+| Sandbox           | `src/sandbox/`        | Dynamic Worker isolation and the `DbProxy` read bridge                     |
+| Sync              | `src/sync/`           | Cron orchestration, upserts, statistics refresh, and PAV                   |
+| Weather           | `src/weather/`        | Open-Meteo fetch, aggregation, and the hourly weather stage                |
+| Shared library    | `src/lib/`            | Schemas, decoders, competitions, match state, fitzroy runtime              |
+| Operations        | `src/db/`             | `runOperation` lease and write marker, season resolution                   |
+| Schema            | `src/db/schema.sql`   | D1 schema documented in [Schema Reference](schema.md)                      |
 
 ## Code Execution Model
 
@@ -149,6 +159,10 @@ characters, on both sides of the reply. The lines come back as a second
 `Console output:` text block, after the result or the error. They never
 reach the server logs.
 
+The parent reads the sandbox reply through `readBoundedText`
+(`src/sandbox/bounded-body.ts`) with a 4 MiB cap. The parent stops reading a
+larger reply and returns an `isError` "Result too large" result.
+
 `src/sandbox/truncate.ts` shortens a result whose text form passes 100,000
 characters, about 25,000 tokens. Each pass cuts the largest array or string
 and adds a `--- TRUNCATED ---` notice with the full count, so the result
@@ -176,7 +190,9 @@ sync orchestrator
         |
         |-- upserts to reference, match, stat, and lineup tables
         |-- calculates player_season_pav after stat changes
-        `-- refreshes AFLM coaching on a bounded hourly cadence
+        |-- refreshes AFLM coaching on a bounded hourly cadence
+        |-- runs the hourly weather stage (Open-Meteo)
+        `-- audits the next season's fixture hourly
         |
         v
 Cloudflare D1
@@ -189,11 +205,16 @@ Sync and admin code calls fitzroy through `src/lib/fitzroy.ts`. That module runs
 fitzroy's Effects on one runtime per isolate, which keeps the AFL API token
 cached across requests. It returns each call as a success or failure value.
 
+The Worker routes `/mcp` and `/mcp/` to the MCP handler, `/health` and
+`/mcp/health` to health, `/` to a plain-text banner, and `/mcp/admin/*` to
+authenticated admin routes. Every other path returns 404.
+
 Sync and authenticated admin operations can write. MCP client code receives only
 read access through `DbProxy`.
 
-Brownlow ingestion shares the sync lease with cron and manual sync. Private
-status uses fixed aggregate queries and never returns raw diagnostics.
+Every cron tick and admin operation shares the sync lease (see
+[State Machines](state-machines.md)). Private status uses fixed aggregate
+queries and never returns raw diagnostics.
 
 See [Data Sync](sync.md) for orchestration and [Schema Reference](schema.md) for
 the table contract.

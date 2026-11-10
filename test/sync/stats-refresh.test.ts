@@ -27,4 +27,9 @@ describe("statistics refresh schedule", () => {
     expect(nextStatsRefresh(completed, atDay(30), 1)).toBe("2026-10-26T08:00:00.000Z");
     expect(nextStatsRefresh(completed, atDay(30), 99)).toBe(atDay(31).toISOString());
   });
+  it("gives up on a failing match a week after its follow-up window closes", () => {
+    expect(nextStatsRefresh(completed, atDay(36), 12)).toBe(atDay(37).toISOString());
+    expect(nextStatsRefresh(completed, atDay(37), 13)).toBeNull();
+    expect(nextStatsRefresh(completed, atDay(37), 0)).toBeNull();
+  });
 });
