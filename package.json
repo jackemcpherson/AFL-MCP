@@ -21,10 +21,10 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",
     "@cloudflare/workers-types": "^5.0.0",
-    "@oxlint/plugins": "1.91.0",
+    "@oxlint/plugins": "1.92.0",
     "@types/node": "^26.0.0",
     "typescript": "^7.0.0",
-    "vite-plus": "1.4.0",
+    "vite-plus": "1.5.0",
     "vitest": "4.1.12",
     "wrangler": "^4.0.0"
   },
@@ -37,7 +37,7 @@
     "@vitest/spy": "4.1.12",
     "@vitest/utils": "4.1.12",
     "undici": "^8.0.0",
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.4.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.5.0",
     "vitest": "4.1.12"
   }
 }
