@@ -37,7 +37,7 @@
     "@vitest/spy": "4.1.12",
     "@vitest/utils": "4.1.12",
     "undici": "^8.0.0",
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.6.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000",
     "vitest": "4.1.12"
   }
 }
